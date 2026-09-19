@@ -120,9 +120,13 @@ export class Editor {
       const result = await api.operations(this.doc.id, operations);
       this.revision += 1;
       this.dirty = true;
+      // An edit can add a page on its own: text pushed past the foot of the
+      // sheet is carried onto a continuation page. Nothing asked for that, so
+      // it has to be noticed here rather than declared up front.
+      const grew = result.page_count !== this.doc.pages.length;
       this.doc = { ...this.doc, ...result };
       reportWarnings(result.warnings);
-      if (structural) {
+      if (structural || grew) {
         // Pages moved, were added or removed: indices the views hold are stale.
         this.doc = await api.document(this.doc.id);
         await this._buildPages();

@@ -741,11 +741,84 @@ class TestPushingContentOutOfTheWay:
         assert before <= after, f"se perdió {before - after}"
         doc.close()
 
-    def test_it_refuses_rather_than_push_content_off_the_page(self):
-        """The whole block sits at the foot of the sheet; there is nowhere to go."""
-        doc, group = self._setup(top=660)
-        warnings = self._grow(doc, group, words=80)
-        assert any(w.kind == "cannot-push" for w in warnings)
+    def test_what_no_longer_fits_goes_to_a_page_of_its_own(self):
+        """Pushed past the foot of the sheet it would simply be hidden."""
+        doc, group = self._setup(top=700, gap=8)
+        before = doc.page_count
+        warnings = self._grow(doc, group, words=30)
+        assert doc.page_count == before + 1, "no se creó la página de continuación"
+        assert not any(w.kind == "cannot-push" for w in warnings)
+
+        carried = doc[1].get_text()
+        assert "contenido de la seccion" in carried
+        doc.close()
+
+    def test_the_continuation_page_starts_near_the_top(self):
+        doc, _group = self._setup(top=700, gap=8)
+        doc, group = self._setup(top=700, gap=8)
+        self._grow(doc, group, words=30)
+        tops = [
+            line["bbox"][1]
+            for block in doc[1].get_text("dict")["blocks"]
+            for line in block.get("lines", [])
+        ]
+        assert tops, "la página nueva quedó vacía"
+        assert min(tops) < doc[1].rect.height / 2, "empieza demasiado abajo"
+        doc.close()
+
+    def test_nothing_is_lost_in_the_carry_over(self):
+        doc, group = self._setup(top=700, gap=8)
+        before = set(self._tops(doc))
+        self._grow(doc, group, words=30)
+        after = set()
+        for pno in range(doc.page_count):
+            after |= {
+                "".join(s["text"] for s in line["spans"])
+                for block in doc[pno].get_text("dict")["blocks"]
+                for line in block.get("lines", [])
+            }
+        assert {t for t in before if not t.startswith("pal")} <= after
+        doc.close()
+
+    def test_a_link_follows_the_text_to_the_new_page(self):
+        doc, group = self._setup(top=700, gap=8)
+        before = len(doc[0].get_links())
+        self._grow(doc, group, words=30)
+        total = sum(len(doc[pno].get_links()) for pno in range(doc.page_count))
+        assert total == before, "se perdió un enlace por el camino"
+        doc.close()
+
+    def test_more_than_a_page_of_content_is_refused(self):
+        """A continuation page is offered once, not a chain of half-filled ones.
+
+        Driven directly: for the carry-over to be short of room, the content
+        would have to be taller than a sheet, which means it could not have
+        been on the page it came from either.
+        """
+        from app.editor import EditSession
+
+        doc, group = self._setup(top=700, gap=8)
+        session = EditSession(doc, FontResolver(doc))
+        batch = session._batch(0)
+        tall = [
+            ("line", {"bbox": [72, 60, 400, 60 + doc[0].rect.height], "spans": []}),
+        ]
+        assert session._carry_over(0, 0, tall, batch) is False
+        assert doc.page_count == 1, "creó una página que no iba a servir de nada"
+        doc.close()
+
+    def test_a_second_page_in_the_same_batch_stops_the_carry_over(self):
+        """Inserting a page renumbers the ones after it, and another page's
+        operations in the same batch would then point at the wrong page."""
+        from app.editor import EditSession
+
+        doc, group = self._setup(top=700, gap=8)
+        doc.new_page()
+        session = EditSession(doc, FontResolver(doc))
+        session._batch(0)
+        session._batch(1)
+        piece = [("line", {"bbox": [72, 700, 400, 720], "spans": []})]
+        assert session._carry_over(0, 0, piece, session._batch(0)) is False
         doc.close()
 
     def test_overflow_mode_moves_nothing(self):
@@ -834,10 +907,14 @@ class TestMovingFiguresOutOfTheWay:
         assert after_images == before_images
         doc.close()
 
-    def test_it_refuses_rather_than_push_a_figure_off_the_page(self):
+    def test_a_figure_that_no_longer_fits_travels_to_the_new_page(self):
         doc, group = self._setup(top=560)
-        warnings = self._grow(doc, group, words=80)
-        assert any(w.kind == "cannot-push" for w in warnings)
+        before_pages = doc.page_count
+        before_images = len(doc[0].get_image_info())
+        self._grow(doc, group, words=80)
+        assert doc.page_count == before_pages + 1
+        total = sum(len(doc[pno].get_image_info()) for pno in range(doc.page_count))
+        assert total == before_images, "se perdió una imagen por el camino"
         doc.close()
 
     def test_a_picture_beside_the_column_is_left_alone(self):

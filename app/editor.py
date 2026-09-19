@@ -136,6 +136,9 @@ class _PageBatch:
 
     restored_images: list[tuple[pymupdf.Rect, bytes]] = field(default_factory=list)
     moved_image_sources: set[tuple] = field(default_factory=set)
+    carried_links: set[tuple] = field(default_factory=set)
+    """Links already taken to a continuation page, so the ordinary shift does
+    not add them a second time."""
     move_images: bool = False
     """Set when a picture has to move. Erasing images is all or nothing over a
     page's redactions, so every one they touch is put back — shifted if it is
@@ -779,14 +782,30 @@ class EditSession:
             if below(line.get("bbox", (0, 0, 0, 0)))
         ]
 
-        # Would any of it fall off the sheet?
-        edges = [across_span(rotation, line["bbox"])[1] for line in moving_lines]
-        edges += [across_span(rotation, d["rect"])[1] for d in moving_drawings]
-        edges += [across_span(rotation, rect)[1] for rect, _data in moving_images]
-        if edges and max(edges) + delta > page_limit - 4:
-            return False
         if not moving_lines and not moving_drawings and not moving_images:
             return True
+
+        # Would any of it fall off the sheet? What does is carried over to a
+        # page of its own rather than pushed past the edge.
+        floor = page_limit - 18
+        pieces = (
+            [(across_span(rotation, line["bbox"]), ("line", line)) for line in moving_lines]
+            + [(across_span(rotation, d["rect"]), ("drawing", d)) for d in moving_drawings]
+            + [(across_span(rotation, rect), ("image", (rect, data)))
+               for rect, data in moving_images]
+        )
+        overflowing = [piece for span, piece in pieces if span[1] + delta > floor]
+        if overflowing:
+            if not self._carry_over(pno, rotation, overflowing, batch):
+                return False
+            page = self._doc[pno]  # a page was inserted; the old handle is stale
+            carried = {id(piece[1]) for piece in overflowing}
+            moving_lines = [x for x in moving_lines if id(x) not in carried]
+            moving_drawings = [x for x in moving_drawings if id(x) not in carried]
+            moving_images = [
+                (rect, data) for rect, data in moving_images
+                if not any(p[0] == "image" and p[1][0] is rect for p in overflowing)
+            ]
 
         shift = pymupdf.Point(*from_axes(rotation, 0.0, delta))
         batch.remove_line_art = True
@@ -841,11 +860,149 @@ class EditSession:
         for link in page.get_links():
             if not below(link["from"]):
                 continue
+            if tuple(round(v, 1) for v in link["from"]) in batch.carried_links:
+                continue  # it already went to the continuation page
             moved = dict(link)
             moved["from"] = pymupdf.Rect(link["from"]) + (shift.x, shift.y, shift.x, shift.y)
             batch.new_links.append(moved)
 
         return True
+
+    def _carry_over(
+        self,
+        pno: int,
+        rotation: int,
+        pieces: list[tuple[str, Any]],
+        batch: _PageBatch,
+    ) -> bool:
+        """Move what no longer fits onto a page of its own, right after this one.
+
+        Pushing content past the foot of the sheet would simply hide it. A
+        continuation page keeps it readable and keeps the order it was in.
+        Attempted once: if it does not fit there either, the caller is told no
+        rather than handed a chain of half-filled pages.
+        """
+        if len(self._batches) > 1:
+            # Page numbers after this one are about to shift; another page's
+            # operations in the same batch would end up pointing at the wrong
+            # page.
+            return False
+
+        source = self._doc[pno]
+        starts = [across_span(rotation, self._rect_of(piece))[0] for piece in pieces]
+        ends = [across_span(rotation, self._rect_of(piece))[1] for piece in pieces]
+        first = min(starts)
+        page_limit = max(
+            across(rotation, x, y)
+            for x, y in ((source.rect.x0, source.rect.y0), (source.rect.x1, source.rect.y1))
+        )
+        top = self._top_margin(source, rotation)
+        if (max(ends) - first) > (page_limit - 18) - top:
+            return False  # taller than a page: nothing to be done here
+
+        rotation_of_page = source.rotation
+        self._doc.new_page(pno=pno + 1, width=source.rect.width, height=source.rect.height)
+        # Inserting a page invalidates the page objects already in hand.
+        source = self._doc[pno]
+        fresh = self._doc[pno + 1]
+        if rotation_of_page:
+            fresh.set_rotation(rotation_of_page)
+        carried = self._batch(pno + 1)
+
+        lift = top - first
+        shift = pymupdf.Point(*from_axes(rotation, 0.0, lift))
+
+        for kind, item in pieces:
+            if kind == "line":
+                batch.redactions.append(
+                    pymupdf.Rect(item["bbox"])
+                    + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD)
+                )
+                for span in item.get("spans", []):
+                    if not span.get("text", "").strip():
+                        continue
+                    descriptor = {
+                        "text": span["text"],
+                        "font": span.get("font"),
+                        "size": float(span.get("size", 11.0)),
+                        "flags": int(span.get("flags", 0)),
+                    }
+                    origin = span.get("origin", (0, 0))
+                    carried.texts.append(
+                        _PendingText(
+                            page=pno + 1,
+                            point=(origin[0] + shift.x, origin[1] + shift.y),
+                            text=span["text"],
+                            resolved=_span_font(self._resolver, pno, descriptor),
+                            fontsize=descriptor["size"],
+                            color=pymupdf.sRGB_to_pdf(int(span.get("color", 0))),
+                            rotate=rotation,
+                            opacity=_visible_opacity(span.get("alpha", 255)),
+                        )
+                    )
+            elif kind == "drawing":
+                pad = _REDACT_PAD + (item.get("width") or 0)
+                batch.redactions.append(item["rect"] + (-pad, -pad, pad, pad))
+                batch.remove_line_art = True
+                carried.drawings.append((item, shift))
+            else:
+                rect, data = item
+                batch.redactions.append(rect)
+                batch.move_images = True
+                batch.moved_image_sources.add(tuple(round(v, 1) for v in rect))
+                carried.restored_images.append(
+                    (rect + (shift.x, shift.y, shift.x, shift.y), data)
+                )
+
+        boxes = [self._rect_of(piece) for piece in pieces]
+        for link in source.get_links():
+            rect = pymupdf.Rect(link["from"])
+            if not any(rect.intersects(box) for box in boxes):
+                continue
+            moved = dict(link)
+            moved["from"] = rect + (shift.x, shift.y, shift.x, shift.y)
+            carried.new_links.append(moved)
+            batch.carried_links.add(tuple(round(v, 1) for v in rect))
+        return True
+
+    @staticmethod
+    def _rect_of(piece: tuple[str, Any]) -> pymupdf.Rect:
+        """The box of whatever kind of thing a carried piece is."""
+        kind, item = piece
+        if kind == "line":
+            return pymupdf.Rect(item["bbox"])
+        if kind == "drawing":
+            return pymupdf.Rect(item["rect"])
+        return pymupdf.Rect(item[0])
+
+    def _top_margin(self, page: pymupdf.Page, rotation: int) -> float:
+        """Where a continuation page should start putting things.
+
+        Taken from the whole document rather than from the page being
+        continued: a page whose content happens to sit at its foot says nothing
+        about where a fresh one should begin. Falls back to a plain margin when
+        the document offers no answer.
+        """
+        edges = [
+            across(rotation, x, y)
+            for x, y in ((page.rect.x0, page.rect.y0), (page.rect.x1, page.rect.y1))
+        ]
+        edge = min(edges)
+        starts = []
+        for pno in range(self._doc.page_count):
+            try:
+                raw = self._doc[pno].get_text("dict")
+            except Exception:
+                continue
+            for block in raw.get("blocks", []):
+                for line in block.get("lines", []) if block.get("type") == 0 else []:
+                    starts.append(across_span(rotation, line.get("bbox", (0, 0, 0, 0)))[0])
+        if not starts:
+            return edge + 56
+        # Never closer to the edge than a thumb's width, never further down
+        # than a third of the sheet: both would look like a mistake.
+        span = max(e for e in edges) - edge
+        return min(max(min(starts), edge + 36), edge + span / 3)
 
     def _image_bytes(self, xref: int) -> bytes | None:
         """The picture behind an xref, exactly as the file stores it."""

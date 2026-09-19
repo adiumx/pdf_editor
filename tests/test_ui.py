@@ -399,3 +399,35 @@ class TestMoveTool:
         page.mouse.up()
         page.wait_for_timeout(2500)
         assert page.locator(".span.is-editing").count() == 0
+
+
+@requires_fonts
+class TestContinuationPage:
+    """Text pushed past the foot of the sheet is carried onto a page of its
+    own. Nothing asked for that page, so the editor has to notice it appeared."""
+
+    def test_the_rail_shows_the_page_that_appeared(self, page, tmp_path, browser, server):
+        from tests.conftest import build_pdf_with_section_below
+
+        crowded = tmp_path / "apretado.pdf"
+        crowded.write_bytes(build_pdf_with_section_below(gap=8, top=700))
+        tab = browser.new_page(viewport={"width": 1400, "height": 900})
+        try:
+            tab.goto(server, wait_until="networkidle")
+            tab.set_input_files("#file-input", str(crowded))
+            tab.wait_for_selector(".page .span", timeout=30000)
+            tab.wait_for_function("() => document.querySelectorAll('.thumb').length === 1", timeout=15000)
+
+            target = tab.locator('.page .span[data-text*="pal00"]').first
+            target.click()
+            tab.wait_for_selector(".span.is-editing .span__input", timeout=10000)
+            tab.select_option("#fmt-fit", "push")
+            tab.keyboard.press("End")
+            tab.keyboard.type(" " + " ".join(["anadido"] * 30))
+            tab.keyboard.press("Enter")
+            tab.wait_for_function(
+                "() => document.querySelectorAll('.thumb').length === 2", timeout=30000
+            )
+            assert tab.locator(".page").count() == 2
+        finally:
+            tab.close()

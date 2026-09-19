@@ -148,10 +148,12 @@ desplegable **«Si no cabe»** decide qué hacer:
 | **mover lo de abajo** | Desplaza hacia abajo el texto, los filetes y los enlaces que estorban. |
 
 Mover lo de abajo arrastra el texto, los filetes, las curvas, los cuadriláteros
-y las imágenes que estén en la misma columna. Se niega, sin tocar nada, cuando
-no podría hacerlo con fidelidad: ante un trazo que no sabe recolocar, o si algo
-acabaría fuera de la hoja. Media figura en su sitio viejo es peor que un párrafo
-que sobresale.
+y las imágenes que estén en la misma columna. Lo que ya no cabe en la hoja pasa
+a una **página de continuación** insertada justo después, con sus enlaces:
+empujarlo más allá del borde sería sencillamente esconderlo. Se ofrece una vez,
+no una cadena de páginas a medio llenar, y se niega sin tocar nada ante un trazo
+que no sabe recolocar. Media figura en su sitio viejo es peor que un párrafo que
+sobresale.
 
 Un párrafo se reconoce por sus propias señales: mismo tipo y tamaño de letra,
 el interlineado propio del bloque, el mismo margen izquierdo y —la más
@@ -199,10 +201,11 @@ Si no está instalado, el editor te lo dice en lugar de fallar.
 - **El ancho de la columna se deduce del propio texto**, porque el PDF no guarda
   márgenes. Es una estimación buena en un documento corriente, pero una página
   con bloques muy dispares en el mismo margen puede confundirla.
-- **Mover lo de abajo sólo llega hasta el final de la hoja.** El texto no pasa a
-  la página siguiente; si no cabe, se te dice.
 - **Se recolocan líneas, rectángulos, curvas, cuadriláteros e imágenes.** Ante
   un recorte o un sombreado, se niega a mover en lugar de dejarlo descolocado.
+- **La página de continuación es una, no una cadena.** Si lo que se lleva no
+  cabe tampoco allí, se te avisa en lugar de repartirlo por media docena de
+  páginas nuevas.
 - **Las fuentes en subconjunto** solo contienen los glifos que el documento usaba.
   Si escribes caracteres que no están, se sustituye la fuente y se avisa. Muchos
   subconjuntos, además, vienen sin tabla de caracteres Unicode —se direccionan
