@@ -214,6 +214,45 @@ export class PageView {
     host.querySelector('.span__input')?.remove();
   }
 
+  /** Draw the lines the thing being dragged has just lined up with. */
+  showGuides(marks) {
+    this.layer.querySelectorAll('.guide').forEach((node) => node.remove());
+    const z = this.zoom;
+    for (const { orientation, at } of marks || []) {
+      const element = document.createElement('div');
+      element.className = `guide guide--${orientation}`;
+      if (orientation === 'x') element.style.left = `${at * z}px`;
+      else element.style.top = `${at * z}px`;
+      this.layer.append(element);
+    }
+  }
+
+  /** Show how far it has moved, beside the cursor. */
+  showReadout(text, x, y) {
+    let element = this.layer.querySelector('.readout');
+    if (!element) {
+      element = document.createElement('div');
+      element.className = 'readout';
+      this.layer.append(element);
+    }
+    element.textContent = text;
+    element.style.left = `${x * this.zoom + 14}px`;
+    element.style.top = `${y * this.zoom + 14}px`;
+  }
+
+  clearOverlays() {
+    this.layer.querySelectorAll('.guide, .readout').forEach((node) => node.remove());
+  }
+
+  /** Mark the block the arrow keys would move. */
+  setPicked(lines) {
+    this.layer.querySelectorAll('.span.is-picked').forEach((n) => n.classList.remove('is-picked'));
+    const wanted = new Set((lines || []).map((line) => line.id));
+    for (const element of this.layer.querySelectorAll('.span')) {
+      if (wanted.has(element.dataset.line)) element.classList.add('is-picked');
+    }
+  }
+
   /** Show where a block would land, as boxes following the cursor. */
   showGhost(rects, dx, dy) {
     this.layer.querySelectorAll('.ghost').forEach((node) => node.remove());
@@ -233,6 +272,7 @@ export class PageView {
 
   clearGhost() {
     this.layer.querySelectorAll('.ghost').forEach((node) => node.remove());
+    this.clearOverlays();
     this.element.classList.remove('is-dragging');
   }
 
@@ -261,29 +301,47 @@ export class PageView {
       marquee.className = 'marquee';
       this.layer.append(marquee);
 
+      const anchor = this.handlers.snapPoint?.(this, start.x, start.y) || start;
       const draw = (current) => {
         const z = this.zoom;
         Object.assign(marquee.style, {
-          left: `${Math.min(start.x, current.x) * z}px`,
-          top: `${Math.min(start.y, current.y) * z}px`,
-          width: `${Math.abs(current.x - start.x) * z}px`,
-          height: `${Math.abs(current.y - start.y) * z}px`,
+          left: `${Math.min(anchor.x, current.x) * z}px`,
+          top: `${Math.min(anchor.y, current.y) * z}px`,
+          width: `${Math.abs(current.x - anchor.x) * z}px`,
+          height: `${Math.abs(current.y - anchor.y) * z}px`,
         });
       };
 
-      const move = (moveEvent) => draw(this.toPagePoint(moveEvent));
+      const at = (someEvent) => {
+        const point = this.toPagePoint(someEvent);
+        const snapped = this.handlers.snapPoint?.(this, point.x, point.y) || point;
+        this.showGuides(snapped.marks);
+        return snapped;
+      };
+
+      const move = (moveEvent) => {
+        const current = at(moveEvent);
+        draw(current);
+        this.showReadout(
+          this.handlers.measure?.(
+            Math.abs(current.x - anchor.x), Math.abs(current.y - anchor.y),
+          ) || '',
+          current.x, current.y,
+        );
+      };
       const up = (upEvent) => {
         document.removeEventListener('mousemove', move);
         document.removeEventListener('mouseup', up);
         marquee.remove();
-        const end = this.toPagePoint(upEvent);
+        this.clearOverlays();
+        const end = at(upEvent);
         const rect = [
-          Math.min(start.x, end.x),
-          Math.min(start.y, end.y),
-          Math.max(start.x, end.x),
-          Math.max(start.y, end.y),
+          Math.min(anchor.x, end.x),
+          Math.min(anchor.y, end.y),
+          Math.max(anchor.x, end.x),
+          Math.max(anchor.y, end.y),
         ];
-        this.handlers.onMarquee?.(this, tool, rect, start);
+        this.handlers.onMarquee?.(this, tool, rect, anchor);
       };
 
       document.addEventListener('mousemove', move);

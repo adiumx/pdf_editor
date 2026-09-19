@@ -431,3 +431,147 @@ class TestContinuationPage:
             assert tab.locator(".page").count() == 2
         finally:
             tab.close()
+
+
+@requires_fonts
+class TestGridAndSnapping:
+    """A grid to place things against, and guides read off the page so a block
+    can be lined up with what is already there."""
+
+    def _open_bar(self, page):
+        page.keyboard.press("g")
+        page.wait_for_selector("#gridbar:not([hidden])", timeout=5000)
+
+    def _block_box(self, page):
+        return page.evaluate("""() => {
+            const view = window.__editor.pages.get(0);
+            const block = view.lines.filter(l => l.text.includes('Primera linea'));
+            const rects = block.map(l => l.bbox);
+            return [Math.min(...rects.map(r=>r[0])), Math.min(...rects.map(r=>r[1])),
+                    Math.max(...rects.map(r=>r[2])), Math.max(...rects.map(r=>r[3]))];
+        }""")
+
+    def test_the_bar_opens_with_its_key(self, page):
+        assert page.locator("#gridbar").is_hidden()
+        self._open_bar(page)
+        assert page.locator("#grid-step").locator("option").count() > 3
+
+    def test_showing_the_grid_rules_the_page(self, page):
+        self._open_bar(page)
+        assert page.eval_on_selector(".page__layer", "e => e.style.backgroundImage") == ""
+        page.check("#grid-show")
+        page.wait_for_timeout(400)
+        assert "gradient" in page.eval_on_selector(".page__layer", "e => e.style.backgroundImage")
+
+    def test_hiding_it_again_leaves_the_page_clean(self, page):
+        self._open_bar(page)
+        page.check("#grid-show")
+        page.wait_for_timeout(300)
+        page.uncheck("#grid-show")
+        page.wait_for_timeout(300)
+        assert page.eval_on_selector(".page__layer", "e => e.style.backgroundImage") == ""
+
+    def test_snapping_to_the_grid_lands_on_a_ruled_line(self, page):
+        self._open_bar(page)
+        page.locator("#grid-snap").set_checked(True)
+        page.locator("#grid-guides").set_checked(False)
+        result = page.evaluate("""() => {
+            const ed = window.__editor, g = ed.grid, view = ed.pages.get(0);
+            const block = view.lines.filter(l => l.text.includes('Primera linea'));
+            const rects = block.map(l => l.bbox);
+            const box = [Math.min(...rects.map(r=>r[0])), Math.min(...rects.map(r=>r[1])),
+                         Math.max(...rects.map(r=>r[2])), Math.max(...rects.map(r=>r[3]))];
+            const out = g.snapDelta(view, box, 61.3, 44.7, {});
+            const edges = [box[0]+out.dx, (box[0]+box[2])/2+out.dx, box[2]+out.dx,
+                           box[1]+out.dy, (box[1]+box[3])/2+out.dy, box[3]+out.dy];
+            return { step: g.spacing, edges };
+        }""")
+        step = result["step"]
+        assert any(
+            abs((edge % step)) < 0.01 or abs((edge % step) - step) < 0.01
+            for edge in result["edges"]
+        ), "ningún borde quedó sobre una línea de la cuadrícula"
+
+    def test_snapping_to_guides_lands_on_something_already_on_the_page(self, page):
+        self._open_bar(page)
+        page.locator("#grid-snap").set_checked(False)
+        page.locator("#grid-guides").set_checked(True)
+        result = page.evaluate("""() => {
+            const ed = window.__editor, g = ed.grid, view = ed.pages.get(0);
+            const block = view.lines.filter(l => l.text.includes('Primera linea'));
+            const rects = block.map(l => l.bbox);
+            const box = [Math.min(...rects.map(r=>r[0])), Math.min(...rects.map(r=>r[1])),
+                         Math.max(...rects.map(r=>r[2])), Math.max(...rects.map(r=>r[3]))];
+            const targets = g.candidates(view, block);
+            // Aim just past one of the page's own edges.
+            const aim = targets.xs[0] - box[0] + 1.2;
+            const out = g.snapDelta(view, box, aim, 0, { exclude: block });
+            return { xs: targets.xs, landed: [box[0]+out.dx, box[2]+out.dx], marks: out.marks };
+        }""")
+        assert result["marks"], "no señaló con qué se alineó"
+        assert any(
+            any(abs(edge - target) < 0.05 for target in result["xs"])
+            for edge in result["landed"]
+        ), "no se alineó con ningún borde del documento"
+
+    def test_a_block_never_lines_up_with_itself(self, page):
+        self._open_bar(page)
+        excluded = page.evaluate("""() => {
+            const ed = window.__editor, g = ed.grid, view = ed.pages.get(0);
+            const block = view.lines.filter(l => l.text.includes('Primera linea'));
+            const own = block.map(l => Math.round(l.bbox[0] * 10) / 10);
+            const targets = g.candidates(view, block);
+            return own.some(v => targets.xs.includes(v));
+        }""")
+        assert excluded is False
+
+    def test_shift_keeps_the_drag_on_one_axis(self, page):
+        self._open_bar(page)
+        result = page.evaluate("""() => {
+            const ed = window.__editor, g = ed.grid, view = ed.pages.get(0);
+            const box = [72, 90, 200, 105];
+            return {
+                wide: g.snapDelta(view, box, 80, 9, { constrain: true }),
+                tall: g.snapDelta(view, box, 7, 90, { constrain: true }),
+            };
+        }""")
+        assert result["wide"]["dy"] == 0
+        assert result["tall"]["dx"] == 0
+
+    def test_the_arrow_keys_move_a_picked_block(self, page):
+        page.click('[data-tool="move"]')
+        target = span_with(page, "Primera linea")
+        target.click()
+        page.wait_for_timeout(600)
+        assert page.locator(".span.is-picked").count() >= 1, "el clic no marcó nada"
+
+        before = span_with(page, "Primera linea").bounding_box()
+        page.keyboard.press("ArrowRight")
+        page.wait_for_timeout(3000)
+        after = span_with(page, "Primera linea").bounding_box()
+        moved = after["x"] - before["x"]
+        assert 0.5 < moved < 4, f"se movió {moved} px, se esperaba un punto"
+
+    def test_a_letter_typed_in_a_field_is_not_a_shortcut(self, page):
+        """Typing "g" into the search box used to open the grid bar."""
+        page.keyboard.press("Control+f")
+        page.wait_for_selector("#findbar:not([hidden])", timeout=5000)
+        page.locator("#find-query").click()
+        page.keyboard.type("gte")
+        page.wait_for_timeout(400)
+        assert page.locator("#gridbar").is_hidden(), "la G abrió la cuadrícula"
+        assert page.locator("#find-query").input_value() == "gte"
+
+    def test_a_plain_click_picks_without_nudging(self, page):
+        """Con el ajuste activo, un clic quieto producía un desplazamiento hasta
+        la línea más cercana: el bloque se movía solo por haberlo señalado."""
+        self._open_bar(page)
+        page.locator("#grid-snap").set_checked(True)
+        page.click('[data-tool="move"]')
+        before = span_with(page, "Primera linea").bounding_box()
+        span_with(page, "Primera linea").click()
+        page.wait_for_timeout(1500)
+        assert page.locator(".span.is-picked").count() >= 1, "el clic no marcó nada"
+        after = span_with(page, "Primera linea").bounding_box()
+        assert abs(after["x"] - before["x"]) < 0.5, "el clic movió el bloque"
+        assert abs(after["y"] - before["y"]) < 0.5, "el clic movió el bloque"

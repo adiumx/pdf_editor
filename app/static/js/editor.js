@@ -26,6 +26,10 @@ export class Editor {
     this.pendingImage = null;
     this.families = [];
     this.listeners = new Set();
+    this.grid = null;
+    // The block the arrow keys would move: picked by clicking it with the move
+    // tool, without dragging.
+    this.picked = null;
     // Edits the user has not downloaded yet. The document lives in the
     // server's memory and nowhere else, so leaving the page loses them.
     this.dirty = false;
@@ -86,6 +90,8 @@ export class Editor {
       const view = new PageView(geometry.page, geometry, {
         onSpanActivate: (...args) => this.activateSpan(...args),
         onMoveStart: (...args) => this.startMove(...args),
+        snapPoint: (view, x, y) => this.grid?.snapPoint(view, x, y) || { x, y, marks: [] },
+        measure: (dx, dy) => this.grid?.format(dx, dy) || '',
         onBlankClick: () => this.commitActive(),
         onMarquee: (...args) => this.handleMarquee(...args),
       });
@@ -108,6 +114,8 @@ export class Editor {
         view.setGeometry(geometry, this.zoom, api.renderUrl(this.doc.id, pno, this.zoom, this.revision));
         const page = await api.pageText(this.doc.id, pno);
         view.setLines(page.lines);
+        this.grid?.paint(view);
+        if (this.picked?.view === view) this.clearPick();
       }),
     );
   }
@@ -216,6 +224,7 @@ export class Editor {
 
   async setTool(tool) {
     await this.commitActive();
+    if (tool !== 'move') this.clearPick();
     this.tool = tool;
     for (const view of this.pages.values()) view.setTool(tool);
     this._emit();
@@ -448,23 +457,52 @@ export class Editor {
     if (this.tool !== 'move') return;
     const block = view.lines.filter((item) => item.paragraph === line.paragraph);
     const rects = block.map((item) => item.bbox);
+    const box = [
+      Math.min(...rects.map((r) => r[0])),
+      Math.min(...rects.map((r) => r[1])),
+      Math.max(...rects.map((r) => r[2])),
+      Math.max(...rects.map((r) => r[3])),
+    ];
     const start = view.toPagePoint(event);
     view.element.classList.add('is-dragging');
     view.showGhost(rects, 0, 0);
 
+    const settle = (someEvent) => {
+      const at = view.toPagePoint(someEvent);
+      const raw = { dx: at.x - start.x, dy: at.y - start.y };
+      if (!this.grid) return { ...raw, marks: [], at };
+      return {
+        ...this.grid.snapDelta(view, box, raw.dx, raw.dy, {
+          constrain: someEvent.shiftKey,
+          exclude: block,
+        }),
+        at,
+      };
+    };
+
     const move = (moveEvent) => {
-      const at = view.toPagePoint(moveEvent);
-      view.showGhost(rects, at.x - start.x, at.y - start.y);
+      const { dx, dy, marks, at } = settle(moveEvent);
+      view.showGhost(rects, dx, dy);
+      view.showGuides(marks);
+      view.showReadout(this.grid?.format(dx, dy) || '', at.x, at.y);
     };
 
     const up = async (upEvent) => {
       document.removeEventListener('mousemove', move);
       document.removeEventListener('mouseup', up);
-      const at = view.toPagePoint(upEvent);
       view.clearGhost();
-      const dx = at.x - start.x;
-      const dy = at.y - start.y;
-      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+
+      // Whether this was a drag is decided by the hand, not by the snapping:
+      // with a grid on, standing still still produces an offset, and a plain
+      // click would slide the block onto the nearest line.
+      const at = view.toPagePoint(upEvent);
+      if (Math.abs(at.x - start.x) < 1 && Math.abs(at.y - start.y) < 1) {
+        // A click: pick the block so the arrow keys can move it.
+        this.pick(view, block);
+        return;
+      }
+
+      const { dx, dy } = settle(upEvent);
       await this.applyOperations(
         [{ op: 'move_block', page: view.pageNumber, lines: block, dx, dy }],
         { affected: [view.pageNumber] },
@@ -473,6 +511,35 @@ export class Editor {
 
     document.addEventListener('mousemove', move);
     document.addEventListener('mouseup', up);
+  }
+
+  /** Mark a block so the arrow keys act on it. */
+  pick(view, block) {
+    this.clearPick();
+    this.picked = { view, block };
+    view.setPicked(block);
+    this._emit();
+  }
+
+  clearPick() {
+    this.picked?.view.setPicked([]);
+    this.picked = null;
+  }
+
+  /**
+   * Move the picked block by a small step.
+   *
+   * A point at a time by default, a whole grid step with shift: the two things
+   * you want are "just a touch" and "exactly one square".
+   */
+  async nudge(dx, dy, wide = false) {
+    if (!this.picked) return;
+    const step = wide ? (this.grid?.spacing || 10) : 1;
+    const { view, block } = this.picked;
+    await this.applyOperations(
+      [{ op: 'move_block', page: view.pageNumber, lines: block, dx: dx * step, dy: dy * step }],
+      { affected: [view.pageNumber] },
+    ).catch(() => {});
   }
 
   /* ---------- new content ---------- */

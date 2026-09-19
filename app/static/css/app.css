@@ -159,6 +159,39 @@ body {
 
 .status { color: var(--text-muted); font-size: 13px; }
 
+/* ---------- grid, guides and readout ---------- */
+
+/* A line on the page that something has just lined up with. */
+.guide {
+  position: absolute;
+  background: #e5399b;
+  pointer-events: none;
+  z-index: 16;
+}
+
+.guide--x { top: 0; bottom: 0; width: 1px; }
+.guide--y { left: 0; right: 0; height: 1px; }
+
+/* How far the thing being dragged has moved. */
+.readout {
+  position: absolute;
+  z-index: 18;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(27, 31, 39, .88);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* A block picked but not yet moved, so the arrow keys have something to act on. */
+.span.is-picked {
+  background: rgba(47, 109, 246, .14);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 /* ---------- find bar ---------- */
 
 .findbar {

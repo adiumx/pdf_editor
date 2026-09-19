@@ -54,6 +54,7 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | **Reconocer texto** | Lee el texto de las páginas escaneadas para poder editarlas. Aparece solo cuando hay alguna. |
 | **Buscar** | `Ctrl+F` abre la búsqueda: resalta todas las apariciones, salta entre ellas y reemplaza todas de una vez. |
 | **Páginas** | Reordena arrastrando las miniaturas, gira, borra o añade páginas en blanco. |
+| **Cuadrícula** | `G` abre la regla: cuadricula la página, ajusta lo que muevas a sus líneas y a lo que ya hay escrito, y mide el desplazamiento mientras arrastras. |
 
 Desde la barra de formato puedes cambiar la fuente, el tamaño, el color, la
 negrita, la cursiva y la alineación. El desplegable de fuentes agrupa:
@@ -81,9 +82,39 @@ encuentra «Computación». Los botones `Aa` y `|ab|` exigen coincidencia exacta
 palabra completa. Reemplazar todo es **un solo paso de deshacer**, y el texto
 reemplazado se reajusta como cualquier otra edición.
 
-Atajos: `V` editar · `M` mover · `T` texto · `I` imagen · `E` borrar · `Ctrl+F` buscar ·
-`Ctrl+Z` / `Ctrl+Mayús+Z` deshacer y rehacer · `Ctrl+S` guardar · `Enter`
-aplicar · `Esc` cancelar.
+### Cuadrícula, ajuste y guías
+
+`G` abre la barra de la cuadrícula. **Mostrar cuadrícula** raya la página con el
+**paso** que elijas —de 1 mm a un cuarto de pulgada, en milímetros, puntos o
+pulgadas, con la línea marcada más fuerte cada cinco— sin tocar el documento:
+es una ayuda visual, no se guarda ni se imprime.
+
+Con ella vienen dos ajustes, independientes y combinables:
+
+- **Ajustar a la cuadrícula** lleva el bloque que arrastras a la línea más
+  cercana. Se prueban sus seis bordes —izquierdo, centro y derecho, superior,
+  medio e inferior— y gana el que menos haya que corregir, así que un bloque se
+  pega a la cuadrícula por el lado que ya tenía más cerca.
+- **Ajustar a márgenes y texto** lee las posiciones del propio documento —los
+  bordes y el centro de cada línea, y el margen de la columna— y alinea con
+  ellas. Es lo que hace que un párrafo movido quede a plomo con el resto de la
+  página aunque el documento no siga ninguna cuadrícula. Un bloque nunca se
+  alinea consigo mismo. Mientras arrastras, una línea rosa señala con qué se
+  está alineando.
+
+Un indicador junto al puntero va diciendo cuánto llevas movido, en las unidades
+del paso elegido (`12.5 × 4.0 mm`), y **Mayús** mientras arrastras mantiene el
+movimiento en un solo eje.
+
+Un clic con la herramienta **Mover** señala el bloque sin desplazarlo; a partir
+de ahí las **flechas** lo empujan un punto y **Mayús+flechas** un paso entero de
+la cuadrícula, que es la forma de afinar una posición sin pelearse con el ratón.
+`Esc` lo deselecciona.
+
+Atajos: `V` editar · `M` mover · `T` texto · `I` imagen · `E` borrar · `G` cuadrícula ·
+`Ctrl+F` buscar · `Ctrl+Z` / `Ctrl+Mayús+Z` deshacer y rehacer · `Ctrl+S` guardar ·
+`Enter` aplicar · `Esc` cancelar. Las letras sueltas no actúan mientras escribes en un
+campo o en el propio documento.
 
 ## Cómo conserva la fuente
 
@@ -241,6 +272,7 @@ app/
   editor.py    Aplicación de las operaciones sobre el PDF
   ocr.py       Reconocimiento del texto de páginas escaneadas
   static/      Interfaz (JavaScript sin dependencias ni compilación)
+               js/grid.js: cuadrícula, ajuste y guías de alineación (sólo en el navegador)
 ```
 
 El navegador no sabe nada de PDF: muestra la página renderizada por el servidor,

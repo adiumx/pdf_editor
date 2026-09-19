@@ -28,6 +28,7 @@
     <span class="sep"></span>
     <button id="btn-find" class="btn" title="Buscar y reemplazar (Ctrl+F)">🔍 Buscar</button>
     <button id="btn-ocr" class="btn" hidden title="Leer el texto de las páginas escaneadas">🔎 Reconocer texto</button>
+    <button id="btn-grid" class="btn" title="Cuadrícula y ajuste (G)">⊞ Cuadrícula</button>
     <span class="sep"></span>
     <button id="btn-undo" class="btn" disabled title="Deshacer (Ctrl+Z)">↶</button>
     <button id="btn-redo" class="btn" disabled title="Rehacer (Ctrl+Mayús+Z)">↷</button>
@@ -50,6 +51,23 @@
     <button id="btn-save" class="btn btn--primary">Guardar PDF</button>
   </div>
 </header>
+
+<div class="findbar" id="gridbar" hidden>
+  <label class="check"><input type="checkbox" id="grid-show"><span>Mostrar cuadrícula</span></label>
+  <label class="field">
+    <span>Paso</span>
+    <select id="grid-step"></select>
+  </label>
+  <label class="check" title="Las posiciones caen en las líneas de la cuadrícula">
+    <input type="checkbox" id="grid-snap" checked><span>Ajustar a la cuadrícula</span>
+  </label>
+  <label class="check" title="Alinear con los márgenes y el texto que ya hay en la página">
+    <input type="checkbox" id="grid-guides" checked><span>Ajustar a márgenes y texto</span>
+  </label>
+  <span class="sep"></span>
+  <span class="find-count">Mayús al arrastrar: recto · Flechas: empujar · Mayús+flechas: un paso</span>
+  <button class="btn btn--icon" id="grid-close" title="Cerrar">✕</button>
+</div>
 
 <div class="findbar" id="findbar" hidden>
   <label class="field">

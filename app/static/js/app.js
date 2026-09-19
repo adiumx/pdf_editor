@@ -1,6 +1,7 @@
 /** Wiring: toolbar, format bar, page rail, drag & drop, keyboard shortcuts. */
 
 import { Editor } from './editor.js';
+import { Grid } from './grid.js';
 import { SearchBar } from './search.js';
 import { Thumbnails } from './thumbs.js';
 import { familyOf } from './fontmap.js';
@@ -10,6 +11,16 @@ const $ = (id) => document.getElementById(id);
 
 const editor = new Editor($('pages-view'));
 const thumbnails = new Thumbnails($('thumbs'), editor);
+const grid = new Grid({
+  bar: $('gridbar'),
+  show: $('grid-show'),
+  step: $('grid-step'),
+  snapGrid: $('grid-snap'),
+  snapGuides: $('grid-guides'),
+  close: $('grid-close'),
+}, editor);
+editor.grid = grid;
+
 const search = new SearchBar({
   bar: $('findbar'),
   query: $('find-query'),
@@ -100,6 +111,7 @@ function pickImage() {
   picker.click();
 }
 
+$('btn-grid').addEventListener('click', () => grid.toggleBar());
 $('btn-find').addEventListener('click', () => search.toggle());
 $('btn-ocr').addEventListener('click', () => recogniseScans());
 
@@ -269,7 +281,12 @@ fmt.apply.addEventListener('click', () => editor.commitActive().catch(reportErro
 /* ---------- keyboard ---------- */
 
 document.addEventListener('keydown', (event) => {
-  const typing = editor.active !== null;
+  // A single letter is a shortcut only when it is not being typed into
+  // something. The search box and the format bar are fields like any other.
+  const inField = Boolean(
+    event.target?.closest?.('input, select, textarea, [contenteditable]'),
+  );
+  const typing = editor.active !== null || inField;
   const meta = event.ctrlKey || event.metaKey;
 
   if (meta && event.key.toLowerCase() === 'z') {
@@ -299,6 +316,19 @@ document.addEventListener('keydown', (event) => {
   }
   if (typing || !editor.isOpen) return;
 
+  if (event.key.toLowerCase() === 'g') {
+    event.preventDefault();
+    grid.toggleBar();
+    return;
+  }
+
+  if (editor.picked && event.key.startsWith('Arrow')) {
+    event.preventDefault();
+    const steps = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const [dx, dy] = steps[event.key];
+    editor.nudge(dx, dy, event.shiftKey).catch(reportError);
+    return;
+  }
   const shortcuts = { v: 'select', m: 'move', t: 'text', e: 'erase' };
   const tool = shortcuts[event.key.toLowerCase()];
   if (tool) {
@@ -334,7 +364,10 @@ editor.onChange(() => {
   // fonts, and syncFormatBar may have prepended one, so a length check would
   // leave the previous document's fonts in place.
   $('findbar').hidden = $('findbar').hidden || !open;
+  $('gridbar').hidden = $('gridbar').hidden || !open;
   search.refresh();
+
+  if (open) grid.paintAll();
 
   if (open && familiesFor !== editor.doc.id) {
     familiesFor = editor.doc.id;
