@@ -15,9 +15,19 @@ Los archivos se procesan en tu equipo y nunca salen de él.
 ```bash
 git clone https://github.com/adiumx/pdf_editor.git
 cd pdf_editor
-python -m venv .venv && source .venv/bin/activate   # en Windows: .venv\Scripts\activate
+python3 -m venv .venv && source .venv/bin/activate   # en Windows: py -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+En Debian y Ubuntu la orden `python` no existe y `venv` viene en un paquete
+aparte; si `python3 -m venv` falla, instálalo primero:
+
+```bash
+sudo apt install python3-venv
+```
+
+Una vez activado el entorno, `python` y `pip` funcionan con normalidad dentro de
+él: los proporciona el propio entorno virtual.
 
 ## Uso
 
@@ -106,6 +116,8 @@ pip install -r requirements.txt pytest httpx
 python tools/make_sample_pdf.py ejemplo.pdf   # PDF de prueba con fuentes embebidas
 pytest
 ```
+
+(Con el entorno virtual activado. Sin él, usa `python3` y `pip3`.)
 
 La suite cubre la resolución de fuentes, la extracción con páginas rotadas, cada
 operación de edición y la API completa, incluida la comprobación de que el PDF
