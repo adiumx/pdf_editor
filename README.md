@@ -47,7 +47,7 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | Herramienta | Qué hace |
 |---|---|
 | **Editar** | Haz clic en cualquier texto y escribe encima. Conserva fuente, tamaño y color. |
-| **Mover** | Arrastra un párrafo a otro sitio de la página. Sus enlaces viajan con él. |
+| **Mover** | Arrastra un párrafo a otro sitio de la página. Sus enlaces y sus marcas viajan con él. Señala varios con Mayús y alinéalos o repártelos. |
 | **Texto** | Dibuja un rectángulo e inserta texto nuevo con la fuente que elijas. |
 | **Imagen** | Sube una imagen y colócala dibujando un rectángulo. |
 | **Anotar** | Resalta, subraya, tacha o deja una nota. Arrastra sobre el texto; clic en una marca para quitarla. |
@@ -82,6 +82,30 @@ La búsqueda ignora mayúsculas y acentos por defecto: escribir «computacion»
 encuentra «Computación». Los botones `Aa` y `|ab|` exigen coincidencia exacta o
 palabra completa. Reemplazar todo es **un solo paso de deshacer**, y el texto
 reemplazado se reajusta como cualquier otra edición.
+
+### Seleccionar varios, alinear y repartir
+
+Con la herramienta **Mover**, un clic señala un párrafo y **Mayús** (o `Ctrl`)
+al hacer clic añade otro a la selección; volver a pulsar sobre uno lo saca, que
+es como se deshace un clic errado sin empezar de cero. Un clic normal empieza
+una selección nueva. La selección vive en una página: alinear un párrafo con
+algo de otra hoja no significa nada.
+
+Con dos o más señalados aparece la barra de alineación:
+
+- **Izquierda, centro, derecha** y **arriba, medio, abajo**. El borde al que se
+  va es el de más afuera —el más a la izquierda para «izquierda», el más alto
+  para «arriba»—, porque es el que ya está en la página: todo se mueve a un
+  sitio donde hay algo, en vez de ir todos a un sitio donde no estaba ninguno.
+  Centrar usa el medio de lo seleccionado.
+- **Repartir en horizontal o en vertical**, a partir de tres bloques. Los dos de
+  los extremos se quedan donde están y el espacio sobrante se reparte a partes
+  iguales entre los demás. Lo que se iguala son los huecos, no la distancia
+  entre bordes, que es lo que el ojo lee como repartido.
+
+Arrastrar uno de los bloques señalados los mueve todos: después de alinearlos,
+separarlos sin querer sería absurdo. Las flechas también empujan la selección
+entera.
 
 ### Anotar
 
@@ -299,7 +323,8 @@ app/
   editor.py    Aplicación de las operaciones sobre el PDF
   ocr.py       Reconocimiento del texto de páginas escaneadas
   static/      Interfaz (JavaScript sin dependencias ni compilación)
-               js/grid.js: cuadrícula, ajuste y guías de alineación (sólo en el navegador)
+               js/grid.js:  cuadrícula, ajuste y guías (sólo en el navegador)
+               js/align.js: alinear y repartir — geometría pura, sin tocar la página
 ```
 
 El navegador no sabe nada de PDF: muestra la página renderizada por el servidor,

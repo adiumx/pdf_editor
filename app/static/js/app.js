@@ -2,6 +2,7 @@
 
 import { Editor } from './editor.js';
 import { Grid } from './grid.js';
+import { needs as alignNeeds } from './align.js';
 import { SearchBar } from './search.js';
 import { Thumbnails } from './thumbs.js';
 import { familyOf } from './fontmap.js';
@@ -31,6 +32,14 @@ const markBar = {
 markBar.kind.addEventListener('change', () => { editor.markKind = markBar.kind.value; });
 markBar.color.addEventListener('input', () => { editor.markColor = markBar.color.value; });
 markBar.close.addEventListener('click', () => { editor.setTool('select').catch(reportError); });
+
+// Lining several blocks up. The bar is its own hint: it is up exactly while
+// there is more than one block picked, so its buttons always mean something.
+for (const button of $('alignbar').querySelectorAll('[data-arrange]')) {
+  button.addEventListener('click', () => {
+    editor.align(button.dataset.arrange).catch(reportError);
+  });
+}
 
 const search = new SearchBar({
   bar: $('findbar'),
@@ -378,6 +387,15 @@ editor.onChange(() => {
   $('gridbar').hidden = $('gridbar').hidden || !open;
   // The annotate bar is the tool: it is up exactly while the tool is in hand.
   $('markbar').hidden = !open || editor.tool !== 'mark';
+
+  const picked = editor.picked?.blocks?.length || 0;
+  $('alignbar').hidden = !open || picked < 2;
+  if (picked >= 2) {
+    $('align-count').textContent = `${picked} bloques seleccionados`;
+    for (const button of $('alignbar').querySelectorAll('[data-arrange]')) {
+      button.disabled = picked < alignNeeds(button.dataset.arrange);
+    }
+  }
   search.refresh();
 
   if (open) grid.paintAll();

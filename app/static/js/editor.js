@@ -9,8 +9,23 @@
 
 import { api } from './api.js';
 import { PageView } from './page.js';
+import { alignmentDeltas } from './align.js';
 import { familyOf } from './fontmap.js';
 import { reportWarnings, setStatus, toast, withBusy } from './ui.js';
+
+/** A block is its paragraph, so its first line's id names it. */
+const blockKey = (block) => block[0]?.id || '';
+
+/** The box enclosing a run of lines. */
+function boxOf(lines) {
+  const rects = lines.map((line) => line.bbox);
+  return [
+    Math.min(...rects.map((r) => r[0])),
+    Math.min(...rects.map((r) => r[1])),
+    Math.max(...rects.map((r) => r[2])),
+    Math.max(...rects.map((r) => r[3])),
+  ];
+}
 
 const DEFAULT_NEW_TEXT = { size: 12, color: '#000000', family: 'sans', bold: false, italic: false };
 
@@ -459,14 +474,15 @@ export class Editor {
    */
   startMove(view, line, event) {
     if (this.tool !== 'move') return;
-    const block = view.lines.filter((item) => item.paragraph === line.paragraph);
+    const grabbed = view.lines.filter((item) => item.paragraph === line.paragraph);
+    // Grabbing one of several picked blocks drags the whole selection: having
+    // lined them up, moving them apart again by accident would be absurd.
+    const dragging = this.isPicked(grabbed) && this.picked.view === view
+      ? this.picked.blocks
+      : [grabbed];
+    const block = dragging.flat();
     const rects = block.map((item) => item.bbox);
-    const box = [
-      Math.min(...rects.map((r) => r[0])),
-      Math.min(...rects.map((r) => r[1])),
-      Math.max(...rects.map((r) => r[2])),
-      Math.max(...rects.map((r) => r[3])),
-    ];
+    const box = boxOf(block);
     const start = view.toPagePoint(event);
     view.element.classList.add('is-dragging');
     view.showGhost(rects, 0, 0);
@@ -502,13 +518,15 @@ export class Editor {
       const at = view.toPagePoint(upEvent);
       if (Math.abs(at.x - start.x) < 1 && Math.abs(at.y - start.y) < 1) {
         // A click: pick the block so the arrow keys can move it.
-        this.pick(view, block);
+        this.pick(view, grabbed, { add: upEvent.shiftKey || upEvent.ctrlKey || upEvent.metaKey });
         return;
       }
 
       const { dx, dy } = settle(upEvent);
       await this.applyOperations(
-        [{ op: 'move_block', page: view.pageNumber, lines: block, dx, dy }],
+        dragging.map((lines) => ({
+          op: 'move_block', page: view.pageNumber, lines, dx, dy,
+        })),
         { affected: [view.pageNumber] },
       ).catch(() => {});
     };
@@ -517,17 +535,47 @@ export class Editor {
     document.addEventListener('mouseup', up);
   }
 
-  /** Mark a block so the arrow keys act on it. */
-  pick(view, block) {
-    this.clearPick();
-    this.picked = { view, block };
-    view.setPicked(block);
+  /**
+   * Mark a block so the arrow keys and the alignment bar act on it.
+   *
+   * With `add`, the block joins the selection instead of replacing it, and a
+   * block already in it drops out — which is how a mis-click is undone without
+   * starting the selection over. A selection lives on one page: aligning a
+   * paragraph with something on another sheet means nothing.
+   */
+  pick(view, block, { add = false } = {}) {
+    const key = blockKey(block);
+    if (!add || !this.picked || this.picked.view !== view) {
+      this.clearPick();
+      this.picked = { view, blocks: [block] };
+    } else {
+      const blocks = this.picked.blocks.filter((other) => blockKey(other) !== key);
+      this.picked.blocks = blocks.length === this.picked.blocks.length
+        ? [...blocks, block]
+        : blocks;
+      if (!this.picked.blocks.length) {
+        this.clearPick();
+        this._emit();
+        return;
+      }
+    }
+    view.setPicked(this.pickedLines());
     this._emit();
   }
 
   clearPick() {
     this.picked?.view.setPicked([]);
     this.picked = null;
+  }
+
+  /** Every line of every picked block, flattened. */
+  pickedLines() {
+    return (this.picked?.blocks || []).flat();
+  }
+
+  isPicked(block) {
+    const key = blockKey(block);
+    return (this.picked?.blocks || []).some((other) => blockKey(other) === key);
   }
 
   /**
@@ -539,11 +587,43 @@ export class Editor {
   async nudge(dx, dy, wide = false) {
     if (!this.picked) return;
     const step = wide ? (this.grid?.spacing || 10) : 1;
-    const { view, block } = this.picked;
+    const { view, blocks } = this.picked;
     await this.applyOperations(
-      [{ op: 'move_block', page: view.pageNumber, lines: block, dx: dx * step, dy: dy * step }],
+      blocks.map((lines) => ({
+        op: 'move_block', page: view.pageNumber, lines,
+        dx: dx * step, dy: dy * step,
+      })),
       { affected: [view.pageNumber] },
     ).catch(() => {});
+  }
+
+  /**
+   * Line the picked blocks up, or space them out evenly.
+   *
+   * Aligning takes the outermost edge as the line to meet — the leftmost for
+   * "left", the topmost for "top" — because that is the one already on the
+   * page: everything moves to a place something is, rather than all of them to
+   * a place none of them was. Centring uses the middle of what is selected.
+   *
+   * Distributing keeps the two outermost blocks where they are and shares the
+   * space between them evenly, which is what makes it a way of tidying rather
+   * than of moving the group.
+   */
+  async align(how) {
+    if (!this.picked || this.picked.blocks.length < 2) return;
+    const { view, blocks } = this.picked;
+    const boxes = blocks.map(boxOf);
+    const deltas = alignmentDeltas(how, boxes);
+    if (!deltas) return;
+
+    const operations = blocks
+      .map((lines, index) => ({
+        op: 'move_block', page: view.pageNumber, lines,
+        dx: deltas[index][0], dy: deltas[index][1],
+      }))
+      .filter((op) => Math.abs(op.dx) > 0.01 || Math.abs(op.dy) > 0.01);
+    if (!operations.length) return;
+    await this.applyOperations(operations, { affected: [view.pageNumber] });
   }
 
   /* ---------- new content ---------- */

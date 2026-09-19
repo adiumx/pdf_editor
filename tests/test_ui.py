@@ -682,3 +682,117 @@ class TestAnnotating:
         page.locator(".page .markhit").first.click()
         page.wait_for_timeout(1500)
         assert page.console_errors == []
+
+
+@requires_fonts
+class TestAlignment:
+    """Several blocks picked at once, lined up or spaced out."""
+
+    def _pick(self, page, texts):
+        page.click('[data-tool="move"]')
+        for index, text in enumerate(texts):
+            target = span_with(page, text)
+            target.click(modifiers=["Shift"] if index else [])
+            page.wait_for_timeout(500)
+
+    def test_deltas_line_the_left_edges_up(self, page):
+        out = page.evaluate("""async () => {
+            const m = await import('/static/js/align.js');
+            return m.alignmentDeltas('left', [[10, 10, 60, 30], [100, 50, 130, 70]]);
+        }""")
+        assert out == [[0, 0], [-90, 0]]
+
+    def test_spreading_needs_three_blocks(self, page):
+        out = page.evaluate("""async () => {
+            const m = await import('/static/js/align.js');
+            return m.alignmentDeltas('spread-h', [[10, 10, 60, 30], [100, 50, 130, 70]]);
+        }""")
+        assert out is None
+
+    def test_spreading_leaves_the_outermost_alone_and_evens_the_gaps(self, page):
+        out = page.evaluate("""async () => {
+            const m = await import('/static/js/align.js');
+            const boxes = [[10, 0, 60, 20], [100, 0, 130, 20], [200, 0, 280, 20]];
+            const deltas = m.alignmentDeltas('spread-h', boxes);
+            const moved = boxes.map((b, i) => [b[0] + deltas[i][0], b[2] + deltas[i][0]]);
+            return { deltas, gaps: [moved[1][0] - moved[0][1], moved[2][0] - moved[1][1]] };
+        }""")
+        assert out["deltas"][0] == [0, 0] and out["deltas"][2] == [0, 0]
+        assert out["gaps"][0] == pytest.approx(out["gaps"][1], abs=0.01)
+
+    def test_an_unknown_arrangement_does_nothing(self, page):
+        out = page.evaluate("""async () => {
+            const m = await import('/static/js/align.js');
+            return m.alignmentDeltas('diagonal', [[0, 0, 1, 1], [2, 2, 3, 3]]);
+        }""")
+        assert out is None
+
+    def test_one_block_shows_no_bar(self, page):
+        page.click('[data-tool="move"]')
+        span_with(page, "Primera linea").click()
+        page.wait_for_timeout(600)
+        assert page.locator("#alignbar").is_hidden()
+
+    def test_shift_clicking_a_second_block_brings_the_bar_up(self, page):
+        self._pick(page, ["Primera linea", "Titulo en negrita"])
+        assert page.locator("#alignbar").is_visible()
+        assert "2 bloques" in page.locator("#align-count").inner_text()
+
+    def test_shift_clicking_the_same_block_again_drops_it(self, page):
+        self._pick(page, ["Primera linea", "Titulo en negrita"])
+        span_with(page, "Titulo en negrita").click(modifiers=["Shift"])
+        page.wait_for_timeout(600)
+        assert page.locator("#alignbar").is_hidden()
+
+    def test_a_plain_click_starts_the_selection_over(self, page):
+        self._pick(page, ["Primera linea", "Titulo en negrita"])
+        span_with(page, "Una linea en sans serif").click()
+        page.wait_for_timeout(600)
+        assert page.evaluate("() => window.__editor.picked.blocks.length") == 1
+
+    def test_spreading_is_disabled_until_there_are_three(self, page):
+        self._pick(page, ["Primera linea", "Titulo en negrita"])
+        assert page.locator('[data-arrange="spread-h"]').is_disabled()
+        assert page.locator('[data-arrange="left"]').is_enabled()
+
+    def test_aligning_moves_the_text_on_the_page(self, page):
+        self._pick(page, ["Primera linea", "Titulo en negrita"])
+        before = [
+            span_with(page, t).bounding_box()["x"]
+            for t in ("Primera linea", "Titulo en negrita")
+        ]
+        page.click('[data-arrange="right"]')
+        page.wait_for_timeout(4000)
+        after = [
+            span_with(page, t).bounding_box()["x"]
+            for t in ("Primera linea", "Titulo en negrita")
+        ]
+        assert after != before, "no se movió nada"
+        right = [
+            span_with(page, t).bounding_box()
+            for t in ("Primera linea", "Titulo en negrita")
+        ]
+        edges = [box["x"] + box["width"] for box in right]
+        assert edges[0] == pytest.approx(edges[1], abs=4), edges
+
+    def test_the_format_bars_own_alignment_still_works(self, page):
+        """Both bars carry alignment buttons, and they once shared an
+        attribute. This is the other one, on the path a person takes to it."""
+        open_editor(page, "Primera linea")
+        before = span_with(page, "Primera linea").bounding_box()["x"]
+        # Alignment is within the line's own width, so a line that already
+        # fills it has nowhere to go. Shorten it first.
+        page.keyboard.press("Control+a")
+        page.keyboard.type("Corto")
+        page.click('#fmt-align [data-align="right"]')
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(4000)
+        after = span_with(page, "Corto").bounding_box()["x"]
+        assert after > before + 5, f"la línea no se alineó a la derecha: {before} -> {after}"
+        assert page.console_errors == []
+
+    def test_no_console_errors_while_aligning(self, page):
+        self._pick(page, ["Primera linea", "Titulo en negrita"])
+        page.click('[data-arrange="left"]')
+        page.wait_for_timeout(3000)
+        assert page.console_errors == []
