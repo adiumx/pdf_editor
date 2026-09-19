@@ -54,6 +54,22 @@ export const api = {
     });
   },
 
+  async search(docId, body) {
+    return json(`/api/documents/${docId}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  },
+
+  async replace(docId, body) {
+    return json(`/api/documents/${docId}/replace`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  },
+
   async undo(docId) {
     return json(`/api/documents/${docId}/undo`, { method: 'POST' });
   },

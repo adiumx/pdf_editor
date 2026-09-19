@@ -26,6 +26,9 @@ export class Editor {
     this.pendingImage = null;
     this.families = [];
     this.listeners = new Set();
+    // Edits the user has not downloaded yet. The document lives in the
+    // server's memory and nowhere else, so leaving the page loses them.
+    this.dirty = false;
   }
 
   /* ---------- state ---------- */
@@ -42,6 +45,11 @@ export class Editor {
     return this.doc !== null;
   }
 
+  /** Whether leaving now would lose work. */
+  get hasUnsavedWork() {
+    return this.isOpen && this.dirty;
+  }
+
   /* ---------- document lifecycle ---------- */
 
   async open(file) {
@@ -52,6 +60,7 @@ export class Editor {
       this.revision = 0;
       const { families } = await api.fonts(state.id);
       this.families = families;
+      this.dirty = false;
       await this._buildPages();
     });
     setStatus(`${this.doc.page_count} página${this.doc.page_count === 1 ? '' : 's'}`);
@@ -109,6 +118,7 @@ export class Editor {
     await withBusy('Aplicando cambios…', async () => {
       const result = await api.operations(this.doc.id, operations);
       this.revision += 1;
+      this.dirty = true;
       this.doc = { ...this.doc, ...result };
       reportWarnings(result.warnings);
       if (structural) {
@@ -122,11 +132,31 @@ export class Editor {
     this._emit();
   }
 
+  /**
+   * Take in a change the server made on its own, such as a replace-all.
+   *
+   * The pages have to be rebuilt rather than refreshed: a replacement can
+   * re-break paragraphs anywhere in the document.
+   */
+  async afterExternalEdit(result) {
+    if (!this.doc) return;
+    this.revision += 1;
+    this.dirty = true;
+    this.doc = { ...this.doc, ...result };
+    reportWarnings(result.warnings);
+    await withBusy('Actualizando…', async () => {
+      this.doc = await api.document(this.doc.id);
+      await this._buildPages();
+    });
+    this._emit();
+  }
+
   async undo() {
     if (!this.doc?.can_undo) return;
     await withBusy('Deshaciendo…', async () => {
       const state = await api.undo(this.doc.id);
       this.revision += 1;
+      this.dirty = true;
       this.doc = { ...this.doc, ...state };
       await this._buildPages();
     });
@@ -138,6 +168,7 @@ export class Editor {
     await withBusy('Rehaciendo…', async () => {
       const state = await api.redo(this.doc.id);
       this.revision += 1;
+      this.dirty = true;
       this.doc = { ...this.doc, ...state };
       await this._buildPages();
     });
@@ -512,5 +543,7 @@ export class Editor {
     document.body.append(link);
     link.click();
     link.remove();
+    this.dirty = false;
+    this._emit();
   }
 }

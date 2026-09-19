@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .editor import EditError, apply_operations
 from .extract import extract_page, page_summaries
+from .search import find, replace_operations
 from .store import DocumentError, DocumentStore
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -152,6 +153,61 @@ async def post_operations(doc_id: str, payload: dict = Body(...)) -> dict[str, A
             document.undo_stack.pop()
             raise EditError(f"No se pudo aplicar la edición: {exc}") from exc
         return {**document.state(), "warnings": [w.as_dict() for w in warnings]}
+
+
+@app.post("/api/documents/{doc_id}/search")
+async def search(doc_id: str, payload: dict = Body(...)) -> dict[str, Any]:
+    """Every occurrence of a string, in reading order."""
+    document = store.get(doc_id)
+    query = str(payload.get("query") or "")
+    with document.lock:
+        matches = find(
+            document.doc,
+            document.resolver,
+            query,
+            match_case=bool(payload.get("match_case")),
+            whole_word=bool(payload.get("whole_word")),
+        )
+    return {"count": len(matches), "matches": [match.as_dict() for match in matches]}
+
+
+@app.post("/api/documents/{doc_id}/replace")
+async def replace(doc_id: str, payload: dict = Body(...)) -> dict[str, Any]:
+    """Replace every occurrence, as one undoable step."""
+    document = store.get(doc_id)
+    query = str(payload.get("query") or "")
+    if not query:
+        raise HTTPException(400, "No hay nada que buscar")
+    replacement = str(payload.get("replacement") or "")
+
+    with document.lock:
+        operations, count = replace_operations(
+            document.doc,
+            document.resolver,
+            query,
+            replacement,
+            match_case=bool(payload.get("match_case")),
+            whole_word=bool(payload.get("whole_word")),
+        )
+        if not operations:
+            return {**document.state(), "replaced": 0, "warnings": []}
+
+        before = document.doc.tobytes(garbage=0, deflate=True)
+        document.snapshot()
+        try:
+            warnings = apply_operations(
+                document.doc, document.resolver, operations, document.assets
+            )
+        except Exception as exc:
+            document.rollback(before)
+            document.undo_stack.pop()
+            raise EditError(f"No se pudo reemplazar: {exc}") from exc
+
+        return {
+            **document.state(),
+            "replaced": count,
+            "warnings": [w.as_dict() for w in warnings],
+        }
 
 
 @app.post("/api/documents/{doc_id}/undo")

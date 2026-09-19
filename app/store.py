@@ -21,6 +21,12 @@ from .fonts import FontResolver
 # document, so this trades memory for history depth.
 MAX_HISTORY = 30
 
+# And how much memory those steps may take together. The step count alone is no
+# guard: a step weighs what the document weighs, so thirty steps of a 100 MB
+# scan would be three gigabytes. Whichever limit is reached first wins, and one
+# step is always kept so that undo never stops working outright.
+MAX_HISTORY_BYTES = 256 * 1024 * 1024
+
 # Documents untouched for this long are closed by the next sweep.
 IDLE_TIMEOUT_SECONDS = 2 * 60 * 60
 
@@ -51,9 +57,24 @@ class Document:
     def snapshot(self) -> None:
         """Record the current state so the next edit can be undone."""
         self.undo_stack.append(self._serialize())
-        if len(self.undo_stack) > MAX_HISTORY:
-            self.undo_stack.pop(0)
+        self._trim(self.undo_stack)
         self.redo_stack.clear()
+
+    @staticmethod
+    def _trim(stack: list[bytes]) -> None:
+        """Drop the oldest steps until the history fits both limits."""
+        while len(stack) > MAX_HISTORY:
+            stack.pop(0)
+        total = sum(len(step) for step in stack)
+        while len(stack) > 1 and total > MAX_HISTORY_BYTES:
+            total -= len(stack.pop(0))
+
+    @property
+    def history_bytes(self) -> int:
+        """What this document's history is costing."""
+        return sum(len(step) for step in self.undo_stack) + sum(
+            len(step) for step in self.redo_stack
+        )
 
     def _serialize(self) -> bytes:
         return self.doc.tobytes(garbage=0, deflate=True)
@@ -67,6 +88,7 @@ class Document:
         if not self.undo_stack:
             return False
         self.redo_stack.append(self._serialize())
+        self._trim(self.redo_stack)
         self._restore(self.undo_stack.pop())
         self.touch()
         return True
@@ -75,6 +97,7 @@ class Document:
         if not self.redo_stack:
             return False
         self.undo_stack.append(self._serialize())
+        self._trim(self.undo_stack)
         self._restore(self.redo_stack.pop())
         self.touch()
         return True

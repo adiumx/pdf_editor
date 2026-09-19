@@ -25,6 +25,8 @@
       <button class="btn btn--tool" data-tool="erase" title="Borrar una zona (E)">🧽 Borrar</button>
     </div>
     <span class="sep"></span>
+    <button id="btn-find" class="btn" title="Buscar y reemplazar (Ctrl+F)">🔍 Buscar</button>
+    <span class="sep"></span>
     <button id="btn-undo" class="btn" disabled title="Deshacer (Ctrl+Z)">↶</button>
     <button id="btn-redo" class="btn" disabled title="Rehacer (Ctrl+Mayús+Z)">↷</button>
     <span class="sep"></span>
@@ -46,6 +48,29 @@
     <button id="btn-save" class="btn btn--primary">Guardar PDF</button>
   </div>
 </header>
+
+<div class="findbar" id="findbar" hidden>
+  <label class="field">
+    <span>Buscar</span>
+    <input type="search" id="find-query" placeholder="texto a buscar" autocomplete="off">
+  </label>
+  <span class="find-count" id="find-count" aria-live="polite"></span>
+  <div class="btn-group">
+    <button class="btn btn--icon" id="find-prev" title="Anterior (Mayús+Enter)">↑</button>
+    <button class="btn btn--icon" id="find-next" title="Siguiente (Enter)">↓</button>
+  </div>
+  <div class="btn-group">
+    <button class="btn btn--icon" id="find-case" title="Distinguir mayúsculas y acentos">Aa</button>
+    <button class="btn btn--icon" id="find-word" title="Sólo palabras completas">|ab|</button>
+  </div>
+  <span class="sep"></span>
+  <label class="field">
+    <span>Reemplazar por</span>
+    <input type="text" id="find-replacement" placeholder="texto nuevo" autocomplete="off">
+  </label>
+  <button class="btn" id="find-replace-all">Reemplazar todo</button>
+  <button class="btn btn--icon" id="find-close" title="Cerrar (Esc)">✕</button>
+</div>
 
 <main class="workspace">
   <aside class="pages" id="pages-rail" hidden>

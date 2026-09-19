@@ -98,6 +98,27 @@ export class PageView {
     return element;
   }
 
+  /** Draw the search hits that fall on this page. */
+  setHighlights(hits, currentIndex) {
+    this.layer.querySelectorAll('.hit').forEach((node) => node.remove());
+    let currentNode = null;
+    for (const hit of hits) {
+      const element = document.createElement('div');
+      element.className = hit.index === currentIndex ? 'hit hit--current' : 'hit';
+      const [x0, y0, x1, y1] = hit.rect;
+      const z = this.zoom;
+      Object.assign(element.style, {
+        left: `${x0 * z}px`,
+        top: `${y0 * z}px`,
+        width: `${Math.max(x1 - x0, 1) * z}px`,
+        height: `${Math.max(y1 - y0, 1) * z}px`,
+      });
+      this.layer.append(element);
+      if (hit.index === currentIndex) currentNode = element;
+    }
+    return currentNode;
+  }
+
   findSpanElement(lineId, spanIndex) {
     return this.layer.querySelector(`.span[data-line="${lineId}"][data-span="${spanIndex}"]`);
   }
@@ -157,7 +178,9 @@ export class PageView {
     const input = document.createElement('div');
     input.className = 'span__input';
     input.contentEditable = 'plaintext-only';
-    input.spellcheck = false;
+    // On, because this is prose being written, not code. The browser's
+    // underlines sit over the editing box only, never over the page itself.
+    input.spellcheck = true;
     input.textContent = span.text;
 
     // Cover the original glyphs with the paper colour, generously enough to

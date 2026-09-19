@@ -244,3 +244,113 @@ class TestReflow:
         )
         for word in ("Primera", "documento", "Segunda", "debajo"):
             assert word in text, f"se perdió «{word}» al reajustar"
+
+
+@requires_fonts
+class TestUnsavedWork:
+    """The document lives in the server's memory and nowhere else, so leaving
+    the page throws the edits away. It used to do that silently."""
+
+    def _edit_something(self, page):
+        open_editor(page)
+        page.keyboard.type("XX")
+        page.keyboard.press("Enter")
+        page.wait_for_function("() => !document.querySelector('.span.is-editing')", timeout=15000)
+        page.wait_for_selector(".page .span", timeout=15000)
+
+    def test_a_freshly_opened_document_has_nothing_to_lose(self, page):
+        assert page.evaluate("() => window.__editor?.hasUnsavedWork") in (False, None)
+
+    def test_leaving_after_an_edit_is_challenged(self, page):
+        self._edit_something(page)
+        # Playwright answers the browser's own leave prompt; seeing it asked at
+        # all is the point.
+        asked = []
+        page.on("dialog", lambda dialog: (asked.append(dialog.message), dialog.accept()))
+        page.evaluate("""() => {
+            const event = new Event('beforeunload', { cancelable: true });
+            window.dispatchEvent(event);
+            window.__leaveWasBlocked = event.defaultPrevented;
+        }""")
+        assert page.evaluate("() => window.__leaveWasBlocked") is True
+
+    def test_leaving_without_edits_is_not_challenged(self, page):
+        page.evaluate("""() => {
+            const event = new Event('beforeunload', { cancelable: true });
+            window.dispatchEvent(event);
+            window.__leaveWasBlocked = event.defaultPrevented;
+        }""")
+        assert page.evaluate("() => window.__leaveWasBlocked") is False
+
+    def test_opening_another_pdf_over_unsaved_edits_asks_first(self, page, tmp_path):
+        self._edit_something(page)
+        asked = []
+        page.on("dialog", lambda dialog: (asked.append(dialog.message), dialog.dismiss()))
+        other = tmp_path / "otro.pdf"
+        other.write_bytes(build_pdf())
+        page.set_input_files("#file-input", str(other))
+        page.wait_for_timeout(600)
+        assert asked, "no preguntó nada antes de descartar el trabajo"
+        assert "sin guardar" in asked[0]
+
+    def test_the_editing_box_has_spell_checking_on(self, page):
+        open_editor(page)
+        assert page.eval_on_selector(".span.is-editing .span__input", "e => e.spellcheck") is True
+
+
+@requires_fonts
+class TestFindBar:
+    def _search(self, page, query):
+        page.keyboard.press("Control+f")
+        page.wait_for_selector("#findbar:not([hidden])", timeout=5000)
+        page.fill("#find-query", query)
+        page.wait_for_timeout(700)
+
+    def test_ctrl_f_opens_it(self, page):
+        assert page.locator("#findbar").is_hidden()
+        page.keyboard.press("Control+f")
+        page.wait_for_selector("#findbar:not([hidden])", timeout=5000)
+        assert page.evaluate("() => document.activeElement?.id") == "find-query"
+
+    def test_escape_closes_it(self, page):
+        self._search(page, "linea")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+        assert page.locator("#findbar").is_hidden()
+
+    def test_results_are_counted_and_highlighted(self, page):
+        self._search(page, "linea")
+        assert page.locator("#find-count").text_content().startswith("1 de ")
+        assert page.locator(".hit").count() >= 2
+        assert page.locator(".hit--current").count() == 1
+
+    def test_stepping_moves_the_current_result(self, page):
+        self._search(page, "linea")
+        first = page.locator("#find-count").text_content()
+        page.click("#find-next")
+        page.wait_for_timeout(300)
+        assert page.locator("#find-count").text_content() != first
+        assert page.locator(".hit--current").count() == 1
+
+    def test_a_query_with_no_results_says_so(self, page):
+        self._search(page, "zzzznoexiste")
+        assert "sin resultados" in page.locator("#find-count").text_content()
+        assert page.locator(".hit").count() == 0
+
+    def test_replacing_changes_the_document(self, page):
+        page.on("dialog", lambda dialog: dialog.accept())
+        self._search(page, "Primera")
+        page.fill("#find-replacement", "REEMPLAZADA")
+        page.click("#find-replace-all")
+        page.wait_for_timeout(3500)
+        texts = " ".join(
+            page.eval_on_selector_all(".page .span", "els => els.map(e => e.dataset.text)")
+        )
+        assert "REEMPLAZADA" in texts
+        assert "Primera" not in texts
+
+    def test_no_console_errors_while_searching(self, page):
+        self._search(page, "linea")
+        page.click("#find-next")
+        page.wait_for_timeout(400)
+        assert page.console_errors == []

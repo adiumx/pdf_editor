@@ -10,6 +10,8 @@ Los archivos se procesan en tu equipo y nunca salen de él.
 
 ![Editor de PDF](docs/captura.png)
 
+![Buscar y reemplazar](docs/buscar.png)
+
 ## Instalación
 
 ```bash
@@ -48,6 +50,7 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | **Texto** | Dibuja un rectángulo e inserta texto nuevo con la fuente que elijas. |
 | **Imagen** | Sube una imagen y colócala dibujando un rectángulo. |
 | **Borrar** | Elimina todo lo que haya dentro de un rectángulo. |
+| **Buscar** | `Ctrl+F` abre la búsqueda: resalta todas las apariciones, salta entre ellas y reemplaza todas de una vez. |
 | **Páginas** | Reordena arrastrando las miniaturas, gira, borra o añade páginas en blanco. |
 
 Desde la barra de formato puedes cambiar la fuente, el tamaño, el color, la
@@ -71,8 +74,14 @@ sudo apt install fonts-liberation fonts-dejavu fonts-crosextra-carlito \
 La casilla **Ajustar** reduce el tamaño para que un texto más largo quepa en el
 ancho original.
 
-Atajos: `V` editar · `T` texto · `I` imagen · `E` borrar · `Ctrl+Z` / `Ctrl+Mayús+Z`
-deshacer y rehacer · `Ctrl+S` guardar · `Enter` aplicar · `Esc` cancelar.
+La búsqueda ignora mayúsculas y acentos por defecto: escribir «computacion»
+encuentra «Computación». Los botones `Aa` y `|ab|` exigen coincidencia exacta o
+palabra completa. Reemplazar todo es **un solo paso de deshacer**, y el texto
+reemplazado se reajusta como cualquier otra edición.
+
+Atajos: `V` editar · `T` texto · `I` imagen · `E` borrar · `Ctrl+F` buscar ·
+`Ctrl+Z` / `Ctrl+Mayús+Z` deshacer y rehacer · `Ctrl+S` guardar · `Enter`
+aplicar · `Esc` cancelar.
 
 ## Cómo conserva la fuente
 
@@ -186,8 +195,12 @@ queda nada que pulsar.
   describía**, recolocado proporcionalmente. Se prefiere conservarlo a adivinar
   que ya no hace falta; si sobra, deshaz o bórralo desde otra herramienta.
 - Los PDF protegidos con contraseña requieren la contraseña al abrirlos.
+- **La búsqueda no cruza saltos de línea.** Una expresión partida entre dos
+  renglones no aparece: las palabras están, pero el archivo nunca las unió y
+  adivinar dónde va la unión daría resultados que no se ven en la página.
 - Los documentos viven en memoria del servidor y se descartan tras dos horas sin
-  actividad. **Guarda antes de cerrar.**
+  actividad. Al salir de la página se te avisa si hay cambios sin guardar, pero
+  **guarda antes de cerrar**.
 
 ## Arquitectura
 
@@ -196,6 +209,7 @@ app/
   main.py      API HTTP (FastAPI): subir, renderizar, leer texto, aplicar cambios, guardar
   store.py     Documentos abiertos en memoria, historial de deshacer y limpieza por inactividad
   extract.py   Lectura de la página como líneas y spans editables, con su geometría
+  search.py    Búsqueda en el documento y reemplazo
   fonts.py     Localización, validación y reutilización de las fuentes embebidas
   editor.py    Aplicación de las operaciones sobre el PDF
   static/      Interfaz (JavaScript sin dependencias ni compilación)

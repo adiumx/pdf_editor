@@ -1,6 +1,7 @@
 /** Wiring: toolbar, format bar, page rail, drag & drop, keyboard shortcuts. */
 
 import { Editor } from './editor.js';
+import { SearchBar } from './search.js';
 import { Thumbnails } from './thumbs.js';
 import { familyOf } from './fontmap.js';
 import { toast } from './ui.js';
@@ -9,6 +10,18 @@ const $ = (id) => document.getElementById(id);
 
 const editor = new Editor($('pages-view'));
 const thumbnails = new Thumbnails($('thumbs'), editor);
+const search = new SearchBar({
+  bar: $('findbar'),
+  query: $('find-query'),
+  count: $('find-count'),
+  next: $('find-next'),
+  previous: $('find-prev'),
+  matchCase: $('find-case'),
+  wholeWord: $('find-word'),
+  replacement: $('find-replacement'),
+  replaceAll: $('find-replace-all'),
+  close: $('find-close'),
+}, editor);
 
 const dropzone = $('dropzone');
 const fileInput = $('file-input');
@@ -16,8 +29,13 @@ const formatbar = $('formatbar');
 
 /* ---------- opening a file ---------- */
 
+const UNSAVED = 'Hay cambios sin guardar. Si sales ahora se pierden.';
+
 async function openFile(file) {
   if (!file) return;
+  if (editor.hasUnsavedWork && !confirm(`${UNSAVED}\n\n¿Abrir otro PDF de todos modos?`)) {
+    return;
+  }
   if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') {
     toast('Ese archivo no es un PDF.', 'error');
     return;
@@ -82,6 +100,7 @@ function pickImage() {
   picker.click();
 }
 
+$('btn-find').addEventListener('click', () => search.toggle());
 $('btn-undo').addEventListener('click', () => editor.undo().catch(reportError));
 $('btn-redo').addEventListener('click', () => editor.redo().catch(reportError));
 $('btn-save').addEventListener('click', () => editor.download());
@@ -232,6 +251,16 @@ document.addEventListener('keydown', (event) => {
     (event.shiftKey ? editor.redo() : editor.undo()).catch(reportError);
     return;
   }
+  if (meta && event.key.toLowerCase() === 'f' && editor.isOpen) {
+    event.preventDefault();
+    search.open();
+    return;
+  }
+  if (event.key === 'Escape' && search.isOpen && !typing) {
+    event.preventDefault();
+    search.close();
+    return;
+  }
   if (meta && event.key.toLowerCase() === 's') {
     event.preventDefault();
     editor.download();
@@ -274,6 +303,9 @@ editor.onChange(() => {
   // Refill when the document changes: the list starts with that document's own
   // fonts, and syncFormatBar may have prepended one, so a length check would
   // leave the previous document's fonts in place.
+  $('findbar').hidden = $('findbar').hidden || !open;
+  search.refresh();
+
   if (open && familiesFor !== editor.doc.id) {
     familiesFor = editor.doc.id;
     fillFamilies();
@@ -284,6 +316,19 @@ editor.onChange(() => {
   thumbnails.render();
 });
 
+// Exposed for the browser tests, which need to ask the editor what it thinks.
+window.__editor = editor;
+
 window.addEventListener('resize', positionFormatBar);
 $('canvas-area').addEventListener('scroll', positionFormatBar, { passive: true });
-window.addEventListener('beforeunload', () => editor.close({ silent: true }));
+window.addEventListener('beforeunload', (event) => {
+  // The document only exists in the server's memory, so leaving loses it.
+  if (!editor.hasUnsavedWork) return;
+  event.preventDefault();
+  event.returnValue = UNSAVED; // some browsers still read this
+  return UNSAVED;
+});
+
+// Closing belongs here, not in beforeunload: that one also fires when the user
+// is asked whether to leave and decides to stay.
+window.addEventListener('pagehide', () => editor.close({ silent: true }));

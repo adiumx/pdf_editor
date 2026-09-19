@@ -159,6 +159,46 @@ body {
 
 .status { color: var(--text-muted); font-size: 13px; }
 
+/* ---------- find bar ---------- */
+
+.findbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  z-index: 30;
+}
+
+.findbar[hidden] { display: none; }
+.findbar input[type="search"] { width: 220px; }
+.findbar input[type="text"] { width: 200px; }
+
+.find-count {
+  color: var(--text-muted);
+  font-size: 13px;
+  min-width: 9ch;
+  white-space: nowrap;
+}
+
+.find-count--none { color: var(--danger); }
+
+/* Every occurrence, and the one currently stepped to. */
+.hit {
+  position: absolute;
+  border-radius: 2px;
+  background: rgba(247, 201, 72, .45);
+  box-shadow: 0 0 0 1px rgba(183, 121, 31, .55);
+  pointer-events: none;
+}
+
+.hit--current {
+  background: rgba(255, 152, 0, .6);
+  box-shadow: 0 0 0 2px #b7791f;
+}
+
 /* ---------- workspace ---------- */
 
 .workspace {

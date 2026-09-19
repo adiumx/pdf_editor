@@ -267,6 +267,53 @@ class TestStore:
         assert len(document.undo_stack) == MAX_HISTORY
         local.close_all()
 
+    def test_history_is_capped_by_memory_as_well_as_by_steps(self):
+        """The step count alone is no guard: a step weighs what the document
+        weighs, so thirty steps of a large scan would be gigabytes."""
+        import app.store as store_module
+
+        original = store_module.MAX_HISTORY_BYTES
+        local = DocumentStore()
+        document = local.open(build_pdf(), "uno.pdf")
+        try:
+            store_module.MAX_HISTORY_BYTES = len(document._serialize()) * 3
+            for _ in range(store_module.MAX_HISTORY):
+                document.snapshot()
+            assert len(document.undo_stack) < store_module.MAX_HISTORY
+            assert document.history_bytes <= store_module.MAX_HISTORY_BYTES
+        finally:
+            store_module.MAX_HISTORY_BYTES = original
+            local.close_all()
+
+    def test_one_step_of_history_always_survives(self):
+        """Undo must keep working even when a single step busts the budget."""
+        import app.store as store_module
+
+        original = store_module.MAX_HISTORY_BYTES
+        local = DocumentStore()
+        document = local.open(build_pdf(), "uno.pdf")
+        try:
+            store_module.MAX_HISTORY_BYTES = 1
+            document.snapshot()
+            document.snapshot()
+            assert len(document.undo_stack) == 1
+            assert document.can_undo is True
+        finally:
+            store_module.MAX_HISTORY_BYTES = original
+            local.close_all()
+
+    def test_the_redo_branch_is_capped_too(self):
+        local = DocumentStore()
+        document = local.open(build_pdf(), "uno.pdf")
+        try:
+            for _ in range(5):
+                document.snapshot()
+            while document.undo():
+                pass
+            assert len(document.redo_stack) <= 5
+        finally:
+            local.close_all()
+
     def test_a_new_edit_clears_the_redo_branch(self):
         local = DocumentStore()
         document = local.open(build_pdf(), "uno.pdf")
