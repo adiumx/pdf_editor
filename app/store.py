@@ -38,6 +38,32 @@ class DocumentError(RuntimeError):
 
 
 @dataclass
+class Step:
+    """One undoable state of the document.
+
+    Most edits touch one page, so most steps record one page rather than the
+    whole file. A step weighs what it saves, and the history's budget is spent
+    on what actually changed instead of on forty copies of the same forty
+    pages. Changes to the page structure itself — adding, deleting, reordering
+    — cannot be expressed that way and record everything.
+    """
+
+    pages: dict[int, bytes] | None = None
+    document: bytes | None = None
+    page_count: int = 0
+
+    @property
+    def size(self) -> int:
+        if self.document is not None:
+            return len(self.document)
+        return sum(len(data) for data in (self.pages or {}).values())
+
+    @property
+    def is_whole_document(self) -> bool:
+        return self.document is not None
+
+
+@dataclass
 class Document:
     """One open PDF plus everything the editor keeps alongside it."""
 
@@ -45,8 +71,8 @@ class Document:
     name: str
     doc: pymupdf.Document
     resolver: FontResolver
-    undo_stack: list[bytes] = field(default_factory=list)
-    redo_stack: list[bytes] = field(default_factory=list)
+    undo_stack: list[Step] = field(default_factory=list)
+    redo_stack: list[Step] = field(default_factory=list)
     assets: dict[str, bytes] = field(default_factory=dict)
     touched_at: float = field(default_factory=time.time)
     lock: threading.RLock = field(default_factory=threading.RLock)
@@ -54,30 +80,67 @@ class Document:
     def touch(self) -> None:
         self.touched_at = time.time()
 
-    def snapshot(self) -> None:
-        """Record the current state so the next edit can be undone."""
-        self.undo_stack.append(self._serialize())
+    def snapshot(self, pages: list[int] | None = None) -> None:
+        """Record the current state so the next edit can be undone.
+
+        ``pages`` names the pages the edit is about to change; everything else
+        is left out of the step. Omit it when the change is to the document as
+        a whole.
+        """
+        self.undo_stack.append(self._capture(pages))
         self._trim(self.undo_stack)
         self.redo_stack.clear()
 
+    def _capture(self, pages: list[int] | None) -> Step:
+        """Save either the named pages or the whole document."""
+        if pages is None:
+            return Step(document=self._serialize(), page_count=self.doc.page_count)
+        wanted = sorted({p for p in pages if 0 <= p < self.doc.page_count})
+        if not wanted:
+            return Step(pages={}, page_count=self.doc.page_count)
+        return Step(
+            pages={pno: self._serialize_page(pno) for pno in wanted},
+            page_count=self.doc.page_count,
+        )
+
     @staticmethod
-    def _trim(stack: list[bytes]) -> None:
+    def _trim(stack: list[Step]) -> None:
         """Drop the oldest steps until the history fits both limits."""
         while len(stack) > MAX_HISTORY:
             stack.pop(0)
-        total = sum(len(step) for step in stack)
+        total = sum(step.size for step in stack)
         while len(stack) > 1 and total > MAX_HISTORY_BYTES:
-            total -= len(stack.pop(0))
+            total -= stack.pop(0).size
 
     @property
     def history_bytes(self) -> int:
         """What this document's history is costing."""
-        return sum(len(step) for step in self.undo_stack) + sum(
-            len(step) for step in self.redo_stack
+        return sum(step.size for step in self.undo_stack) + sum(
+            step.size for step in self.redo_stack
         )
 
     def _serialize(self) -> bytes:
         return self.doc.tobytes(garbage=0, deflate=True)
+
+    def _serialize_page(self, pno: int) -> bytes:
+        """One page, on its own, as a small PDF."""
+        with pymupdf.open() as single:
+            single.insert_pdf(self.doc, from_page=pno, to_page=pno, annots=True, links=True)
+            return single.tobytes(garbage=0, deflate=True)
+
+    def _apply(self, step: Step) -> None:
+        """Put the document back to what a step recorded."""
+        if step.is_whole_document:
+            self._restore(step.document)
+            return
+        for pno, data in (step.pages or {}).items():
+            if not 0 <= pno < self.doc.page_count:
+                continue
+            with pymupdf.open(stream=data, filetype="pdf") as single:
+                self.doc.insert_pdf(single, start_at=pno, annots=True, links=True)
+            self.doc.delete_page(pno + 1)
+        # Font resources and calibration are tied to the pages just replaced.
+        self.resolver = FontResolver(self.doc)
 
     def _restore(self, data: bytes) -> None:
         self.doc.close()
@@ -87,20 +150,30 @@ class Document:
     def undo(self) -> bool:
         if not self.undo_stack:
             return False
-        self.redo_stack.append(self._serialize())
+        step = self.undo_stack.pop()
+        # The step back records exactly what the step forward did, so redo costs
+        # the same as undo rather than a copy of everything.
+        self.redo_stack.append(self._mirror(step))
         self._trim(self.redo_stack)
-        self._restore(self.undo_stack.pop())
+        self._apply(step)
         self.touch()
         return True
 
     def redo(self) -> bool:
         if not self.redo_stack:
             return False
-        self.undo_stack.append(self._serialize())
+        step = self.redo_stack.pop()
+        self.undo_stack.append(self._mirror(step))
         self._trim(self.undo_stack)
-        self._restore(self.redo_stack.pop())
+        self._apply(step)
         self.touch()
         return True
+
+    def _mirror(self, step: Step) -> Step:
+        """The current state of whatever a step is about to put back."""
+        if step.is_whole_document or step.page_count != self.doc.page_count:
+            return self._capture(None)
+        return self._capture(list((step.pages or {}).keys()))
 
     def rollback(self, data: bytes) -> None:
         """Put the document back after an operation failed halfway."""

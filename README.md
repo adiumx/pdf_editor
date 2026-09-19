@@ -230,6 +230,7 @@ Si no está instalado, el editor te lo dice en lugar de fallar.
 app/
   main.py      API HTTP (FastAPI): subir, renderizar, leer texto, aplicar cambios, guardar
   store.py     Documentos abiertos en memoria, historial de deshacer y limpieza por inactividad
+               (cada paso guarda sólo las páginas que cambiaron)
   extract.py   Lectura de la página como líneas y spans editables, con su geometría
   search.py    Búsqueda en el documento y reemplazo
   fonts.py     Localización, validación y reutilización de las fuentes embebidas

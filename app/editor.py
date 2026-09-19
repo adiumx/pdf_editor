@@ -1284,6 +1284,32 @@ class EditSession:
                 continue  # a link type this page can no longer carry
 
 
+# Operations that change which pages exist, or in what order. A step that
+# includes one cannot be recorded page by page.
+_STRUCTURAL = {"delete_page", "move_page", "insert_page"}
+
+
+def pages_touched(operations: Iterable[dict[str, Any]]) -> list[int] | None:
+    """Which pages a batch will change, or None when it changes the structure.
+
+    Used to record an undo step of just those pages. Erring towards None costs
+    memory; erring the other way would lose a page's previous state, so
+    anything not plainly page-local counts as structural.
+    """
+    pages: set[int] = set()
+    for op in operations:
+        kind = op.get("op")
+        if kind in _STRUCTURAL:
+            return None
+        page = op.get("page")
+        if page is None:
+            return None
+        pages.add(int(page))
+        if kind == "rotate_page":
+            pages.add(int(page))
+    return sorted(pages)
+
+
 def apply_operations(
     doc: pymupdf.Document,
     resolver: FontResolver,

@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .editor import EditError, apply_operations
+from .editor import EditError, apply_operations, pages_touched
 from .extract import extract_page, page_summaries
 from .ocr import OcrUnavailable, recognise, support
 from .search import find, replace_operations
@@ -144,7 +144,8 @@ async def post_operations(doc_id: str, payload: dict = Body(...)) -> dict[str, A
 
     with document.lock:
         before = document.doc.tobytes(garbage=0, deflate=True)
-        document.snapshot()
+        # Record only the pages this batch will change.
+        document.snapshot(pages_touched(operations))
         try:
             warnings = apply_operations(
                 document.doc, document.resolver, operations, document.assets
@@ -233,7 +234,7 @@ async def replace(doc_id: str, payload: dict = Body(...)) -> dict[str, Any]:
             return {**document.state(), "replaced": 0, "warnings": []}
 
         before = document.doc.tobytes(garbage=0, deflate=True)
-        document.snapshot()
+        document.snapshot(pages_touched(operations))
         try:
             warnings = apply_operations(
                 document.doc, document.resolver, operations, document.assets

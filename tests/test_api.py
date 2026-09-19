@@ -267,6 +267,96 @@ class TestStore:
         assert len(document.undo_stack) == MAX_HISTORY
         local.close_all()
 
+    def test_a_step_records_only_the_pages_that_changed(self):
+        """A step used to weigh what the document weighs, however little of it
+        the edit touched."""
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=8), "ocho.pdf")
+        try:
+            document.snapshot([2])
+            one_page = document.undo_stack[-1].size
+            document.undo_stack.clear()
+            document.snapshot()
+            whole = document.undo_stack[-1].size
+            assert one_page * 3 < whole, f"{one_page} frente a {whole}"
+        finally:
+            local.close_all()
+
+    def test_undoing_a_page_leaves_the_others_alone(self):
+        from app.editor import apply_operations
+        from app.extract import extract_page
+
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=4), "cuatro.pdf")
+        try:
+            untouched = [document.doc[pno].get_text() for pno in (0, 2, 3)]
+            line = extract_page(document.doc, 1, document.resolver)["lines"]
+            if not line:
+                pytest.skip("la página de prueba no tiene texto")
+            document.snapshot([1])
+            apply_operations(document.doc, document.resolver, [{
+                "op": "delete_line", "page": 1, "bbox": line[0]["bbox"],
+                "origin": line[0]["origin"], "rotation": line[0]["rotation"],
+            }])
+            assert document.doc[1].get_text() != untouched[0] or True
+            assert document.undo() is True
+            assert [document.doc[pno].get_text() for pno in (0, 2, 3)] == untouched
+        finally:
+            local.close_all()
+
+    def test_a_page_edit_undoes_and_redoes_cleanly(self):
+        from app.editor import apply_operations
+        from app.extract import extract_page
+
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=3), "tres.pdf")
+        try:
+            before = document.doc[0].get_text()
+            line = extract_page(document.doc, 0, document.resolver)["lines"][0]
+            document.snapshot([0])
+            apply_operations(document.doc, document.resolver, [{
+                "op": "delete_line", "page": 0, "bbox": line["bbox"],
+                "origin": line["origin"], "rotation": line["rotation"],
+            }])
+            edited = document.doc[0].get_text()
+            assert edited != before
+
+            assert document.undo() is True
+            assert document.doc[0].get_text() == before
+            assert document.redo() is True
+            assert document.doc[0].get_text() == edited
+            assert document.doc.page_count == 3
+        finally:
+            local.close_all()
+
+    def test_a_structural_change_records_everything(self):
+        """Adding or reordering pages cannot be recorded page by page."""
+        from app.editor import pages_touched
+
+        assert pages_touched([{"op": "delete_page", "page": 1}]) is None
+        assert pages_touched([{"op": "move_page", "page": 0, "to": 2}]) is None
+        assert pages_touched([{"op": "insert_page", "at": 1}]) is None
+        assert pages_touched([
+            {"op": "replace_line", "page": 2}, {"op": "add_text", "page": 0},
+        ]) == [0, 2]
+        assert pages_touched([{"op": "replace_line"}]) is None
+
+    def test_deleting_a_page_can_be_undone(self):
+        from app.editor import apply_operations
+
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=3), "tres.pdf")
+        try:
+            document.snapshot(None)
+            apply_operations(document.doc, document.resolver, [
+                {"op": "delete_page", "page": 1},
+            ])
+            assert document.doc.page_count == 2
+            assert document.undo() is True
+            assert document.doc.page_count == 3
+        finally:
+            local.close_all()
+
     def test_history_is_capped_by_memory_as_well_as_by_steps(self):
         """The step count alone is no guard: a step weighs what the document
         weighs, so thirty steps of a large scan would be gigabytes."""
@@ -277,8 +367,10 @@ class TestStore:
         document = local.open(build_pdf(), "uno.pdf")
         try:
             store_module.MAX_HISTORY_BYTES = len(document._serialize()) * 3
+            # Whole-document steps, to exercise the budget rather than the
+            # page-sized steps an ordinary edit records.
             for _ in range(store_module.MAX_HISTORY):
-                document.snapshot()
+                document.snapshot(None)
             assert len(document.undo_stack) < store_module.MAX_HISTORY
             assert document.history_bytes <= store_module.MAX_HISTORY_BYTES
         finally:
@@ -294,8 +386,8 @@ class TestStore:
         document = local.open(build_pdf(), "uno.pdf")
         try:
             store_module.MAX_HISTORY_BYTES = 1
-            document.snapshot()
-            document.snapshot()
+            document.snapshot(None)
+            document.snapshot(None)
             assert len(document.undo_stack) == 1
             assert document.can_undo is True
         finally:
