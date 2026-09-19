@@ -84,3 +84,47 @@ class TestExtraction:
         summaries = page_summaries(document)
         assert [item["page"] for item in summaries] == [0, 1, 2]
         document.close()
+
+
+@requires_fonts
+class TestColumnMeasure:
+    """A PDF records no margins, so how far a paragraph's text may run has to be
+    inferred. Its own widest line is a poor guess: a short paragraph would be
+    re-wrapped into a column narrower than the one it sits in."""
+
+    def _page(self):
+        """A wide paragraph and, at the same margin, a much shorter one."""
+        long_line = " ".join(f"palabra{n:02d}" for n in range(12))
+        rows = [
+            ((72, 100), long_line, "serif", 11),
+            ((72, 114), long_line, "serif", 11),
+            ((72, 160), "corto uno", "serif", 11),
+            ((72, 174), "corto dos", "serif", 11),
+        ]
+        document = pymupdf.open(stream=build_pdf(rows), filetype="pdf")
+        return document, extract_page(document, 0, FontResolver(document))
+
+    def test_a_short_paragraph_takes_the_measure_of_its_column(self):
+        document, page = self._page()
+        short = next(line for line in page["lines"] if "corto" in line["text"])
+        assert short["measure"] > short["block_bbox"][2] + 10
+        document.close()
+
+    def test_the_measure_never_falls_below_the_paragraphs_own_width(self):
+        document, page = self._page()
+        for line in page["lines"]:
+            assert line["measure"] >= line["block_bbox"][2] - 0.01
+        document.close()
+
+    def test_a_different_margin_gets_its_own_measure(self):
+        """An indented block is its own column, not the body's."""
+        rows = [
+            ((72, 100), " ".join(f"ancho{n:02d}" for n in range(12)), "serif", 11),
+            ((300, 140), "bloque aparte", "serif", 11),
+        ]
+        document = pymupdf.open(stream=build_pdf(rows), filetype="pdf")
+        page = extract_page(document, 0, FontResolver(document))
+        apart = next(line for line in page["lines"] if "aparte" in line["text"])
+        wide = next(line for line in page["lines"] if "ancho" in line["text"])
+        assert apart["measure"] < wide["measure"]
+        document.close()

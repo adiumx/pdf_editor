@@ -26,6 +26,11 @@ _REDACT_PAD = 0.4
 # it the result looks wrong enough that overflowing is the better answer.
 _MIN_SHRINK = 0.5
 
+# How far a paragraph's line spacing may be squeezed to keep it in the room it
+# has. Tightening the leading a little is far less visible than shrinking the
+# text, so it is tried first; past this the letters have to give instead.
+_MIN_LEADING = 0.86
+
 
 @dataclass
 class _Token:
@@ -82,6 +87,13 @@ class _PendingText:
     color: tuple[float, float, float]
     rotate: int
     opacity: float = 1.0
+
+
+def _scale_matrix(hscale: float, rotation: int) -> pymupdf.Matrix:
+    """Squeeze text along the direction it runs, leaving its height alone."""
+    if rotation in (90, 270):
+        return pymupdf.Matrix(1, 0, 0, hscale, 0, 0)
+    return pymupdf.Matrix(hscale, 0, 0, 1, 0, 0)
 
 
 @dataclass
@@ -211,12 +223,24 @@ def _tokenize(runs: list[_Run]) -> list[_Token]:
     return tokens
 
 
+# A measured width and a reported box never agree exactly: a span's box ends at
+# its last glyph, while measuring adds that glyph's full advance. On a full line
+# the difference — a third of a point — is enough to push its last word onto a
+# line of its own, so re-breaking a paragraph nobody edited would change where
+# its lines end. A fraction of a point of slack is invisible and prevents it.
+_WRAP_SLACK = 0.002
+_WRAP_SLACK_MIN = 0.5
+
+
 def _wrap(tokens: list[_Token], first_width: float, width: float) -> list[list[_Token]]:
     """Greedily break tokens into lines, the way a text engine does.
 
     The first line may be narrower than the rest, because a paragraph's opening
     line is often indented.
     """
+    def slack(limit: float) -> float:
+        return max(_WRAP_SLACK_MIN, limit * _WRAP_SLACK)
+
     lines: list[list[_Token]] = []
     current: list[_Token] = []
     used = 0.0
@@ -225,7 +249,7 @@ def _wrap(tokens: list[_Token], first_width: float, width: float) -> list[list[_
     for token in tokens:
         if token.is_space and not current:
             continue  # a wrapped line does not start with a space
-        if not token.is_space and current and used + token.width > limit:
+        if not token.is_space and current and used + token.width > limit + slack(limit):
             while current and current[-1].is_space:
                 used -= current.pop().width
             lines.append(current)
@@ -563,6 +587,36 @@ class EditSession:
                     )
         return runs, tokens
 
+    def _room_below(
+        self, pno: int, boxes: list[pymupdf.Rect]
+    ) -> float:
+        """How far down the paragraph may reach before it hits something.
+
+        Nothing is moved to make room, so growing into the next paragraph is a
+        real collision. What is actually below is worth looking up: a paragraph
+        with white space under it can simply take it.
+        """
+        page = self._doc[pno]
+        floor = page.rect.y1 - 18  # a hair above the bottom of the sheet
+        bottom = max(box.y1 for box in boxes)
+        left = min(box.x0 for box in boxes)
+        right = max(box.x1 for box in boxes)
+
+        try:
+            raw = page.get_text("dict")
+        except Exception:
+            return floor
+
+        for block in raw.get("blocks", []):
+            for line in block.get("lines", []) if block.get("type") == 0 else []:
+                x0, y0, x1, y1 = line.get("bbox", (0, 0, 0, 0))
+                if y0 <= bottom + 0.5:
+                    continue  # level with the paragraph or above it
+                if x1 <= left + 1 or x0 >= right - 1:
+                    continue  # beside it, in another column
+                floor = min(floor, y0)
+        return floor
+
     def _reflow(
         self,
         pno: int,
@@ -603,11 +657,31 @@ class EditSession:
         )
         leading = max(leading, natural)
 
+        # How much vertical room there is, measured to whatever comes next.
+        descent = max((-run.font.font.descender * run.size for run in runs), default=0.0)
+        ceiling = self._room_below(pno, boxes) - descent
+        natural_leading = leading
+
+        def height_of(count: int, spacing: float) -> float:
+            return origins[0][1] + max(count - 1, 0) * spacing
+
         scale = 1.0
-        for _ in range(8):
+        for _ in range(10):
             wrapped = _wrap(tokens, box.x1 - first_left, box.x1 - body_left)
-            if fit != "shrink" or len(wrapped) <= len(lines) or scale <= _MIN_SHRINK:
+            if height_of(len(wrapped), leading) <= ceiling + 0.5:
                 break
+
+            # First give up some line spacing: much less visible than resizing.
+            if len(wrapped) > 1:
+                tight = (ceiling - origins[0][1]) / (len(wrapped) - 1)
+                if tight >= natural_leading * _MIN_LEADING:
+                    leading = tight
+                    break
+
+            if fit != "shrink" or scale <= _MIN_SHRINK:
+                break
+
+            # Then the text itself.
             scale = max(scale * 0.94, _MIN_SHRINK)
             for run in runs:
                 run.size = float(run.size) * 0.94
@@ -615,16 +689,15 @@ class EditSession:
                 token.width = runs[token.run].font.text_length(
                     token.text, runs[token.run].size
                 )
-            leading *= 0.94
-        else:
-            wrapped = _wrap(tokens, box.x1 - first_left, box.x1 - body_left)
+            natural_leading *= 0.94
+            leading = natural_leading
 
-        if len(wrapped) > len(lines):
+        if height_of(len(wrapped), leading) > ceiling + 0.5:
             self._warn(
                 pno,
                 "paragraph-grew",
-                f"El párrafo pasa de {len(lines)} a {len(wrapped)} líneas y puede "
-                "solaparse con lo que viene debajo.",
+                f"El párrafo pasa de {len(lines)} a {len(wrapped)} líneas y no cabe "
+                "en el hueco disponible; usa «Ajustar» o acorta el texto.",
             )
 
         for rect in boxes:
@@ -789,6 +862,16 @@ class EditSession:
 
             for pending in batch.texts:
                 fontname = self._resolver.install(page, pending.resolved)
+                # A stand-in font is rarely the width of the one it replaces, so
+                # it is squeezed to the width the original occupied. Without
+                # this the replacement runs long and pushes the line's own
+                # wrapping about, even when nothing was edited.
+                hscale = pending.resolved.hscale
+                morph = (
+                    (pymupdf.Point(*pending.point), _scale_matrix(hscale, pending.rotate))
+                    if abs(hscale - 1.0) > 0.001
+                    else None
+                )
                 try:
                     page.insert_text(
                         pending.point,
@@ -798,6 +881,7 @@ class EditSession:
                         color=pending.color,
                         rotate=pending.rotate,
                         fill_opacity=pending.opacity,
+                        morph=morph,
                         overlay=True,
                     )
                 except Exception as exc:  # pragma: no cover - defensive

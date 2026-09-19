@@ -95,10 +95,18 @@ embebida (`extract_font`). Cuando editas una línea:
    tiene (por ejemplo, un subconjunto sin `ñ`), se busca otra fuente del
    documento con el mismo estilo, luego una del sistema y, por último, una de las
    14 estándar del PDF — y se te avisa de la sustitución.
-4. Si pides negrita o cursiva y la familia elegida no tiene ese corte instalado,
+4. La sustituta casi nunca es del mismo ancho que la fuente a la que reemplaza
+   —Carlito es compatible con Calibri, Liberation Sans con Arial, y entre sí no
+   lo son—, así que el texto se **comprime horizontalmente** hasta ocupar
+   exactamente lo que ocupaba el original. El factor no se adivina: se mide del
+   propio documento, comparando lo que el PDF declara que ocupa su texto con lo
+   que necesitaría la sustituta, y se toma la mediana de todo el página. Sin
+   esto, una línea reescrita sin cambiarla salía un 11 % más larga y arrastraba
+   el reajuste de párrafos que nadie había tocado.
+5. Si pides negrita o cursiva y la familia elegida no tiene ese corte instalado,
    se conserva **el corte** y se cambia de familia, no al revés: pedir cursiva y
    obtener texto redondo no es una respuesta. Se te indica el cambio.
-5. Se borran los glifos originales con una redacción y se redibuja el texto en la
+6. Se borran los glifos originales con una redacción y se redibuja el texto en la
    línea base original, reutilizando el programa de fuente **byte a byte**, de
    modo que el PDF guardado sigue siendo válido en cualquier visor.
 
@@ -111,6 +119,16 @@ el párrafo se vuelve a partir: las palabras sobrantes bajan a las líneas
 siguientes en lugar de salirse por el margen. Mientras quepa, no se toca nada
 más que el renglón editado. El botón **⤶ Reajustar** fuerza el reparto cuando
 quieres recolocar un párrafo que se ha quedado con huecos.
+
+El ancho al que se reparte no es el del párrafo, sino el de **su columna**: lo
+que alcanzan los demás párrafos que arrancan en el mismo margen. Un párrafo de
+dos líneas cortas mide poco por sí mismo y se reajustaría en una columna más
+estrecha que aquella en la que está.
+
+Si al crecer no cabe en el hueco que tiene debajo —que se mide mirando qué hay
+realmente ahí, no suponiéndolo—, primero se **comprime el interlineado**, que se
+nota mucho menos que cambiar el cuerpo de letra. Sólo si aun así no cabe entra
+«Ajustar», que reduce el tamaño; y si tampoco basta, se avisa.
 
 Un párrafo se reconoce por sus propias señales: mismo tipo y tamaño de letra,
 el interlineado propio del bloque, el mismo margen izquierdo y —la más
@@ -134,13 +152,13 @@ queda nada que pulsar.
 ## Limitaciones
 
 - **No hace OCR.** Un PDF escaneado sin capa de texto no tiene texto que editar.
-- **El ancho del párrafo se deduce del propio texto**, porque el PDF no guarda
-  márgenes: es el de su línea más ancha. En un párrafo cuyas líneas son todas
-  cortas, el reparto usará esa medida corta.
+- **El ancho de la columna se deduce del propio texto**, porque el PDF no guarda
+  márgenes. Es una estimación buena en un documento corriente, pero una página
+  con bloques muy dispares en el mismo margen puede confundirla.
 - **El texto girado no se reparte** entre líneas; se edita renglón a renglón.
-- **Un párrafo que crece puede solaparse con lo que viene debajo**: nada se mueve
-  para hacerle sitio. Se te avisa, y con «Ajustar» se reduce el tamaño para que
-  quepa en las líneas que tenía.
+- **Nada se mueve para hacer sitio a un párrafo que crece.** Se aprovecha el
+  hueco libre que tenga debajo y se comprime el interlineado, pero si aun así no
+  cabe, se te avisa en lugar de desplazar el resto de la página.
 - **Las fuentes en subconjunto** solo contienen los glifos que el documento usaba.
   Si escribes caracteres que no están, se sustituye la fuente y se avisa. Muchos
   subconjuntos, además, vienen sin tabla de caracteres Unicode —se direccionan

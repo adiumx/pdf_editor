@@ -243,6 +243,15 @@ class ResolvedFont:
     note: str | None = None
     """Why the original font could not be used, when it could not."""
 
+    hscale: float = 1.0
+    """How much to squeeze the text horizontally so it occupies the width the
+    original did. A stand-in is rarely the same width as the font it replaces —
+    Carlito matches Calibri's metrics, Liberation Sans matches Arial's, and they
+    do not match each other — so text set in it runs 10% long and everything
+    after it shifts. The factor is measured from the document itself, by
+    comparing what the PDF says its own text occupies against what the stand-in
+    would need. 1.0 when the original font is being reused and nothing is off."""
+
     @property
     def is_faithful(self) -> bool:
         """True when the text keeps the typeface the document asked for.
@@ -254,8 +263,8 @@ class ResolvedFont:
         return self.source in {"embedded", "system-named"}
 
     def text_length(self, text: str, fontsize: float) -> float:
-        """Width of ``text`` at ``fontsize``, in points."""
-        return self.font.text_length(text, fontsize)
+        """Width of ``text`` at ``fontsize``, in points, as it will be drawn."""
+        return self.font.text_length(text, fontsize) * self.hscale
 
     def missing_glyphs(self, text: str) -> list[str]:
         """Characters of ``text`` this font cannot draw."""
@@ -543,6 +552,8 @@ class FontResolver:
         self._resolved: dict[tuple, ResolvedFont] = {}
         self._installed: dict[tuple[int, str], str] = {}
         self._fallback_cache: dict[tuple, ResolvedFont] = {}
+        self._scales: dict[str, float] = {}
+        self._calibrated: set[int] = set()
 
     # -- discovery ---------------------------------------------------------
 
@@ -557,6 +568,54 @@ class FontResolver:
             return
         for entry in entries:
             self._load_embedded(int(entry[0]), str(entry[3]))
+        self._calibrate(pno)
+
+    def _calibrate(self, pno: int) -> None:
+        """Measure how far each stand-in font is from the one it replaces.
+
+        The PDF records what its own text occupies, whatever font it names, so
+        the two can be compared directly: set the same string in the stand-in,
+        and the ratio between the two widths is the correction. Taken over every
+        run on the page and reduced to its median, so one odd line cannot skew
+        it. Only runs with no leading or trailing spaces count, because a
+        reported box stops at the last glyph while a measurement does not.
+        """
+        if pno in self._calibrated:
+            return
+        self._calibrated.add(pno)
+        try:
+            raw = self._doc[pno].get_text("dict")
+        except Exception:
+            return
+
+        samples: dict[str, list[float]] = {}
+        for block in raw.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    text = span.get("text", "")
+                    if len(text) < 4 or text != text.strip():
+                        continue
+                    resolved = self.resolve(pno, span.get("font"), int(span.get("flags", 0)), text)
+                    if resolved.source == "embedded":
+                        continue  # the original program: nothing to correct
+                    measured = resolved.font.text_length(text, float(span.get("size", 11.0)))
+                    box = span.get("bbox", (0, 0, 0, 0))
+                    expected = float(box[2]) - float(box[0])
+                    if measured <= 0 or expected <= 0:
+                        continue
+                    ratio = expected / measured
+                    if 0.5 <= ratio <= 2.0:  # anything further is not the same text
+                        samples.setdefault(canonical_font_name(span.get("font")), []).append(ratio)
+
+        for key, values in samples.items():
+            if len(values) >= 2:
+                values.sort()
+                self._scales[key] = values[len(values) // 2]
+        if samples:
+            # Results resolved while calibrating carry no correction yet.
+            self._resolved.clear()
 
     def scan_document(self) -> None:
         """Extract the fonts of every page. Used when matching across pages."""
@@ -618,6 +677,8 @@ class FontResolver:
             return cached
 
         resolved = self._resolve_uncached(font_name, flags, text, allow_substitution)
+        if resolved.source != "embedded":
+            resolved.hscale = self._scales.get(canonical_font_name(font_name), 1.0)
         self._resolved[cache_key] = resolved
         return resolved
 

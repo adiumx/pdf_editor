@@ -433,19 +433,31 @@ class TestParagraphReflow:
     """Editing running text used to leave one line overflowing into the margin,
     because nothing pulled the extra words down into the lines below."""
 
-    def _paragraph(self, width_words=9, lines=4):
-        """A block of running text, wide enough to have a real measure."""
-        font = pymupdf.Font(fontfile=FONT_FILES["serif"])
+    def _paragraph(self, width_words=9, lines=4, follower_gap=None):
+        """A block of running text, wide enough to have a real measure.
+
+        ``follower_gap`` puts another paragraph that many points below it, so a
+        paragraph that grows has something real to collide with.
+        """
         rows, y = [], 100
         for index in range(lines):
             text = " ".join(f"palabra{index}{n}" for n in range(width_words))
             rows.append(((72, y), text, "serif", 11))
             y += 14
+        if follower_gap is not None:
+            # Set differently on purpose: otherwise it reads as one more line of
+            # the same paragraph and gets swept into it.
+            rows.append(((72, y + follower_gap), "LO QUE VIENE DEBAJO", "serif-bold", 11))
         doc = pymupdf.open(stream=build_pdf(rows), filetype="pdf")
         page = extract_page(doc, 0, FontResolver(doc))
         group = [line for line in page["lines"] if line["paragraph_size"] > 1]
         assert len(group) >= 3, "el PDF de prueba no produjo un párrafo"
         return doc, group
+
+    def _follower_top(self, doc):
+        """Where the paragraph below starts — the ceiling the text must respect."""
+        page = extract_page(doc, 0, FontResolver(doc))
+        return next(l["bbox"][1] for l in page["lines"] if "DEBAJO" in l["text"])
 
     def _reflow(self, doc, group, edited_line, new_text, **extra):
         payload = [dict(line) for line in group]
@@ -476,19 +488,55 @@ class TestParagraphReflow:
         assert "intercalada" in after
         doc.close()
 
-    def test_growing_past_the_original_height_is_reported(self):
+    def test_re_wrapping_unchanged_text_reproduces_the_same_lines(self):
+        """The invariant the whole feature rests on. If re-breaking a paragraph
+        nobody edited moves its line endings, then every edit quietly reflows
+        text around it — which is what a mis-measured stand-in font used to do."""
         doc, group = self._paragraph()
-        warnings = self._reflow(doc, group, 0, group[0]["text"] + " " + " ".join(["mas"] * 40))
+        before = [line["text"] for line in group]
+        payload = [dict(line) for line in group]
+        apply_operations(doc, FontResolver(doc), [{
+            "op": "replace_paragraph", "page": 0, "box": group[0]["block_bbox"],
+            "align": group[0]["align"], "lines": payload,
+            "edited": {"line": 0, "span": 0}, "reflow": True,
+        }])
+        after = extract_page(doc, 0, FontResolver(doc))
+        rows = [l["text"] for l in after["lines"] if "palabra" in l["text"]]
+        assert rows == before, "los saltos de línea cambiaron sin tocar el texto"
+        doc.close()
+
+    def test_growth_into_free_space_is_not_reported(self):
+        """Nothing is below, so more lines are not a problem worth a warning."""
+        doc, group = self._paragraph()
+        warnings = self._reflow(doc, group, 0, group[0]["text"] + " añadido corto")
+        assert not any(w.kind == "paragraph-grew" for w in warnings)
+        doc.close()
+
+    def test_growth_into_the_next_paragraph_is_reported(self):
+        doc, group = self._paragraph(follower_gap=8)
+        warnings = self._reflow(doc, group, 0, group[0]["text"] + " " + " ".join(["mas"] * 60))
         assert any(w.kind == "paragraph-grew" for w in warnings)
         doc.close()
 
-    def test_shrink_keeps_the_paragraph_in_its_original_number_of_lines(self):
-        doc, group = self._paragraph()
-        self._reflow(doc, group, 0, group[0]["text"] + " " + " ".join(["extra"] * 6),
+    def test_a_little_growth_is_absorbed_by_tightening_the_spacing(self):
+        """Losing some line spacing is far less visible than resizing the text."""
+        doc, group = self._paragraph(follower_gap=8)
+        sizes_before = {round(s["size"], 1) for line in group for s in line["spans"]}
+        self._reflow(doc, group, 0, group[0]["text"] + " unaPalabraMas")
+        after = extract_page(doc, 0, FontResolver(doc))
+        rows = [l for l in after["lines"] if "palabra" in l["text"]]
+        assert len(rows) > len(group), "debería haber ganado una línea"
+        assert {round(s["size"], 1) for l in rows for s in l["spans"]} == sizes_before
+        doc.close()
+
+    def test_shrink_keeps_the_paragraph_inside_the_room_it_had(self):
+        doc, group = self._paragraph(follower_gap=8)
+        ceiling = self._follower_top(doc)
+        self._reflow(doc, group, 0, group[0]["text"] + " " + " ".join(["extra"] * 14),
                      fit="shrink")
         after = extract_page(doc, 0, FontResolver(doc))
         rewritten = [l for l in after["lines"] if "palabra" in l["text"]]
-        assert len(rewritten) <= len(group)
+        assert max(l["bbox"][3] for l in rewritten) <= ceiling + 1, "invade lo de debajo"
         doc.close()
 
     def test_the_lines_do_not_run_into_each_other_when_the_size_grows(self):

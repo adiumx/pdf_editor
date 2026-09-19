@@ -56,7 +56,7 @@ def build_pdf(
 
 
 def build_pdf_naming_fonts_it_does_not_embed(
-    fonts: dict[str, str] | None = None
+    fonts: dict[str, str] | None = None, width_ratio: float | None = None
 ) -> bytes:
     """A PDF that names fonts without carrying them.
 
@@ -66,6 +66,19 @@ def build_pdf_naming_fonts_it_does_not_embed(
     is assembled by hand.
     """
     fonts = fonts or {"F1": "DejaVuSerif-Bold", "F2": "DejaVuSerif", "F3": "Arial-BoldMT"}
+
+    # With a widths table the file states how much room its text takes, which is
+    # what a real document does and what the editor calibrates against. Setting
+    # it to a known multiple of the stand-in's own widths makes the correction
+    # the editor should arrive at known in advance.
+    widths = b""
+    if width_ratio is not None:
+        reference = pymupdf.Font(fontfile=FONT_FILES["sans"])
+        table = b" ".join(
+            b"%d" % round(reference.text_length(chr(code), 1000) * width_ratio)
+            for code in range(32, 127)
+        )
+        widths = b"/FirstChar 32/LastChar 126/Widths[" + table + b"]"
     content = b"".join(
         b"BT /%s 12 Tf 72 %d Td (Linea en %s) Tj ET\n"
         % (name.encode(), 760 - 30 * index, base.encode())
@@ -83,7 +96,8 @@ def build_pdf_naming_fonts_it_does_not_embed(
     }
     for index, base in enumerate(fonts.values()):
         objects[5 + index] = (
-            b"<</Type/Font/Subtype/TrueType/BaseFont/%s/Encoding/WinAnsiEncoding>>" % base.encode()
+            b"<</Type/Font/Subtype/TrueType/BaseFont/%s/Encoding/WinAnsiEncoding%s>>"
+            % (base.encode(), widths)
         )
 
     out = bytearray(b"%PDF-1.4\n")

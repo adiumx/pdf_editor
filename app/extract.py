@@ -106,6 +106,29 @@ def _cluster_lines(lines: list[dict]) -> list[list[dict]]:
     return clusters
 
 
+def _column_measure(lines: list[dict]) -> dict[int, float]:
+    """How far the text runs, per left margin, across the whole page.
+
+    A PDF records no margins, so a paragraph's measure has to be inferred. Its
+    own widest line is the obvious guess and a poor one: a two-line paragraph
+    whose lines both stop early would be re-wrapped into a column narrower than
+    the one it sits in. What the other paragraphs starting at the same margin
+    reach is a much better answer. The ninth decile rather than the maximum, so
+    one line that overshoots cannot stretch the column for everything.
+    """
+    grouped: dict[int, list[float]] = {}
+    for line in lines:
+        if line["rotation"] != 0:
+            continue
+        grouped.setdefault(round(line["bbox"][0]), []).append(line["bbox"][2])
+
+    measures: dict[int, float] = {}
+    for margin, rights in grouped.items():
+        rights.sort()
+        measures[margin] = rights[min(int(len(rights) * 0.9), len(rights) - 1)]
+    return measures
+
+
 def _dominant_style(line: dict) -> tuple[str, float]:
     """The typeface a line is mostly set in, as (font name, size)."""
     widest = max(line["spans"], key=lambda span: len(span["text"]))
@@ -277,6 +300,7 @@ def extract_page(
             line["align"] = alignment
 
     # Paragraphs, for re-wrapping, are grouped far more strictly.
+    columns = _column_measure(lines)
     for index, cluster in enumerate(_paragraph_clusters(lines)):
         box = [
             min(line["bbox"][0] for line in cluster),
@@ -284,8 +308,10 @@ def extract_page(
             max(line["bbox"][2] for line in cluster),
             max(line["bbox"][3] for line in cluster),
         ]
+        measure = max(box[2], columns.get(round(box[0]), box[2]))
         for position, line in enumerate(cluster):
             line["block_bbox"] = [round(v, 2) for v in box]
+            line["measure"] = round(measure, 2)
             line["paragraph"] = f"p{pno}-par{index}"
             line["paragraph_index"] = position
             line["paragraph_size"] = len(cluster)

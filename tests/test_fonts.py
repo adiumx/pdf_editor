@@ -290,3 +290,78 @@ class TestCommonFontsAndFallbacks:
     def test_a_standard_font_honours_bold_and_italic(self, doc, resolver):
         assert resolver.resolve_family(0, "Helvetica", bold=True, text="x").base14 == "hebo"
         assert resolver.resolve_family(0, "Times", italic=True, text="x").base14 == "tiit"
+
+
+@requires_fonts
+class TestMetricCalibration:
+    """A stand-in font is rarely the width of the one it replaces — Carlito
+    matches Calibri's metrics, Liberation Sans matches Arial's, and they do not
+    match each other. Text set in the stand-in then runs long, which moves
+    everything after it and re-wraps paragraphs that nobody edited."""
+
+    def _doc(self, ratio):
+        from tests.conftest import build_pdf_naming_fonts_it_does_not_embed
+
+        return pymupdf.open(
+            stream=build_pdf_naming_fonts_it_does_not_embed(
+                {"F1": "Arial-BoldMT", "F2": "Arial-BoldMT"}, width_ratio=ratio
+            ),
+            filetype="pdf",
+        )
+
+    @pytest.mark.parametrize("ratio", [0.8, 1.0, 1.25])
+    def test_the_stand_in_is_measured_as_the_width_the_pdf_records(self, ratio):
+        from app.extract import extract_page
+
+        doc = self._doc(ratio)
+        resolver = FontResolver(doc)
+        page = extract_page(doc, 0, resolver)
+        for line in page["lines"]:
+            for span in line["spans"]:
+                resolved = resolver.resolve(0, span["font"], span["flags"], span["text"])
+                recorded = span["bbox"][2] - span["bbox"][0]
+                assert resolved.text_length(span["text"], span["size"]) == pytest.approx(
+                    recorded, rel=0.02
+                )
+        doc.close()
+
+    def test_a_correction_is_only_applied_when_one_is_needed(self, doc, resolver):
+        """A document whose own font is reused is already the right width."""
+        for span in spans_of(doc):
+            resolved = resolver.resolve(0, span["font"], span["flags"], span["text"])
+            if resolved.source == "embedded":
+                assert resolved.hscale == 1.0
+
+    def test_the_correction_is_taken_from_the_document_not_guessed(self):
+        wide = self._doc(1.25)
+        narrow = self._doc(0.8)
+        try:
+            first = FontResolver(wide)
+            second = FontResolver(narrow)
+            first.scan_page(0)
+            second.scan_page(0)
+            assert first._scales and second._scales
+            assert max(first._scales.values()) > max(second._scales.values())
+        finally:
+            wide.close()
+            narrow.close()
+
+    def test_rewriting_a_line_unchanged_reproduces_its_width(self):
+        """The plainest check there is: writing back what was already there
+        should put it back the same size it was."""
+        from app.editor import apply_operations
+        from app.extract import extract_page
+
+        doc = self._doc(0.8)
+        resolver = FontResolver(doc)
+        line = extract_page(doc, 0, resolver)["lines"][0]
+        before = line["bbox"][2] - line["bbox"][0]
+        apply_operations(doc, resolver, [{
+            "op": "replace_line", "page": 0, "bbox": line["bbox"], "origin": line["origin"],
+            "rotation": line["rotation"], "align": line["align"],
+            "spans": [dict(s) for s in line["spans"]],
+        }])
+        after_line = extract_page(doc, 0, FontResolver(doc))["lines"][0]
+        after = after_line["bbox"][2] - after_line["bbox"][0]
+        assert after == pytest.approx(before, rel=0.03)
+        doc.close()

@@ -319,7 +319,9 @@ export class Editor {
       return {
         ...base,
         op: 'replace_paragraph',
-        box: line.block_bbox,
+        // The paragraph's own box, widened to the column it sits in: its widest
+        // line is not necessarily how far the text is allowed to run.
+        box: [line.block_bbox[0], line.block_bbox[1], line.measure ?? line.block_bbox[2], line.block_bbox[3]],
         reflow,
         lines: paragraph.map((item) => (item.id === line.id ? { ...item, spans } : item)),
         edited: {
