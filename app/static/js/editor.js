@@ -151,6 +151,38 @@ export class Editor {
     this._emit();
   }
 
+  /** Pages that are pictures of text, with no text of their own yet. */
+  get scannedPages() {
+    return (this.doc?.pages || []).filter((page) => page.needs_ocr).map((page) => page.page);
+  }
+
+  /** Whether this machine can read text off a picture at all. */
+  get canRecognise() {
+    return Boolean(this.doc?.ocr?.available);
+  }
+
+  /**
+   * Read the text off the scanned pages so they can be edited.
+   *
+   * Slow by nature: every page is rendered and handed to the recogniser.
+   */
+  async recognise(pages = null) {
+    if (!this.doc) return 0;
+    const result = await withBusy('Reconociendo el texto… puede tardar un poco', () =>
+      api.ocr(this.doc.id, pages ? { pages } : {}),
+    );
+    if (result.recognised?.length) {
+      this.revision += 1;
+      this.dirty = true;
+      this.doc = result;
+      await this._buildPages();
+    } else {
+      this.doc = { ...this.doc, ...result };
+    }
+    this._emit();
+    return result.recognised?.length || 0;
+  }
+
   async undo() {
     if (!this.doc?.can_undo) return;
     await withBusy('Deshaciendo…', async () => {

@@ -101,6 +101,32 @@ function pickImage() {
 }
 
 $('btn-find').addEventListener('click', () => search.toggle());
+$('btn-ocr').addEventListener('click', () => recogniseScans());
+
+async function recogniseScans() {
+  const pages = editor.scannedPages;
+  if (!pages.length) return;
+  if (!editor.canRecognise) {
+    toast(editor.doc?.ocr?.detail || 'El reconocimiento de texto no está disponible.', 'warn', 12000);
+    return;
+  }
+  const many = pages.length > 1;
+  const question = many
+    ? `Hay ${pages.length} páginas escaneadas. ¿Leer su texto? Puede tardar.`
+    : 'Esta página está escaneada. ¿Leer su texto? Puede tardar.';
+  if (!confirm(question)) return;
+  try {
+    const done = await editor.recognise(pages);
+    toast(
+      done
+        ? `Texto reconocido en ${done} ${done === 1 ? 'página' : 'páginas'}. Ya puedes editarlo.`
+        : 'No se reconoció texto en esas páginas.',
+      done ? 'info' : 'warn',
+    );
+  } catch (error) {
+    toast(String(error.message || error), 'error', 12000);
+  }
+}
 $('btn-undo').addEventListener('click', () => editor.undo().catch(reportError));
 $('btn-redo').addEventListener('click', () => editor.redo().catch(reportError));
 $('btn-save').addEventListener('click', () => editor.download());
@@ -292,6 +318,10 @@ editor.onChange(() => {
   $('save-group').hidden = !open;
   $('pages-rail').hidden = !open;
   dropzone.classList.toggle('is-hidden', open);
+
+  // Offered only while there is a scan to read, which is also the only time
+  // it would do anything.
+  $('btn-ocr').hidden = !open || editor.scannedPages.length === 0;
 
   $('btn-undo').disabled = !editor.doc?.can_undo;
   $('btn-redo').disabled = !editor.doc?.can_redo;

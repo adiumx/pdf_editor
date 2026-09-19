@@ -10,6 +10,7 @@ paragraph — is captured here, because once a line is redacted it is gone.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Iterable, Sequence
 
 import pymupdf
@@ -173,6 +174,70 @@ def _column_measure(lines: list[dict]) -> dict[tuple[int, int], float]:
     return measures
 
 
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def clean(text: str) -> str:
+    """Strip control characters a PDF's text can carry.
+
+    Recognised text in particular is littered with them; written back into the
+    page they would be drawn as empty boxes.
+    """
+    return _CONTROL.sub("", text)
+
+
+def _is_recognised_span(span: dict) -> bool:
+    """Whether a run came from reading a picture rather than from the file."""
+    return span.get("alpha", 255) == 0 and "glyphless" in (span.get("font") or "").lower()
+
+
+def _merge_spans(spans: list[dict]) -> list[dict]:
+    """Join neighbouring runs that are set the same way.
+
+    Recognition produces one run per word, which would leave the user editing a
+    line a word at a time. Ordinary documents split runs too, wherever the
+    writer happened to end one. Where the formatting matches there is nothing
+    to keep apart.
+
+    Sizes are compared exactly for text the file states, and loosely for text
+    that was read off a picture: recognition estimates a size per word and they
+    come out several per cent apart along a line that is plainly all one size.
+    """
+    merged: list[dict] = []
+    sizes: list[list[float]] = []
+
+    for span in spans:
+        previous = merged[-1] if merged else None
+        recognised = _is_recognised_span(span)
+        tolerance = span["size"] * 0.15 if recognised else 0.01
+        same = previous is not None and all(
+            previous[key] == span[key] for key in ("font", "color", "flags", "alpha")
+        )
+        same = same and abs(previous["size"] - span["size"]) <= tolerance
+        adjacent = same and abs(span["bbox"][0] - previous["bbox"][2]) <= max(
+            1.0, span["size"] * 0.4
+        )
+        if same and adjacent:
+            previous["text"] += span["text"]
+            previous["bbox"] = [
+                min(previous["bbox"][0], span["bbox"][0]),
+                min(previous["bbox"][1], span["bbox"][1]),
+                max(previous["bbox"][2], span["bbox"][2]),
+                max(previous["bbox"][3], span["bbox"][3]),
+            ]
+            sizes[-1].append(span["size"])
+        else:
+            merged.append(span)
+            sizes.append([span["size"]])
+
+    # A merged run of estimated sizes takes their average, which is closer to
+    # the size the page was really set in than any one word's guess.
+    for span, values in zip(merged, sizes):
+        if len(values) > 1:
+            span["size"] = round(sum(values) / len(values), 2)
+    return merged
+
+
 def _dominant_style(line: dict) -> tuple[str, float]:
     """The typeface a line is mostly set in, as (font name, size)."""
     widest = max(line["spans"], key=lambda span: len(span["text"]))
@@ -315,7 +380,7 @@ def extract_page(
         for li, line in enumerate(block.get("lines", [])):
             spans = []
             for si, span in enumerate(line.get("spans", [])):
-                text = span.get("text", "")
+                text = clean(span.get("text", ""))
                 if not text:
                     continue
                 font_name = span.get("font", "")
@@ -346,6 +411,9 @@ def extract_page(
                 )
             if not spans:
                 continue
+            spans = _merge_spans(spans)
+            for position, span in enumerate(spans):
+                span["id"] = f"p{pno}-b{bi}-l{li}-s{position}"
             block_lines.append(
                 {
                     "id": f"p{pno}-b{bi}-l{li}",
@@ -401,7 +469,9 @@ def extract_page(
 
 
 def page_summaries(doc: pymupdf.Document) -> list[dict[str, Any]]:
-    """Per-page geometry, for the thumbnail rail and the client's page model."""
+    """Per-page geometry and state, for the rail and the client's page model."""
+    from .ocr import needs_ocr, was_recognised
+
     summaries = []
     for pno in range(doc.page_count):
         page = doc[pno]
@@ -411,6 +481,8 @@ def page_summaries(doc: pymupdf.Document) -> list[dict[str, Any]]:
                 "width": round(page.rect.width, 2),
                 "height": round(page.rect.height, 2),
                 "rotation": page.rotation,
+                "needs_ocr": needs_ocr(page),
+                "recognised": was_recognised(page),
             }
         )
     return summaries

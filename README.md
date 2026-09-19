@@ -50,6 +50,7 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | **Texto** | Dibuja un rectángulo e inserta texto nuevo con la fuente que elijas. |
 | **Imagen** | Sube una imagen y colócala dibujando un rectángulo. |
 | **Borrar** | Elimina todo lo que haya dentro de un rectángulo. |
+| **Reconocer texto** | Lee el texto de las páginas escaneadas para poder editarlas. Aparece solo cuando hay alguna. |
 | **Buscar** | `Ctrl+F` abre la búsqueda: resalta todas las apariciones, salta entre ellas y reemplaza todas de una vez. |
 | **Páginas** | Reordena arrastrando las miniaturas, gira, borra o añade páginas en blanco. |
 
@@ -169,9 +170,30 @@ colocar sobre el texto nuevo, manteniendo su posición relativa dentro de la
 línea. Si en cambio borras la línea entera, el enlace desaparece con ella: no
 queda nada que pulsar.
 
-## Limitaciones
+## PDF escaneados
 
-- **No hace OCR.** Un PDF escaneado sin capa de texto no tiene texto que editar.
+Un escaneo no tiene texto: tiene una **fotografía** de un texto, y no hay nada
+que editar en ella. El botón **🔎 Reconocer texto** aparece cuando el documento
+trae páginas así, y les pone encima una capa de texto legible.
+
+A partir de ahí se edita como cualquier otra página, con una diferencia que
+importa: al borrar una línea hay que **tapar también los píxeles** de debajo, o
+la palabra escaneada seguiría viéndose bajo lo que la sustituye. La zona editada
+queda en blanco, que es lo que hace cualquier editor.
+
+El reconocimiento no guarda con qué tipografía estaba escrito el original
+—nadie puede saberlo mirando una foto—, así que el texto que escribas usará una
+fuente neutra hasta que elijas otra en la barra de formato.
+
+Necesita Tesseract. En Debian o Ubuntu:
+
+```bash
+sudo apt install tesseract-ocr tesseract-ocr-spa
+```
+
+Si no está instalado, el editor te lo dice en lugar de fallar.
+
+## Limitaciones
 - **El ancho de la columna se deduce del propio texto**, porque el PDF no guarda
   márgenes. Es una estimación buena en un documento corriente, pero una página
   con bloques muy dispares en el mismo margen puede confundirla.
@@ -212,6 +234,7 @@ app/
   search.py    Búsqueda en el documento y reemplazo
   fonts.py     Localización, validación y reutilización de las fuentes embebidas
   editor.py    Aplicación de las operaciones sobre el PDF
+  ocr.py       Reconocimiento del texto de páginas escaneadas
   static/      Interfaz (JavaScript sin dependencias ni compilación)
 ```
 

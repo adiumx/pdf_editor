@@ -24,6 +24,11 @@ FLAG_SERIF = 4
 FLAG_MONO = 8
 FLAG_BOLD = 16
 
+# Names that stand for "no font at all". Recognition writes its text in one of
+# these: an invisible placeholder laid over the picture, whose every glyph is
+# the same width. Nothing about it describes how the page actually looks.
+_PLACEHOLDER_FONTS = ("glyphless", "notodef", "nofont")
+
 _SUBSET_PREFIX = re.compile(r"^[A-Z]{6}\+")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
@@ -164,6 +169,12 @@ _SYSTEM_FONT_FILES = {
     (False, True, False, True): ("DejaVuSansMono-Oblique.ttf", "LiberationMono-Italic.ttf"),
     (False, True, True, True): ("DejaVuSansMono-BoldOblique.ttf", "LiberationMono-BoldItalic.ttf"),
 }
+
+
+def is_placeholder(name: str | None) -> bool:
+    """Whether a font name stands in for a font that was never there."""
+    lowered = (name or "").lower()
+    return any(mark in lowered for mark in _PLACEHOLDER_FONTS)
 
 
 def normalize_font_name(name: str | None) -> str:
@@ -597,6 +608,11 @@ class FontResolver:
                     text = span.get("text", "")
                     if len(text) < 4 or text != text.strip():
                         continue
+                    if is_placeholder(span.get("font")):
+                        # Recognised text: the widths recorded here say where
+                        # words sit in a picture, not what a font measures.
+                        # Calibrating against them stretches the replacement.
+                        continue
                     resolved = self.resolve(pno, span.get("font"), int(span.get("flags", 0)), text)
                     if resolved.source == "embedded":
                         continue  # the original program: nothing to correct
@@ -677,7 +693,7 @@ class FontResolver:
             return cached
 
         resolved = self._resolve_uncached(font_name, flags, text, allow_substitution)
-        if resolved.source != "embedded":
+        if resolved.source != "embedded" and not is_placeholder(font_name):
             resolved.hscale = self._scales.get(canonical_font_name(font_name), 1.0)
         self._resolved[cache_key] = resolved
         return resolved
@@ -694,6 +710,20 @@ class FontResolver:
         self, font_name: str | None, flags: int, text: str, allow_substitution: bool
     ) -> ResolvedFont:
         style = style_of(font_name, flags)
+
+        # A placeholder is embedded like any other font, and covers every
+        # character, so it would be picked as the perfect match. It draws
+        # nothing: reusing it would replace the text with blanks. Its flags are
+        # no more meaningful than its name — recognition marks its placeholder
+        # monospaced and serifed — so a plain face is used instead of believing
+        # them.
+        if is_placeholder(font_name):
+            return self._fallback(
+                (False, False, style[2], style[3]),
+                text,
+                "El texto reconocido no guarda con qué tipografía estaba escrito; "
+                "elige una en la barra de formato si quieres otra.",
+            )
 
         # 1. The program this very text was drawn with.
         for record in self._candidates(font_name):
@@ -727,11 +757,15 @@ class FontResolver:
                     source="system-named",
                 )
 
-        note = (
-            f"«{font_name}» no tiene glifos para algunos caracteres nuevos"
-            if exact_exists
-            else f"no se encontró la fuente «{font_name}» ni en el PDF ni en este equipo"
-        )
+        if is_placeholder(font_name):
+            note = (
+                "El texto reconocido no guarda con qué tipografía estaba escrito; "
+                "elige una en la barra de formato si quieres otra."
+            )
+        elif exact_exists:
+            note = f"«{font_name}» no tiene glifos para algunos caracteres nuevos"
+        else:
+            note = f"no se encontró la fuente «{font_name}» ni en el PDF ni en este equipo"
 
         # 3. Another program already in the document with the same style.
         for record in self._document_fonts_by_style(style):
@@ -748,7 +782,11 @@ class FontResolver:
 
     def _document_fonts_by_style(self, style: tuple[bool, bool, bool, bool]) -> list[_EmbeddedFont]:
         """Embedded fonts of the document, closest in style first."""
-        records = [r for r in self._embedded.values() if r is not None]
+        records = [
+            r
+            for r in self._embedded.values()
+            if r is not None and not is_placeholder(r.basefont)
+        ]
         return sorted(records, key=lambda r: sum(a != b for a, b in zip(r.style, style)))
 
     def _fallback(
@@ -863,6 +901,8 @@ class FontResolver:
             if record is None:
                 continue
             name = _SUBSET_PREFIX.sub("", record.basefont)
+            if is_placeholder(name):
+                continue  # not a typeface anyone would choose
             if name not in seen:
                 serif, mono, bold, italic = record.style
                 seen[name] = {

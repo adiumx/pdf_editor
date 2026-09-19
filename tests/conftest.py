@@ -186,6 +186,35 @@ def build_pdf_with_section_below(gap: float = 20.0, top: float = 100.0) -> bytes
     return data
 
 
+def build_scanned_pdf(lines: list[str] | None = None) -> bytes:
+    """A page that is a picture of text: what a scanner produces.
+
+    Built by setting the text and then throwing the text away, keeping only the
+    render — which is exactly what the editor cannot touch until it is read.
+    """
+    lines = lines or [
+        "Informe de resultados trimestrales",
+        "Este documento fue escaneado y no tiene capa de texto.",
+        "El reconocimiento deberia recuperar estas lineas.",
+    ]
+    source = pymupdf.open()
+    page = source.new_page(width=595, height=842)
+    for name, path in _available.items():
+        page.insert_font(fontname=name, fontfile=path)
+    page.insert_text((72, 100), lines[0], fontname="serif", fontsize=18)
+    for index, text in enumerate(lines[1:]):
+        page.insert_text((72, 140 + index * 25), text, fontname="serif", fontsize=12)
+    picture = page.get_pixmap(dpi=200)
+    source.close()
+
+    scan = pymupdf.open()
+    sheet = scan.new_page(width=595, height=842)
+    sheet.insert_image(sheet.rect, pixmap=picture)
+    data = scan.tobytes()
+    scan.close()
+    return data
+
+
 @pytest.fixture
 def linked_doc():
     document = pymupdf.open(stream=build_pdf_with_links(), filetype="pdf")

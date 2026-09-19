@@ -54,6 +54,14 @@ export const api = {
     });
   },
 
+  async ocr(docId, body = {}) {
+    return json(`/api/documents/${docId}/ocr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  },
+
   async search(docId, body) {
     return json(`/api/documents/${docId}/search`, {
       method: 'POST',

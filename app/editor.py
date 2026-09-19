@@ -26,6 +26,7 @@ from .extract import (
     to_page,
 )
 from .fonts import FLAG_BOLD, FLAG_ITALIC, FontResolver, ResolvedFont
+from .ocr import was_recognised
 
 # Redaction rectangles are grown by this much so no anti-aliased sliver of the
 # old glyphs survives, and no more, so neighbouring lines are left alone.
@@ -288,6 +289,21 @@ def _group_into_runs(line: list[_Token]) -> list[tuple[int, str]]:
     return grouped
 
 
+def _visible_opacity(alpha: Any) -> float:
+    """The opacity to draw a replacement at.
+
+    Fully transparent is never the answer to an edit: the text layer over a
+    scan is invisible on purpose, because the words the reader sees are pixels
+    underneath it. Writing the replacement invisibly too would erase the line
+    and put nothing in its place.
+    """
+    try:
+        value = float(alpha) / 255.0
+    except (TypeError, ValueError):
+        return 1.0
+    return 1.0 if value <= 0.01 else min(value, 1.0)
+
+
 def _redraw(page: pymupdf.Page, drawing: dict[str, Any], shift: pymupdf.Point) -> None:
     """Put a simple drawing back on the page, moved by ``shift``."""
     colour = drawing.get("color")
@@ -463,7 +479,7 @@ class EditSession:
                     fontsize=size,
                     color=hex_to_pdf(span.get("color", "#000000")),
                     rotate=rotation,
-                    opacity=float(span.get("alpha", 255)) / 255.0,
+                    opacity=_visible_opacity(span.get("alpha", 255)),
                 )
             )
             point = _advance(point, font.text_length(span["text"], size), rotation)
@@ -593,7 +609,7 @@ class EditSession:
                         font=font,
                         size=size,
                         color=hex_to_pdf(span.get("color", "#000000")),
-                        opacity=float(span.get("alpha", 255)) / 255.0,
+                        opacity=_visible_opacity(span.get("alpha", 255)),
                     )
                 )
                 run_index = len(runs) - 1
@@ -761,7 +777,7 @@ class EditSession:
                         fontsize=descriptor["size"],
                         color=pymupdf.sRGB_to_pdf(int(span.get("color", 0))),
                         rotate=rotation,
-                        opacity=float(span.get("alpha", 255)) / 255.0,
+                        opacity=_visible_opacity(span.get("alpha", 255)),
                     )
                 )
 
@@ -1059,7 +1075,14 @@ class EditSession:
                     if not rect.is_empty:
                         page.add_redact_annot(rect, cross_out=False)
                 page.apply_redactions(
-                    images=pymupdf.PDF_REDACT_IMAGE_NONE,
+                    # On a recognised scan the old words are pixels, not text.
+                    # Erasing the text layer alone would leave them showing
+                    # through whatever is written in their place.
+                    images=(
+                        pymupdf.PDF_REDACT_IMAGE_PIXELS
+                        if was_recognised(page)
+                        else pymupdf.PDF_REDACT_IMAGE_NONE
+                    ),
                     graphics=(
                         pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED
                         if batch.remove_line_art

@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .editor import EditError, apply_operations
 from .extract import extract_page, page_summaries
+from .ocr import OcrUnavailable, recognise, support
 from .search import find, replace_operations
 from .store import DocumentError, DocumentStore
 
@@ -53,7 +54,11 @@ async def _edit_error(_request, exc: EditError) -> JSONResponse:
 
 
 def _document_payload(document) -> dict[str, Any]:
-    return {**document.state(), "pages": page_summaries(document.doc)}
+    return {
+        **document.state(),
+        "pages": page_summaries(document.doc),
+        "ocr": support().as_dict(),
+    }
 
 
 # -- documents -------------------------------------------------------------
@@ -153,6 +158,41 @@ async def post_operations(doc_id: str, payload: dict = Body(...)) -> dict[str, A
             document.undo_stack.pop()
             raise EditError(f"No se pudo aplicar la edición: {exc}") from exc
         return {**document.state(), "warnings": [w.as_dict() for w in warnings]}
+
+
+@app.post("/api/documents/{doc_id}/ocr")
+async def run_ocr(doc_id: str, payload: dict = Body(default={})) -> dict[str, Any]:
+    """Read the text off scanned pages so they can be edited.
+
+    Slow by nature — every page is rendered and handed to Tesseract — so the
+    client is told which pages were recognised rather than guessing.
+    """
+    document = store.get(doc_id)
+    pages = payload.get("pages")
+    if pages is not None and not isinstance(pages, list):
+        raise HTTPException(400, "«pages» debe ser una lista")
+
+    with document.lock:
+        before = document.doc.tobytes(garbage=0, deflate=True)
+        document.snapshot()
+        try:
+            recognised = recognise(
+                document.doc,
+                [int(p) for p in pages] if pages is not None else None,
+                language=payload.get("language") or None,
+            )
+        except OcrUnavailable as exc:
+            document.rollback(before)
+            document.undo_stack.pop()
+            raise HTTPException(503, str(exc)) from exc
+        except Exception as exc:
+            document.rollback(before)
+            document.undo_stack.pop()
+            raise EditError(f"El reconocimiento falló: {exc}") from exc
+
+        if not recognised:
+            document.undo_stack.pop()
+        return {**_document_payload(document), "recognised": recognised}
 
 
 @app.post("/api/documents/{doc_id}/search")
