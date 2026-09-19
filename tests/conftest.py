@@ -55,6 +55,59 @@ def build_pdf(
     return data
 
 
+def build_pdf_naming_fonts_it_does_not_embed(
+    fonts: dict[str, str] | None = None
+) -> bytes:
+    """A PDF that names fonts without carrying them.
+
+    Plenty of real documents do this — a CV exported by a tool that assumes the
+    reader has the font — and the viewer substitutes whatever it has. Such a
+    file cannot be built with PyMuPDF's own writer, which always embeds, so it
+    is assembled by hand.
+    """
+    fonts = fonts or {"F1": "DejaVuSerif-Bold", "F2": "DejaVuSerif", "F3": "Arial-BoldMT"}
+    content = b"".join(
+        b"BT /%s 12 Tf 72 %d Td (Linea en %s) Tj ET\n"
+        % (name.encode(), 760 - 30 * index, base.encode())
+        for index, (name, base) in enumerate(fonts.items())
+    )
+    resources = b"".join(
+        b"/%s %d 0 R" % (name.encode(), 5 + index) for index, name in enumerate(fonts)
+    )
+    objects = {
+        1: b"<</Type/Catalog/Pages 2 0 R>>",
+        2: b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]"
+           b"/Resources<</Font<<" + resources + b">>>>/Contents 4 0 R>>",
+        4: b"<</Length %d>>\nstream\n" % len(content) + content + b"endstream",
+    }
+    for index, base in enumerate(fonts.values()):
+        objects[5 + index] = (
+            b"<</Type/Font/Subtype/TrueType/BaseFont/%s/Encoding/WinAnsiEncoding>>" % base.encode()
+        )
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = {}
+    for number in sorted(objects):
+        offsets[number] = len(out)
+        out += b"%d 0 obj " % number + objects[number] + b" endobj\n"
+    start = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for number in sorted(objects):
+        out += b"%010d 00000 n \n" % offsets[number]
+    out += b"trailer <</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1, start,
+    )
+    return bytes(out)
+
+
+@pytest.fixture
+def unembedded_doc():
+    document = pymupdf.open(stream=build_pdf_naming_fonts_it_does_not_embed(), filetype="pdf")
+    yield document
+    document.close()
+
+
 @pytest.fixture
 def pdf_bytes() -> bytes:
     return build_pdf()

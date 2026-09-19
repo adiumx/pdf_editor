@@ -6,8 +6,12 @@ import pymupdf
 import pytest
 
 from app.fonts import (
+    FLAG_BOLD,
     FontResolver,
+    _strip_style_words,
     canonical_font_name,
+    find_match,
+    find_system_font,
     normalize_font_name,
     style_of,
 )
@@ -108,3 +112,117 @@ class TestInstallation:
         resolved = resolver.resolve(0, "Helvetica", 0, "hola")
         assert resolver.install(page, resolved) in {"helv", "hebo", "heit", "hebi"} or resolved.buffer
         plain.close()
+
+
+@requires_fonts
+class TestFontsTheDocumentNamesButDoesNotEmbed:
+    """A PDF may name a font without carrying it. Redrawing such text used to
+    pick a stand-in by style alone, which turned Arial into DejaVu Sans and
+    changed how an edited line looked next to its neighbours."""
+
+    def test_the_named_font_is_used_when_the_machine_has_it(self, unembedded_doc):
+        resolver = FontResolver(unembedded_doc)
+        resolved = resolver.resolve(0, "DejaVuSerif-Bold", 0, "hola")
+        assert resolved.source == "system-named"
+        assert "DejaVuSerif-Bold" in resolved.key
+        assert resolved.is_faithful, "no debería marcarse como sustitución"
+
+    def test_a_named_font_produces_no_substitution_warning(self, unembedded_doc):
+        resolver = FontResolver(unembedded_doc)
+        assert resolver.resolve(0, "DejaVuSerif", 0, "hola").note is None
+
+    def test_arial_resolves_to_a_metric_compatible_sans_not_any_serif(self, unembedded_doc):
+        """Arial is almost never embedded; it must not become a serif face."""
+        resolver = FontResolver(unembedded_doc)
+        resolved = resolver.resolve(0, "Arial-BoldMT", FLAG_BOLD, "hola")
+        assert "LiberationSans" in resolved.key
+        assert resolved.source == "system-named"
+
+    @pytest.mark.parametrize(
+        ("named", "expected"),
+        [
+            ("TimesNewRomanPSMT", "LiberationSerif"),
+            ("CourierNew", "LiberationMono"),
+            ("Calibri", "LiberationSans"),
+            ("Georgia-Italic", "LiberationSerif-Italic"),
+        ],
+    )
+    def test_common_unembedded_fonts_map_to_their_free_equivalents(self, named, expected):
+        found = find_system_font(named)
+        assert found is not None, f"{named} no encontró equivalente"
+        assert expected in found.path
+
+    def test_a_font_nobody_has_still_falls_back_and_warns(self, unembedded_doc):
+        resolver = FontResolver(unembedded_doc)
+        resolved = resolver.resolve(0, "FuenteQueNoExisteEnNingunSitio", 0, "hola")
+        assert not resolved.is_faithful
+        assert resolved.note
+
+    def test_the_toolbar_offers_the_machines_fonts_not_just_three_generics(self, unembedded_doc):
+        """With nothing embedded, the picker used to show only sans/serif/mono."""
+        families = FontResolver(unembedded_doc).available_families()
+        system = [family for family in families if family["source"] == "system"]
+        assert len(system) >= 3
+        assert len(families) > 3
+
+    def test_a_family_picked_from_the_toolbar_is_honoured_by_name(self, unembedded_doc):
+        resolver = FontResolver(unembedded_doc)
+        serif = resolver.resolve_family(0, "DejaVu Serif", text="hola")
+        mono = resolver.resolve_family(0, "Liberation Mono", text="hola")
+        assert "DejaVuSerif" in serif.key
+        assert "LiberationMono" in mono.key
+
+    def test_bold_and_italic_pick_the_right_cut_of_the_chosen_family(self, unembedded_doc):
+        resolver = FontResolver(unembedded_doc)
+        plain = resolver.resolve_family(0, "DejaVu Serif", text="hola")
+        bold = resolver.resolve_family(0, "DejaVu Serif", bold=True, text="hola")
+        italic = resolver.resolve_family(0, "DejaVu Serif", italic=True, text="hola")
+        assert "Bold" in bold.key and "Bold" not in plain.key
+        assert "Italic" in italic.key
+
+    def test_family_names_are_read_from_the_font_not_guessed_from_the_file(self):
+        """`c0419bt_.pfb` calls itself "Courier 10 Pitch"; the file name is junk."""
+        found = find_system_font("Courier 10 Pitch")
+        assert found is not None
+        assert found.family == "Courier 10 Pitch"
+
+    def test_the_family_name_drops_the_cut(self):
+        assert _strip_style_words("DejaVu Serif Bold Italic") == "DejaVu Serif"
+        assert _strip_style_words("Courier 10 Pitch Bold") == "Courier 10 Pitch"
+        assert _strip_style_words("Unifont-JP Regular") == "Unifont-JP"
+
+    def test_editing_such_a_line_keeps_the_typeface(self, unembedded_doc):
+        """End to end: the visible complaint was the font changing on apply."""
+        from app.editor import apply_operations
+        from app.extract import extract_page
+
+        resolver = FontResolver(unembedded_doc)
+        page = extract_page(unembedded_doc, 0, resolver)
+        line = next(l for l in page["lines"] if "DejaVuSerif-Bold" in l["text"])
+        assert line["spans"][0]["embedded"] is True, "no debería marcarse como problemática"
+
+        spans = [dict(span) for span in line["spans"]]
+        spans[0]["text"] = "Texto reescrito"
+        warnings = apply_operations(unembedded_doc, resolver, [{
+            "op": "replace_line", "page": 0, "bbox": line["bbox"], "origin": line["origin"],
+            "rotation": line["rotation"], "align": line["align"], "spans": spans,
+        }])
+        assert not [w for w in warnings if w.kind == "font-substituted"]
+
+        after = extract_page(unembedded_doc, 0, FontResolver(unembedded_doc))
+        written = next(l for l in after["lines"] if "Texto reescrito" in l["text"])
+        assert "DejaVuSerif" in written["spans"][0]["font"].replace(" ", "")
+
+    def test_a_requested_style_the_family_lacks_is_honoured_elsewhere(self, unembedded_doc):
+        """This machine has no DejaVu Serif italic. Asking for italic must not
+        quietly return upright text — the cut matters more than the family."""
+        match = find_match("DejaVu Serif", (True, False, False, True))
+        assert match is not None
+        assert match.font.style[3] is True, "el resultado debería ser cursivo"
+        assert match.kind == "cut", "y debería constar que se cambió de familia"
+
+    def test_changing_family_to_honour_a_style_is_reported(self, unembedded_doc):
+        resolved = FontResolver(unembedded_doc).resolve_family(
+            0, "DejaVu Serif", italic=True, text="hola"
+        )
+        assert resolved.note and "cursiva" in resolved.note

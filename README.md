@@ -50,8 +50,9 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | **Borrar** | Elimina todo lo que haya dentro de un rectángulo. |
 | **Páginas** | Reordena arrastrando las miniaturas, gira, borra o añade páginas en blanco. |
 
-Desde la barra de formato puedes cambiar la fuente (incluidas **las que el propio
-documento embebe**), el tamaño, el color, la negrita, la cursiva y la alineación.
+Desde la barra de formato puedes cambiar la fuente —las que el propio documento
+embebe, **todas las instaladas en tu equipo** y tres genéricas—, el tamaño, el
+color, la negrita, la cursiva y la alineación.
 La casilla **Ajustar** reduce el tamaño para que un texto más largo quepa en el
 ancho original.
 
@@ -68,11 +69,21 @@ embebida (`extract_font`). Cuando editas una línea:
    llama `Liberation Serif Regular`, o llevar el prefijo de subconjunto
    `ABCDEF+`. Los sufijos neutros (`Regular`, `MT`, `PS`…) se ignoran; el peso y
    la inclinación **nunca**, porque distinguen fuentes distintas.
-2. Se comprueba que esa fuente tenga glifos para lo que has escrito. Si no los
+2. Si el PDF **no** embebe esa fuente —cosa habitual: muchos documentos se
+   limitan a nombrarla y confían en que el lector la tenga— se busca **esa misma
+   fuente instalada en tu equipo**, por nombre. Y si no está, se recurre a su
+   equivalente métricamente compatible: Arial → Liberation Sans, Times New Roman
+   → Liberation Serif, Calibri → Carlito, y así. Lo que nunca se hace es elegir
+   un reemplazo sólo por el estilo, que es como una Arial acaba convertida en
+   cualquier otra sans.
+3. Se comprueba que esa fuente tenga glifos para lo que has escrito. Si no los
    tiene (por ejemplo, un subconjunto sin `ñ`), se busca otra fuente del
    documento con el mismo estilo, luego una del sistema y, por último, una de las
    14 estándar del PDF — y se te avisa de la sustitución.
-3. Se borran los glifos originales con una redacción y se redibuja el texto en la
+4. Si pides negrita o cursiva y la familia elegida no tiene ese corte instalado,
+   se conserva **el corte** y se cambia de familia, no al revés: pedir cursiva y
+   obtener texto redondo no es una respuesta. Se te indica el cambio.
+5. Se borran los glifos originales con una redacción y se redibuja el texto en la
    línea base original, reutilizando el programa de fuente **byte a byte**, de
    modo que el PDF guardado sigue siendo válido en cualquier visor.
 
@@ -87,6 +98,10 @@ escribir.
   (o se encoge, con «Ajustar»), pero no se reparte en las líneas siguientes.
 - **Las fuentes en subconjunto** solo contienen los glifos que el documento usaba.
   Si escribes caracteres que no están, se sustituye la fuente y se avisa.
+- **Si el PDF no embebe sus fuentes**, el texto que edites sí quedará embebido.
+  Es lo correcto —así se ve igual en cualquier visor—, pero significa que en un
+  equipo sin esa fuente instalada el texto editado se verá bien y el resto no.
+  Para evitarlo, edita el documento entero o parte de uno que sí embeba.
 - **El texto en trazado o en imagen** no es editable, porque no es texto.
 - Los PDF protegidos con contraseña requieren la contraseña al abrirlos.
 - Los documentos viven en memoria del servidor y se descartan tras dos horas sin

@@ -161,9 +161,12 @@ export class Editor {
 
   /* ---------- editing an existing span ---------- */
 
-  async activateSpan(view, line, spanIndex, host) {
+  async activateSpan(view, line, spanIndex, host, event) {
     if (this.tool !== 'select') return;
-    if (this.active && this.active.line.id === line.id && this.active.spanIndex === spanIndex) return;
+    if (this.active?.line?.id === line.id && this.active.spanIndex === spanIndex) return;
+    // Read the click position now: the edit below is asynchronous and the event
+    // is stale by the time the caret needs placing.
+    const clickedAt = event ? { x: event.clientX, y: event.clientY } : null;
     await this.commitActive();
 
     const input = view.openEditor(line, spanIndex);
@@ -189,16 +192,32 @@ export class Editor {
     };
 
     input.focus();
-    this._placeCaretAtEnd(input);
+    this._placeCaret(input, clickedAt);
     input.addEventListener('keydown', (event) => this._onEditorKey(event));
     this._emit();
   }
 
-  _placeCaretAtEnd(element) {
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    range.collapse(false);
+  /** Put the caret where the user clicked, or at the end if that is unknown. */
+  _placeCaret(element, at) {
     const selection = window.getSelection();
+    let range = null;
+    if (at) {
+      if (document.caretRangeFromPoint) {
+        range = document.caretRangeFromPoint(at.x, at.y);
+      } else if (document.caretPositionFromPoint) {
+        const position = document.caretPositionFromPoint(at.x, at.y);
+        if (position) {
+          range = document.createRange();
+          range.setStart(position.offsetNode, position.offset);
+        }
+      }
+      if (range && !element.contains(range.startContainer)) range = null;
+    }
+    if (!range) {
+      range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+    }
     selection.removeAllRanges();
     selection.addRange(range);
   }

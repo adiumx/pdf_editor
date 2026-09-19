@@ -79,8 +79,15 @@ export class PageView {
 
     element.addEventListener('mousedown', (event) => {
       if (event.button !== 0) return;
+      // Once this span is open for editing, a click inside it is the caret's
+      // business, not ours.
+      if (event.target.closest?.('.span__input')) return;
       event.stopPropagation();
-      this.handlers.onSpanActivate?.(this, line, index, element);
+      // Without this the browser moves focus to the body right after the
+      // handler, undoing the focus() that puts the caret in the editable — the
+      // box would open and typing would go nowhere.
+      event.preventDefault();
+      this.handlers.onSpanActivate?.(this, line, index, element, event);
     });
     return element;
   }

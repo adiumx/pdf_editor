@@ -57,15 +57,57 @@ _BASE14 = {
     (False, True, True, True): "cobi",
 }
 
-# Searched in order when the text needs glyphs no base-14 font has (accents
-# beyond Latin-1, Greek, Cyrillic...). Any that is missing is skipped.
+# Where installed fonts live. Scanned once, so a PDF that names a font without
+# embedding it can still be redrawn with that very font when the machine has it.
 _SYSTEM_FONT_DIRS = (
-    "/usr/share/fonts/truetype/dejavu",
-    "/usr/share/fonts/truetype/liberation",
-    "/usr/share/fonts/truetype/freefont",
+    "/usr/share/fonts",
+    "/usr/local/share/fonts",
+    os.path.expanduser("~/.fonts"),
+    os.path.expanduser("~/.local/share/fonts"),
     "/Library/Fonts",
     "/System/Library/Fonts",
+    os.path.expanduser("~/Library/Fonts"),
     "C:/Windows/Fonts",
+)
+
+# Scanning stops here; no realistic machine needs more, and a runaway directory
+# should not stall the first edit.
+_MAX_SYSTEM_FONTS = 4000
+
+# How many font programs are opened to read their real name. A name read from
+# the font itself is far better than one guessed from its file name — the file
+# `c0419bt_.pfb` calls itself "Courier 10 Pitch" — but each one costs a parse,
+# so past this many the file name has to do.
+_MAX_NAMED_FONTS = 400
+
+_FONT_EXTENSIONS = (".ttf", ".otf", ".ttc", ".pfb")
+
+# Fonts a PDF commonly names but rarely embeds, and the metric-compatible free
+# families that stand in for them. Without this, a document set in Arial would
+# be redrawn in whatever sans happened to be listed first.
+_METRIC_ALIASES = {
+    "arial": ("liberationsans", "dejavusans", "freesans"),
+    "helvetica": ("liberationsans", "dejavusans", "freesans"),
+    "arialnarrow": ("liberationsansnarrow", "liberationsans"),
+    "timesnewroman": ("liberationserif", "dejavuserif", "freeserif"),
+    "times": ("liberationserif", "dejavuserif", "freeserif"),
+    "couriernew": ("liberationmono", "dejavusansmono", "freemono"),
+    "courier": ("liberationmono", "dejavusansmono", "freemono"),
+    "calibri": ("carlito", "liberationsans", "dejavusans"),
+    "cambria": ("caladea", "liberationserif", "dejavuserif"),
+    "georgia": ("gelasio", "liberationserif", "dejavuserif"),
+    "verdana": ("dejavusans", "liberationsans"),
+    "tahoma": ("dejavusans", "liberationsans"),
+    "garamond": ("ebgaramond", "liberationserif"),
+    "segoeui": ("selawik", "dejavusans", "liberationsans"),
+}
+
+# Style words stripped to get from a font's own name to its family's name.
+_STYLE_WORDS = (
+    "bold", "italic", "oblique", "regular", "normal", "book", "roman", "black",
+    "heavy", "light", "thin", "medium", "semibold", "demibold", "extrabold",
+    "ultrabold", "extralight", "ultralight", "condensed", "narrow", "expanded",
+    "std", "pro", "mt", "ps", "web", "cn",
 )
 
 _SYSTEM_FONT_FILES = {
@@ -150,15 +192,27 @@ class ResolvedFont:
     """Base-14 short name (``helv``...), when no program is embedded."""
 
     source: str = "embedded"
-    """``embedded``, ``embedded-other``, ``system`` or ``base14``."""
+    """How the font was found, worst case last:
+
+    ``embedded``      the program the document carries for this very text
+    ``system-named``  the font the document *names*, installed on this machine
+    ``embedded-other``another program in the document, same style
+    ``system``        an installed font of the same style, different name
+    ``base14``        one of the fonts every PDF viewer supplies
+    """
 
     note: str | None = None
     """Why the original font could not be used, when it could not."""
 
     @property
     def is_faithful(self) -> bool:
-        """True when the text is drawn with the exact program it replaced."""
-        return self.source == "embedded"
+        """True when the text keeps the typeface the document asked for.
+
+        That covers a font the PDF embeds and one it only names, as long as the
+        machine has it: in both cases the replacement is the same typeface, not
+        a stand-in.
+        """
+        return self.source in {"embedded", "system-named"}
 
     def text_length(self, text: str, fontsize: float) -> float:
         """Width of ``text`` at ``fontsize``, in points."""
@@ -167,6 +221,225 @@ class ResolvedFont:
     def missing_glyphs(self, text: str) -> list[str]:
         """Characters of ``text`` this font cannot draw."""
         return sorted({ch for ch in text if ch.strip() and not self.font.has_glyph(ord(ch))})
+
+
+def family_key(name: str | None) -> str:
+    """Reduce a font name to its family, dropping every style word.
+
+    ``DejaVuSerif-Bold`` and ``DejaVu Serif`` both come back as ``dejavuserif``,
+    which is what lets the toolbar offer one entry per family and apply weight
+    and slant on top of it.
+    """
+    key = normalize_font_name(name)
+    while True:
+        for word in _STYLE_WORDS:
+            if key.endswith(word) and len(key) > len(word) + 2:
+                key = key[: -len(word)]
+                break
+        else:
+            return key
+
+
+def _pretty_family(stem: str) -> str:
+    """A human-readable family name from a font file's name."""
+    name = _SUBSET_PREFIX.sub("", stem).replace("_", " ").replace("-", " ")
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name)
+    words = [
+        word
+        for word in spaced.split()
+        if normalize_font_name(word) not in _STYLE_WORDS or not word
+    ]
+    return " ".join(words).strip() or spaced.strip() or stem
+
+
+@dataclass(frozen=True)
+class SystemFont:
+    """A font file installed on this machine."""
+
+    path: str
+    family: str
+    style: tuple[bool, bool, bool, bool]
+
+
+@lru_cache(maxsize=1)
+def system_fonts() -> tuple[dict[str, SystemFont], dict[str, dict[tuple, SystemFont]]]:
+    """Index the machine's fonts by name and by family.
+
+    Each font is opened once to read the name it calls itself, because file
+    names are unreliable: `c0419bt_.pfb` is "Courier 10 Pitch", and `DejaVuSans`
+    cannot be split into words by case alone. Both the real name and the file
+    name are registered, so a PDF's BaseFont entry finds the font whichever of
+    the two it happens to resemble. The whole scan runs once per process.
+    """
+    by_name: dict[str, SystemFont] = {}
+    by_family: dict[str, dict[tuple, SystemFont]] = {}
+    seen = 0
+    named = 0
+
+    def register(entry: SystemFont, *keys: str) -> None:
+        for key in keys:
+            for variant in {normalize_font_name(key), canonical_font_name(key)}:
+                if variant:
+                    by_name.setdefault(variant, entry)
+        by_family.setdefault(family_key(entry.family), {}).setdefault(entry.style, entry)
+
+    for directory in _SYSTEM_FONT_DIRS:
+        if not os.path.isdir(directory):
+            continue
+        for root, _dirs, files in os.walk(directory):
+            for filename in sorted(files):
+                if not filename.lower().endswith(_FONT_EXTENSIONS):
+                    continue
+                if seen >= _MAX_SYSTEM_FONTS:
+                    return by_name, by_family
+                seen += 1
+                path = os.path.join(root, filename)
+                stem = os.path.splitext(filename)[0]
+
+                real_name = None
+                if named < _MAX_NAMED_FONTS:
+                    named += 1
+                    try:
+                        real_name = pymupdf.Font(fontfile=path).name or None
+                    except Exception:
+                        real_name = None
+
+                source_name = real_name or stem
+                style = style_of(source_name)
+                if real_name and not any(style[2:]):
+                    # Some fonts name only the family and leave the cut to the
+                    # file name ("Loma.otf" vs "Loma-Bold.otf").
+                    style = style_of(f"{source_name} {stem}")
+
+                family = _strip_style_words(real_name) if real_name else _pretty_family(stem)
+                if not family:
+                    continue
+                entry = SystemFont(path=path, family=family, style=style)
+                register(entry, source_name, stem)
+
+    return by_name, by_family
+
+
+def _strip_style_words(name: str) -> str:
+    """Drop the trailing weight and slant words from a font's own name.
+
+    "DejaVu Serif Bold Italic" is the family "DejaVu Serif"; the rest is the cut,
+    which the toolbar applies with its own bold and italic buttons.
+    """
+    words = re.split(r"[\s_]+", _SUBSET_PREFIX.sub("", name).strip())
+    while len(words) > 1 and normalize_font_name(words[-1]) in _STYLE_WORDS:
+        words.pop()
+    return " ".join(words).strip()
+
+
+@lru_cache(maxsize=1)
+def _alias_index() -> dict[str, tuple[str, ...]]:
+    """The alias table keyed the same way families are keyed.
+
+    ``TimesNewRomanPSMT`` reduces to the family ``timesnew`` — "Roman" is a
+    style word in ``Times-Roman`` — so the table's own keys are put through the
+    same reduction instead of being matched literally.
+    """
+    index: dict[str, tuple[str, ...]] = {}
+    for name, targets in _METRIC_ALIASES.items():
+        reduced = tuple(dict.fromkeys(family_key(target) for target in targets))
+        for key in {name, family_key(name)}:
+            index.setdefault(key, reduced)
+    return index
+
+
+@dataclass(frozen=True)
+class FontMatch:
+    """An installed font, and how closely it answers what was asked for."""
+
+    font: SystemFont
+    kind: str
+    """``name`` the font itself · ``alias`` a metric-compatible stand-in ·
+    ``cut`` a different family, chosen to keep the weight or slant asked for."""
+
+    @property
+    def is_close_enough(self) -> bool:
+        """Whether the result passes for what was asked, without a warning."""
+        return self.kind in {"name", "alias"}
+
+
+def _family_with_cut(
+    by_family: dict[str, dict[tuple, SystemFont]], wanted: tuple[bool, bool, bool, bool]
+) -> SystemFont | None:
+    """Any installed family that has this exact cut, best-known ones first."""
+    preferred = ("liberation", "dejavu", "free", "noto")
+    candidates = [
+        entry
+        for variants in by_family.values()
+        for entry in variants.values()
+        if entry.style == wanted
+    ]
+    if not candidates:
+        return None
+    def rank(entry: SystemFont) -> tuple[int, str]:
+        key = family_key(entry.family)
+        for index, prefix in enumerate(preferred):
+            if key.startswith(prefix):
+                return (index, entry.family)
+        return (len(preferred), entry.family)
+    return min(candidates, key=rank)
+
+
+def find_match(
+    name: str | None, style: tuple[bool, bool, bool, bool] | None = None
+) -> FontMatch | None:
+    """Locate an installed font for the name a PDF refers to it by.
+
+    Tries the name itself, then the metric-compatible stand-ins for fonts
+    documents name but do not carry, and finally — rather than silently
+    dropping a weight or slant the family has no cut for — another family that
+    does have it. Asking for italic and getting upright text is not an answer.
+    """
+    if not name:
+        return None
+    by_name, by_family = system_fonts()
+    wanted = style or style_of(name)
+
+    for key in (normalize_font_name(name), canonical_font_name(name)):
+        found = by_name.get(key)
+        if found is not None and found.style[2:] == wanted[2:]:
+            return FontMatch(found, "name")
+
+    own = family_key(name)
+    aliases = _alias_index().get(own, ())
+    wrong_cut: SystemFont | None = None
+    for index, key in enumerate((own, *aliases)):
+        variants = by_family.get(key)
+        if not variants:
+            continue
+        exact = variants.get(wanted)
+        if exact is not None:
+            return FontMatch(exact, "name" if index == 0 else "alias")
+        if wrong_cut is None:
+            wrong_cut = min(
+                variants.values(),
+                key=lambda entry: sum(a != b for a, b in zip(entry.style, wanted)),
+            )
+
+    # No family of the right name has the cut asked for. Keeping the weight or
+    # slant matters more than keeping the family, so a family that has it wins
+    # over the right family in the wrong cut.
+    if wrong_cut is not None and wrong_cut.style[2:] != wanted[2:]:
+        replacement = _family_with_cut(by_family, wanted)
+        if replacement is not None:
+            return FontMatch(replacement, "cut")
+    if wrong_cut is not None:
+        return FontMatch(wrong_cut, "alias")
+    replacement = _family_with_cut(by_family, wanted)
+    return FontMatch(replacement, "cut") if replacement is not None else None
+
+
+def find_system_font(
+    name: str | None, style: tuple[bool, bool, bool, bool] | None = None
+) -> SystemFont | None:
+    """The installed font for ``name``, without saying how it was matched."""
+    match = find_match(name, style)
+    return match.font if match is not None else None
 
 
 @lru_cache(maxsize=64)
@@ -178,6 +451,17 @@ def _system_font_path(style: tuple[bool, bool, bool, bool]) -> str | None:
             if os.path.isfile(path):
                 return path
     return None
+
+
+@lru_cache(maxsize=32)
+def _load_font_file(path: str) -> tuple[bytes, pymupdf.Font] | None:
+    """Read a font file once and keep it; font programs are large."""
+    try:
+        with open(path, "rb") as handle:
+            buffer = handle.read()
+        return buffer, pymupdf.Font(fontbuffer=buffer)
+    except Exception:
+        return None
 
 
 def _covers(font: pymupdf.Font, text: str) -> bool:
@@ -321,13 +605,29 @@ class FontResolver:
             # since there is no original to insist on.
             pass
 
+        # 2. The font the document *names*, if this machine has it installed.
+        #    A PDF may name a font without embedding it, and a PDF that does
+        #    embed one may carry a subset missing the characters just typed.
+        #    Either way the right answer is that same typeface, not a look-alike
+        #    picked by style — which is how "Arial" used to become DejaVu Sans.
+        match = find_match(font_name, style)
+        if match is not None and match.is_close_enough:
+            loaded = _load_font_file(match.font.path)
+            if loaded is not None and (not allow_substitution or _covers(loaded[1], text)):
+                return ResolvedFont(
+                    key=f"sys:{match.font.path}",
+                    font=loaded[1],
+                    buffer=loaded[0],
+                    source="system-named",
+                )
+
         note = (
             f"«{font_name}» no tiene glifos para algunos caracteres nuevos"
             if exact_exists
-            else f"«{font_name}» no está embebida en el PDF"
+            else f"no se encontró la fuente «{font_name}» ni en el PDF ni en este equipo"
         )
 
-        # 2. Another program already in the document with the same style.
+        # 3. Another program already in the document with the same style.
         for record in self._document_fonts_by_style(style):
             if _covers(record.font, text):
                 return ResolvedFont(
@@ -363,23 +663,17 @@ class FontResolver:
 
         base14 = _BASE14.get(style, "helv")
         path = _system_font_path(style)
-        if path:
-            try:
-                with open(path, "rb") as handle:
-                    buffer = handle.read()
-                font = pymupdf.Font(fontbuffer=buffer)
-                if _covers(font, text):
-                    resolved = ResolvedFont(
-                        key=f"sys:{path}",
-                        font=font,
-                        buffer=buffer,
-                        source="system",
-                        note=note,
-                    )
-                    self._fallback_cache[cache_key] = resolved
-                    return resolved
-            except Exception:
-                pass
+        loaded = _load_font_file(path) if path else None
+        if loaded is not None and _covers(loaded[1], text):
+            resolved = ResolvedFont(
+                key=f"sys:{path}",
+                font=loaded[1],
+                buffer=loaded[0],
+                source="system",
+                note=note,
+            )
+            self._fallback_cache[cache_key] = resolved
+            return resolved
 
         resolved = ResolvedFont(
             key=f"b14:{base14}",
@@ -425,6 +719,25 @@ class FontResolver:
             style_matches = best.style[2] == bold and best.style[3] == italic
             if style_matches and _covers(best.font, text):
                 return ResolvedFont(key=f"emb:{best.xref}", font=best.font, buffer=best.buffer, source="embedded")
+
+        # A family the user picked from the toolbar: honour the name, in the
+        # weight and slant they asked for.
+        match = find_match(family, style)
+        if match is not None:
+            loaded = _load_font_file(match.font.path)
+            if loaded is not None and _covers(loaded[1], text):
+                return ResolvedFont(
+                    key=f"sys:{match.font.path}",
+                    font=loaded[1],
+                    buffer=loaded[0],
+                    source="system-named" if match.is_close_enough else "system",
+                    note=None if match.is_close_enough else (
+                        f"«{family}» no tiene "
+                        + (" ".join(w for w, on in (("negrita", bold), ("cursiva", italic)) if on)
+                           or "ese estilo")
+                        + f" en este equipo; se usó «{match.font.family}»"
+                    ),
+                )
         return self._fallback(style, text, None)
 
     def available_families(self) -> list[dict]:
@@ -446,6 +759,26 @@ class FontResolver:
                     "serif": serif,
                 }
         families = sorted(seen.values(), key=lambda item: item["name"].lower())
+
+        # Everything installed here, so a document whose fonts are not embedded
+        # is not left with three generic choices.
+        _by_name, by_family = system_fonts()
+        installed: dict[str, dict] = {}
+        for variants in by_family.values():
+            # Describe the family by its plain cut when it has one.
+            entry = min(variants.values(), key=lambda item: (item.style[2], item.style[3]))
+            if entry.family and entry.family not in installed and entry.family not in seen:
+                serif, mono, bold, italic = entry.style
+                installed[entry.family] = {
+                    "name": entry.family,
+                    "source": "system",
+                    "bold": False,
+                    "italic": False,
+                    "mono": mono,
+                    "serif": serif,
+                }
+        families.extend(sorted(installed.values(), key=lambda item: item["name"].lower()))
+
         for generic in ("sans", "serif", "mono"):
             families.append(
                 {

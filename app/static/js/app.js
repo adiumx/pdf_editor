@@ -113,10 +113,13 @@ const fmt = {
 // Clicking the bar must not count as leaving the text being edited.
 formatbar.addEventListener('mousedown', (event) => event.preventDefault());
 
+let familiesFor = null;
+
 function fillFamilies() {
   fmt.family.replaceChildren();
   const groups = [
     ['Fuentes del documento', editor.families.filter((f) => f.source === 'document')],
+    ['Instaladas en este equipo', editor.families.filter((f) => f.source === 'system')],
     ['Genéricas', editor.families.filter((f) => f.source === 'generic')],
   ];
   const labels = { sans: 'Sans-serif', serif: 'Serif', mono: 'Monoespaciada' };
@@ -250,7 +253,15 @@ editor.onChange(() => {
     button.classList.toggle('is-active', button.dataset.tool === editor.tool);
   }
 
-  if (open && fmt.family.options.length === 0) fillFamilies();
+  // Refill when the document changes: the list starts with that document's own
+  // fonts, and syncFormatBar may have prepended one, so a length check would
+  // leave the previous document's fonts in place.
+  if (open && familiesFor !== editor.doc.id) {
+    familiesFor = editor.doc.id;
+    fillFamilies();
+  } else if (!open) {
+    familiesFor = null;
+  }
   syncFormatBar();
   thumbnails.render();
 });
