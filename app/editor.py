@@ -136,6 +136,9 @@ class _PageBatch:
 
     restored_images: list[tuple[pymupdf.Rect, bytes]] = field(default_factory=list)
     moved_image_sources: set[tuple] = field(default_factory=set)
+    moved_annots: list[tuple[int, float, float]] = field(default_factory=list)
+    """Annotations (xref, dx, dy) that have to follow the text they mark."""
+
     carried_links: set[tuple] = field(default_factory=set)
     """Links already taken to a continuation page, so the ordinary shift does
     not add them a second time."""
@@ -143,6 +146,53 @@ class _PageBatch:
     """Set when a picture has to move. Erasing images is all or nothing over a
     page's redactions, so every one they touch is put back — shifted if it is
     in the way, where it was if it is not."""
+
+
+# Text markup is anchored to the words it marks, not to a box: a highlight is a
+# list of quadrilaterals, one per run of marked text, and the reader draws it
+# from those. Asking such an annotation to move by its rectangle is refused
+# outright ("Highlight annotations have no Rect property"), so it is taken off
+# and put back over the quadrilaterals shifted. Everything else does move by
+# its rectangle.
+_MARKUP_ANNOTS = {
+    "Highlight": "add_highlight_annot",
+    "Underline": "add_underline_annot",
+    "StrikeOut": "add_strikeout_annot",
+    "Squiggly": "add_squiggly_annot",
+}
+
+# Annotations that are not ours to shift: a widget belongs to the document's
+# form, and a redaction is a pending instruction, not a mark on the page.
+_UNMOVABLE_ANNOTS = {"Widget", "Redact", "Link", "Popup"}
+
+
+def _shift_annot(page: pymupdf.Page, annot: pymupdf.Annot, dx: float, dy: float) -> None:
+    """Move one annotation, keeping its colour, its note and its transparency."""
+    kind = annot.type[1]
+    info, colors, opacity = annot.info, annot.colors, annot.opacity
+
+    if kind in _MARKUP_ANNOTS:
+        quads = annot.vertices or []
+        if len(quads) < 4:
+            return
+        moved = [
+            pymupdf.Quad([(x + dx, y + dy) for x, y in quads[i:i + 4]])
+            for i in range(0, len(quads) - 3, 4)
+        ]
+        page.delete_annot(annot)
+        fresh = getattr(page, _MARKUP_ANNOTS[kind])(moved)
+    else:
+        annot.set_rect(pymupdf.Rect(annot.rect) + (dx, dy, dx, dy))
+        fresh = annot
+
+    if colors.get("stroke"):
+        fresh.set_colors(stroke=colors["stroke"])
+    if colors.get("fill"):
+        fresh.set_colors(fill=colors["fill"])
+    fresh.set_info(info)
+    if opacity is not None and 0 <= opacity < 1:
+        fresh.set_opacity(opacity)
+    fresh.update()
 
 
 def _axis_extent(bbox: Sequence[float], rotation: int) -> float:
@@ -809,6 +859,7 @@ class EditSession:
 
         shift = pymupdf.Point(*from_axes(rotation, 0.0, delta))
         batch.remove_line_art = True
+        self._carry_annots(page, batch, below, shift.x, shift.y)
         if moving_images:
             batch.move_images = True
             for rect, data in moving_images:
@@ -1200,6 +1251,30 @@ class EditSession:
                 )
                 batch.new_links.append(moved)
 
+    @staticmethod
+    def _carry_annots(
+        page: pymupdf.Page,
+        batch: _PageBatch,
+        covers,
+        dx: float,
+        dy: float,
+    ) -> None:
+        """Note the marks that sit on the text being moved, so they follow it.
+
+        A highlight left behind over the gap the words came out of is worse
+        than no highlight at all: it points at nothing, and the reader has no
+        way to tell it apart from one that was always there.
+        """
+        already = {xref for xref, _, _ in batch.moved_annots}
+        for annot in page.annots():
+            if annot.type[1] in _UNMOVABLE_ANNOTS:
+                continue
+            if annot.xref in already:
+                continue
+            if not covers(pymupdf.Rect(annot.rect)):
+                continue
+            batch.moved_annots.append((annot.xref, dx, dy))
+
     def move_block(self, op: dict[str, Any]) -> None:
         """Pick a run of text up and set it down somewhere else on the page.
 
@@ -1262,6 +1337,12 @@ class EditSession:
             moved = dict(link)
             moved["from"] = rect + (shift.x, shift.y, shift.x, shift.y)
             batch.new_links.append(moved)
+
+        self._carry_annots(
+            page, batch,
+            lambda rect: any(rect.intersects(box) for box in boxes),
+            shift.x, shift.y,
+        )
 
     def delete_line(self, op: dict[str, Any]) -> None:
         """Erase a line without putting anything back."""
@@ -1424,6 +1505,20 @@ class EditSession:
                     continue
             if links_before and not batch.new_links:
                 self._restore_links(page, links_before, batch)
+
+            # Last, so a mark is moved on the page the redaction left behind
+            # rather than on the one it was read from.
+            # One at a time, each found on a fresh scan: a marked-up
+            # annotation is moved by taking it off the page and putting it
+            # back, which invalidates any other handle held at the same time.
+            for xref, dx, dy in batch.moved_annots:
+                annot = next((a for a in page.annots() if a.xref == xref), None)
+                if annot is None:
+                    continue
+                try:
+                    _shift_annot(page, annot, dx, dy)
+                except Exception:  # pragma: no cover - defensive
+                    continue
 
         return self.warnings
 

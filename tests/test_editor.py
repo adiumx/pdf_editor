@@ -10,8 +10,11 @@ from app.extract import extract_page
 from app.fonts import FontResolver
 from tests.conftest import (
     FONT_FILES,
+    annot_named,
+    annots_of,
     build_pdf,
     build_pdf_with_links,
+    build_pdf_with_marks,
     requires_fonts,
     spans_of,
     text_of,
@@ -1050,3 +1053,65 @@ class TestMovingABlock:
         assert after[0][0] == pytest.approx(before[0][0] + 50, abs=2.0)
         assert after[0][1] == pytest.approx(before[0][1] + 70, abs=2.0)
         document.close()
+
+
+class TestMarksFollowTheTextTheyMark:
+    """A highlight is anchored to the words it covers. Moving the words used to
+    leave it behind, pointing at the gap they came out of."""
+
+    def _doc(self):
+        return pymupdf.open(stream=build_pdf_with_marks(), filetype="pdf")
+
+    def _block(self, doc, resolver, needle="parrafo marcado"):
+        return [
+            line for line in extract_page(doc, 0, resolver)["lines"]
+            if needle in line["text"]
+        ]
+
+    def _move(self, doc, resolver, dx, dy):
+        apply_operations(doc, resolver, [{
+            "op": "move_block", "page": 0,
+            "lines": [dict(line) for line in self._block(doc, resolver)],
+            "dx": dx, "dy": dy,
+        }])
+
+    def test_a_highlight_travels_with_its_paragraph(self):
+        doc = self._doc()
+        resolver = FontResolver(doc)
+        before = annot_named(doc, "sobre el parrafo").rect
+        self._move(doc, resolver, 0, 200)
+        after = annot_named(doc, "sobre el parrafo")
+        assert after is not None, "el resaltado desapareció"
+        assert after.rect[1] == pytest.approx(before[1] + 200, abs=2)
+        assert after.rect[0] == pytest.approx(before[0], abs=2)
+
+    def test_it_keeps_its_colour_and_its_note(self):
+        doc = self._doc()
+        resolver = FontResolver(doc)
+        self._move(doc, resolver, 0, 200)
+        mark = annot_named(doc, "sobre el parrafo")
+        assert mark.stroke == pytest.approx([1.0, 0.9, 0.2], abs=0.01)
+
+    def test_every_kind_of_mark_comes_along(self):
+        doc = self._doc()
+        resolver = FontResolver(doc)
+        self._move(doc, resolver, 0, 200)
+        for note, kind in (("sobre el parrafo", "Highlight"), ("bajo el parrafo", "Underline")):
+            mark = annot_named(doc, note)
+            assert mark is not None and mark.kind == kind, note
+            assert mark.rect[1] > 250, f"{note} se quedó en {mark.rect}"
+
+    def test_a_mark_on_untouched_text_stays_put(self):
+        doc = self._doc()
+        resolver = FontResolver(doc)
+        before = annot_named(doc, "lejos").rect
+        self._move(doc, resolver, 0, 30)
+        after = annot_named(doc, "lejos").rect
+        assert after == pytest.approx(before, abs=0.1), "se movió una marca ajena"
+
+    def test_nothing_is_lost_on_the_way(self):
+        doc = self._doc()
+        resolver = FontResolver(doc)
+        before = sorted((kind, note) for kind, note, _ in annots_of(doc))
+        self._move(doc, resolver, 40, 120)
+        assert sorted((kind, note) for kind, note, _ in annots_of(doc)) == before

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 
@@ -296,3 +297,96 @@ def spans_of(document: pymupdf.Document, pno: int = 0) -> list[dict]:
 
 def text_of(document: pymupdf.Document, pno: int = 0) -> str:
     return document[pno].get_text().strip()
+
+
+def build_pdf_with_a_form(pages: int = 2) -> bytes:
+    """A PDF whose pages carry a filled-in text field, plus a highlight."""
+    doc = pymupdf.open()
+    for pno in range(pages):
+        page = doc.new_page()
+        for name, path in _available.items():
+            page.insert_font(fontname=name, fontfile=path)
+        page.insert_text((72, 100), f"Pagina {pno} del formulario",
+                         fontname="helv", fontsize=12)
+        widget = pymupdf.Widget()
+        widget.field_name = f"campo{pno}"
+        widget.field_type = pymupdf.PDF_WIDGET_TYPE_TEXT
+        widget.rect = pymupdf.Rect(72, 300, 300, 320)
+        widget.field_value = f"valor {pno}"
+        page.add_widget(widget)
+    doc[0].add_highlight_annot(pymupdf.Rect(70, 90, 260, 105))
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def form_fields(document: pymupdf.Document) -> list[tuple[str, str]]:
+    """Every form field of a document, as (name, value)."""
+    return [(w.field_name, w.field_value) for page in document for w in page.widgets()]
+
+
+def build_pdf_with_marks() -> bytes:
+    """A paragraph with a highlight over its first line, a note beside it, and
+    a second paragraph further down that nothing marks."""
+    doc = pymupdf.open()
+    page = doc.new_page()
+    for name, path in _available.items():
+        page.insert_font(fontname=name, fontfile=path)
+    page.insert_text((72, 100), "Primera linea del parrafo marcado", fontname="helv", fontsize=11)
+    page.insert_text((72, 116), "Segunda linea del parrafo marcado", fontname="helv", fontsize=11)
+    page.insert_text((72, 400), "Un parrafo sin marcar mas abajo", fontname="helv", fontsize=11)
+    mark = page.add_highlight_annot(pymupdf.Rect(70, 90, 260, 105))
+    mark.set_colors(stroke=(1.0, 0.9, 0.2))
+    mark.set_info(content="sobre el parrafo")
+    mark.update()
+    rule = page.add_underline_annot(pymupdf.Rect(70, 106, 260, 120))
+    rule.set_info(content="bajo el parrafo")
+    rule.update()
+    page.add_text_annot((300, 95), "al margen")
+    other = page.add_highlight_annot(pymupdf.Rect(70, 390, 260, 405))
+    other.set_info(content="lejos")
+    other.update()
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def annots_of(document: pymupdf.Document, pno: int = 0) -> list[tuple[str, str, tuple]]:
+    """Every annotation of a page as (type, note, rounded rect), in page order.
+
+    The note is what tests address a mark by: rects move, and indices shift
+    when a mark is taken off and put back.
+    """
+    return [
+        (a.type[1], a.info.get("content", ""), tuple(round(v, 1) for v in a.rect))
+        for a in document[pno].annots()
+    ]
+
+
+@dataclasses.dataclass
+class AnnotSnapshot:
+    """What an annotation looked like, read out while it was still valid.
+
+    A live ``Annot`` belongs to the generator that yielded it; holding one past
+    that and reading its rectangle segfaults, so tests get a copy instead.
+    """
+
+    kind: str
+    note: str
+    rect: tuple
+    stroke: list | None
+    opacity: float | None
+
+
+def annot_named(document: pymupdf.Document, note: str, pno: int = 0) -> AnnotSnapshot | None:
+    """The one annotation carrying ``note``, copied out of the page."""
+    for annot in document[pno].annots():
+        if annot.info.get("content") == note:
+            return AnnotSnapshot(
+                kind=annot.type[1],
+                note=note,
+                rect=tuple(round(v, 2) for v in annot.rect),
+                stroke=annot.colors.get("stroke"),
+                opacity=annot.opacity,
+            )
+    return None

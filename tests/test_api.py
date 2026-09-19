@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app, store
 from app.store import DocumentError, DocumentStore
-from tests.conftest import build_pdf, requires_fonts
+from tests.conftest import build_pdf, build_pdf_with_a_form, form_fields, requires_fonts
 
 
 @pytest.fixture
@@ -415,3 +415,65 @@ class TestStore:
         document.snapshot()
         assert document.can_redo is False
         local.close_all()
+
+
+class TestFormsSurviveUndo:
+    """A page cannot be lifted out and put back on its own when the document
+    carries a form: the field list belongs to the document, so the returning
+    copy is renamed to keep it apart from the original (``campo0`` becomes
+    ``campo0 [26]``) and the entry left behind is never collected. Undo used
+    to break a filled form a little more on every step."""
+
+    def _edit_and_undo(self, document, rounds=1):
+        from app.editor import apply_operations
+
+        for index in range(rounds):
+            document.snapshot([0])
+            apply_operations(document.doc, document.resolver, [{
+                "op": "add_text", "page": 0, "rect": [72, 400 + index * 40, 300, 430 + index * 40],
+                "text": "texto nuevo", "size": 11, "font": "helv",
+            }])
+            assert document.undo() is True
+
+    def test_a_field_keeps_its_name_and_value(self):
+        local = DocumentStore()
+        document = local.open(build_pdf_with_a_form(), "formulario.pdf")
+        try:
+            before = form_fields(document.doc)
+            assert before == [("campo0", "valor 0"), ("campo1", "valor 1")]
+            self._edit_and_undo(document)
+            assert form_fields(document.doc) == before
+        finally:
+            local.close_all()
+
+    def test_repeated_undo_does_not_erode_it(self):
+        """The renaming compounded: campo0 [26] [32] [38]."""
+        local = DocumentStore()
+        document = local.open(build_pdf_with_a_form(), "formulario.pdf")
+        try:
+            before = form_fields(document.doc)
+            self._edit_and_undo(document, rounds=4)
+            assert form_fields(document.doc) == before
+            assert document.doc.is_form_pdf == 2, "el formulario acumuló campos huérfanos"
+        finally:
+            local.close_all()
+
+    def test_the_annotations_come_back_too(self):
+        local = DocumentStore()
+        document = local.open(build_pdf_with_a_form(), "formulario.pdf")
+        try:
+            self._edit_and_undo(document, rounds=2)
+            assert [a.type[1] for a in document.doc[0].annots()] == ["Highlight"]
+        finally:
+            local.close_all()
+
+    def test_a_document_without_a_form_still_records_single_pages(self):
+        """The whole-document fallback is for forms only; it must not undo the
+        page-by-page history everywhere else."""
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=6), "seis.pdf")
+        try:
+            document.snapshot([1])
+            assert document.undo_stack[-1].is_whole_document is False
+        finally:
+            local.close_all()

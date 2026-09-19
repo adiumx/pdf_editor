@@ -93,7 +93,7 @@ class Document:
 
     def _capture(self, pages: list[int] | None) -> Step:
         """Save either the named pages or the whole document."""
-        if pages is None:
+        if pages is None or self._has_form_fields():
             return Step(document=self._serialize(), page_count=self.doc.page_count)
         wanted = sorted({p for p in pages if 0 <= p < self.doc.page_count})
         if not wanted:
@@ -102,6 +102,19 @@ class Document:
             pages={pno: self._serialize_page(pno) for pno in wanted},
             page_count=self.doc.page_count,
         )
+
+    def _has_form_fields(self) -> bool:
+        """Whether the document carries an interactive form.
+
+        Form fields are listed once in the document, not on the page that
+        shows them, so a page cannot be lifted out and put back on its own:
+        the copy arrives while the original is still listed, the reader
+        renames it to keep the two apart (``firma`` becomes ``firma [26]``),
+        and the entry left behind is never collected. A few rounds of undo
+        and the form no longer answers to any of its names. Pruning the list
+        by hand corrupts it, so a document with a form is recorded whole.
+        """
+        return bool(self.doc.is_form_pdf)
 
     @staticmethod
     def _trim(stack: list[Step]) -> None:

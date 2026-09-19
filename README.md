@@ -248,6 +248,11 @@ Si no está instalado, el editor te lo dice en lugar de fallar.
   equipo sin esa fuente instalada el texto editado se verá bien y el resto no.
   Para evitarlo, edita el documento entero o parte de uno que sí embeba.
 - **El texto en trazado o en imagen** no es editable, porque no es texto.
+- **Las marcas viajan con el texto que marcan.** Al mover un párrafo, sus
+  resaltados, subrayados, tachados y notas se van con él; las que cubren otra
+  cosa se quedan donde estaban. Un formulario relleno se conserva intacto,
+  aunque el historial de un documento con formulario cuesta más memoria: no se
+  puede sacar y devolver una sola página sin romper la lista de campos.
 - **Un enlace sobrevive a la edición de su línea aunque borres el texto que
   describía**, recolocado proporcionalmente. Se prefiere conservarlo a adivinar
   que ya no hace falta; si sobra, deshaz o bórralo desde otra herramienta.
