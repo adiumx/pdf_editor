@@ -100,6 +100,45 @@ _METRIC_ALIASES = {
     "tahoma": ("dejavusans", "liberationsans"),
     "garamond": ("ebgaramond", "liberationserif"),
     "segoeui": ("selawik", "dejavusans", "liberationsans"),
+    # The free metric-compatible families, pointed back at their commercial
+    # counterparts, so a document set in Carlito still resolves on a machine
+    # that only has Liberation.
+    "carlito": ("calibri", "liberationsans", "dejavusans"),
+    "caladea": ("cambria", "liberationserif", "dejavuserif"),
+    "gelasio": ("georgia", "liberationserif", "dejavuserif"),
+    "liberationsans": ("arial", "dejavusans", "freesans"),
+    "liberationserif": ("timesnewroman", "dejavuserif", "freeserif"),
+    "liberationmono": ("couriernew", "dejavusansmono", "freemono"),
+    # Web and UI families documents name often and almost never embed.
+    "helveticaneue": ("liberationsans", "dejavusans"),
+    "roboto": ("liberationsans", "dejavusans"),
+    "opensans": ("liberationsans", "dejavusans"),
+    "lato": ("liberationsans", "dejavusans"),
+    "montserrat": ("liberationsans", "dejavusans"),
+    "poppins": ("liberationsans", "dejavusans"),
+    "inter": ("liberationsans", "dejavusans"),
+    "notosans": ("dejavusans", "liberationsans"),
+    "sourcesanspro": ("liberationsans", "dejavusans"),
+    "ptsans": ("liberationsans", "dejavusans"),
+    "trebuchetms": ("dejavusans", "liberationsans"),
+    "consolas": ("liberationmono", "dejavusansmono"),
+    "monaco": ("liberationmono", "dejavusansmono"),
+    "menlo": ("liberationmono", "dejavusansmono"),
+    "notoserif": ("dejavuserif", "liberationserif"),
+    "merriweather": ("liberationserif", "dejavuserif"),
+    "palatino": ("liberationserif", "dejavuserif"),
+    "bookantiqua": ("liberationserif", "dejavuserif"),
+}
+
+# The fonts every PDF viewer supplies, mapped to their (serif, mono) class.
+# They need no installation, so they are always offered by name in the toolbar.
+# Only their own names are listed: a document's "TimesNewRomanPSMT" should still
+# resolve to the installed Liberation Serif, not be quietly downgraded here.
+_BASE14_FAMILIES = {
+    "helvetica": (False, False),
+    "times": (True, False),
+    "timesroman": (True, False),
+    "courier": (False, True),
 }
 
 # Style words stripped to get from a font's own name to its family's name.
@@ -444,13 +483,19 @@ def find_system_font(
 
 @lru_cache(maxsize=64)
 def _system_font_path(style: tuple[bool, bool, bool, bool]) -> str | None:
-    """Locate an installed font file for ``style``, if the machine has one."""
+    """Locate an installed font file for ``style``, if the machine has one.
+
+    Goes through the scanned index rather than joining directory names: the
+    directories searched are roots like ``/usr/share/fonts``, and every font on
+    a Linux machine lives a few levels below one.
+    """
+    by_name, by_family = system_fonts()
     for candidate in _SYSTEM_FONT_FILES.get(style, ()):  # best match first
-        for directory in _SYSTEM_FONT_DIRS:
-            path = os.path.join(directory, candidate)
-            if os.path.isfile(path):
-                return path
-    return None
+        entry = by_name.get(canonical_font_name(os.path.splitext(candidate)[0]))
+        if entry is not None:
+            return entry.path
+    match = _family_with_cut(by_family, style)
+    return match.path if match is not None else None
 
 
 @lru_cache(maxsize=32)
@@ -708,6 +753,15 @@ class FontResolver:
         if family in generic:
             return self._fallback(generic[family], text, None)
 
+        # One of the fonts every viewer supplies: use it as such, so the saved
+        # PDF stays small and renders identically everywhere.
+        classes = _BASE14_FAMILIES.get(normalize_font_name(family))
+        if classes is not None:
+            serif, mono = classes
+            name = _BASE14[(serif, mono, bold, italic)]
+            return ResolvedFont(key=f"b14:{name}", font=pymupdf.Font(fontname=name),
+                                base14=name, source="base14")
+
         style = style_of(family, (FLAG_BOLD if bold else 0) | (FLAG_ITALIC if italic else 0))
         candidates = self._candidates(family)
         if candidates:
@@ -778,6 +832,10 @@ class FontResolver:
                     "serif": serif,
                 }
         families.extend(sorted(installed.values(), key=lambda item: item["name"].lower()))
+
+        for name, serif, mono in (("Helvetica", False, False), ("Times", True, False), ("Courier", False, True)):
+            families.append({"name": name, "source": "standard", "bold": False,
+                             "italic": False, "mono": mono, "serif": serif})
 
         for generic in ("sans", "serif", "mono"):
             families.append(

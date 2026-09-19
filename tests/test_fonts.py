@@ -226,3 +226,67 @@ class TestFontsTheDocumentNamesButDoesNotEmbed:
             0, "DejaVu Serif", italic=True, text="hola"
         )
         assert resolved.note and "cursiva" in resolved.note
+
+
+@requires_fonts
+class TestCommonFontsAndFallbacks:
+    def test_the_style_fallback_finds_a_real_file(self):
+        """It used to join a font's name onto directory roots like
+        /usr/share/fonts, where no font actually sits, so every fallback that
+        got this far ended up on a base-14 font instead of an installed one."""
+        import os
+
+        from app.fonts import _system_font_path
+
+        for style in [
+            (False, False, False, False),
+            (True, False, True, False),
+            (False, True, False, False),
+        ]:
+            path = _system_font_path(style)
+            assert path is not None, f"sin fuente para {style}"
+            assert os.path.isfile(path), path
+
+    @pytest.mark.parametrize(
+        "named",
+        ["Carlito-Bold", "Calibri", "Roboto", "Consolas", "Montserrat", "Palatino",
+         "OpenSans", "Helvetica Neue", "Trebuchet MS", "Merriweather"],
+    )
+    def test_common_font_names_all_resolve_to_something_installed(self, named):
+        """These are named by documents constantly and embedded almost never."""
+        assert find_system_font(named) is not None
+
+    def test_a_font_the_pdf_names_but_cannot_be_used_does_not_fall_to_base14(self):
+        """Carlito is subsetted without a usable character map in real CVs, so
+        the embedded program cannot draw new text. The answer is Carlito, or its
+        metric-compatible stand-in — not Helvetica."""
+        from tests.conftest import build_pdf_naming_fonts_it_does_not_embed
+
+        document = pymupdf.open(
+            stream=build_pdf_naming_fonts_it_does_not_embed({"F1": "Carlito-Bold"}),
+            filetype="pdf",
+        )
+        resolved = FontResolver(document).resolve(0, "Carlito-Bold", FLAG_BOLD, "Hola")
+        assert resolved.source != "base14"
+        assert resolved.buffer, "debería usar un programa de fuente real"
+        document.close()
+
+    def test_the_standard_pdf_fonts_are_offered_by_name(self, doc, resolver):
+        """They need no installation and every viewer has them."""
+        families = resolver.available_families()
+        standard = {family["name"] for family in families if family["source"] == "standard"}
+        assert {"Helvetica", "Times", "Courier"} <= standard
+
+    @pytest.mark.parametrize(
+        ("family", "expected"),
+        [("Helvetica", "helv"), ("Times", "tiro"), ("Courier", "cour")],
+    )
+    def test_a_standard_font_stays_a_standard_font(self, doc, resolver, family, expected):
+        """Picking one must not embed a look-alike; that is the point of them."""
+        resolved = resolver.resolve_family(0, family, text="hola")
+        assert resolved.base14 == expected
+        assert resolved.buffer is None
+
+    def test_a_standard_font_honours_bold_and_italic(self, doc, resolver):
+        assert resolver.resolve_family(0, "Helvetica", bold=True, text="x").base14 == "hebo"
+        assert resolver.resolve_family(0, "Times", italic=True, text="x").base14 == "tiit"

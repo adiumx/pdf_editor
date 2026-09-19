@@ -50,9 +50,24 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | **Borrar** | Elimina todo lo que haya dentro de un rectángulo. |
 | **Páginas** | Reordena arrastrando las miniaturas, gira, borra o añade páginas en blanco. |
 
-Desde la barra de formato puedes cambiar la fuente —las que el propio documento
-embebe, **todas las instaladas en tu equipo** y tres genéricas—, el tamaño, el
-color, la negrita, la cursiva y la alineación.
+Desde la barra de formato puedes cambiar la fuente, el tamaño, el color, la
+negrita, la cursiva y la alineación. El desplegable de fuentes agrupa:
+
+- **Fuentes del documento** — las que el PDF lleva embebidas.
+- **Estándar del PDF** — Helvetica, Times y Courier. No hacen falta instalarlas:
+  las tiene cualquier visor, así que el archivo no engorda y se ve igual en todas
+  partes.
+- **Instaladas en este equipo** — todas las que encuentre en tu sistema.
+- **Genéricas** — sans-serif, serif y monoespaciada.
+
+Si el desplegable se te queda corto, instala las familias libres más habituales;
+además cubren por compatibilidad métrica a las de Microsoft (Arial, Times New
+Roman, Calibri, Cambria):
+
+```bash
+sudo apt install fonts-liberation fonts-dejavu fonts-crosextra-carlito \
+                 fonts-crosextra-caladea fonts-noto-core
+```
 La casilla **Ajustar** reduce el tamaño para que un texto más largo quepa en el
 ancho original.
 
@@ -97,7 +112,11 @@ escribir.
 - **El reflujo es por línea**, no por párrafo: si alargas mucho una línea, sobresale
   (o se encoge, con «Ajustar»), pero no se reparte en las líneas siguientes.
 - **Las fuentes en subconjunto** solo contienen los glifos que el documento usaba.
-  Si escribes caracteres que no están, se sustituye la fuente y se avisa.
+  Si escribes caracteres que no están, se sustituye la fuente y se avisa. Muchos
+  subconjuntos, además, vienen sin tabla de caracteres Unicode —se direccionan
+  por índice de glifo— y entonces no se pueden usar para escribir texto nuevo en
+  absoluto; en ese caso se recurre a esa misma fuente instalada en tu equipo, o a
+  su equivalente métrico.
 - **Si el PDF no embebe sus fuentes**, el texto que edites sí quedará embebido.
   Es lo correcto —así se ve igual en cualquier visor—, pero significa que en un
   equipo sin esa fuente instalada el texto editado se verá bien y el resto no.
@@ -127,7 +146,7 @@ archivo real, nunca una simulación.
 ## Desarrollo
 
 ```bash
-pip install -r requirements.txt pytest httpx
+pip install -r requirements.txt pytest httpx playwright
 python tools/make_sample_pdf.py ejemplo.pdf   # PDF de prueba con fuentes embebidas
 pytest
 ```
@@ -137,3 +156,13 @@ pytest
 La suite cubre la resolución de fuentes, la extracción con páginas rotadas, cada
 operación de edición y la API completa, incluida la comprobación de que el PDF
 guardado sigue llevando la fuente embebida.
+
+`tests/test_ui.py` conduce la interfaz en un navegador real **con ratón y teclado
+de verdad**. Existe porque las pruebas que fijan valores por el DOM no detectan
+toda una clase de fallo: una barra de formato cuyos controles no se pueden
+pulsar las pasa todas. Se omiten solas si no hay Playwright o navegador
+instalado; para ejecutarlas:
+
+```bash
+pip install playwright && playwright install chromium
+```

@@ -436,7 +436,14 @@ export class Editor {
         finish(true);
       }
     });
-    input.addEventListener('blur', () => finish(true), { once: true });
+    input.addEventListener('blur', () => {
+      // Reaching for the format bar is still editing this box; only focus
+      // landing anywhere else means the user is done with it.
+      setTimeout(() => {
+        if (document.activeElement?.closest?.('#formatbar')) return;
+        finish(true);
+      }, 0);
+    });
     this.active.finish = finish;
   }
 

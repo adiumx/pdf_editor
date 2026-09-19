@@ -1,0 +1,220 @@
+"""The editor driven through a real browser, with real mouse input.
+
+These exist because the unit tests could not catch a whole class of bug: a
+format bar whose controls cannot be clicked still passes every test that sets
+values through the DOM. Playwright's `select_option` and `fill` bypass the mouse
+the same way, so the tests here click, type and read focus.
+
+Skipped when Playwright or a browser is not installed.
+"""
+
+from __future__ import annotations
+
+import socket
+import threading
+import time
+
+import pytest
+
+from tests.conftest import build_pdf, requires_fonts
+
+playwright_api = pytest.importorskip("playwright.sync_api", reason="playwright no instalado")
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture(scope="module")
+def server():
+    """Serve the editor on a spare port for the length of the module."""
+    import uvicorn
+
+    from app.main import app, store
+
+    port = _free_port()
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
+    instance = uvicorn.Server(config)
+    thread = threading.Thread(target=instance.run, daemon=True)
+    thread.start()
+
+    deadline = time.time() + 20
+    while not instance.started and time.time() < deadline:
+        time.sleep(0.05)
+    if not instance.started:
+        pytest.skip("el servidor de pruebas no arrancó")
+
+    yield f"http://127.0.0.1:{port}"
+
+    instance.should_exit = True
+    thread.join(timeout=10)
+    store.close_all()
+
+
+def _launch(playwright):
+    """Start a browser, falling back to a browser installed out of band."""
+    import glob
+    import os
+
+    try:
+        return playwright.chromium.launch()
+    except Exception:
+        root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
+        for pattern in ("chromium-*/chrome-linux/chrome", "chromium-*/chrome-mac/*/Chromium"):
+            for path in sorted(glob.glob(os.path.join(root, pattern))):
+                try:
+                    return playwright.chromium.launch(
+                        executable_path=path, args=["--no-sandbox"]
+                    )
+                except Exception:
+                    continue
+        pytest.skip("no hay navegador de Playwright instalado")
+
+
+@pytest.fixture(scope="module")
+def browser():
+    with playwright_api.sync_playwright() as playwright:
+        instance = _launch(playwright)
+        yield instance
+        instance.close()
+
+
+@pytest.fixture
+def page(browser, server, tmp_path):
+    """A fresh tab with the sample document open.
+
+    Per test rather than per module: an open native dropdown or a half-finished
+    edit left behind by one test swallows the next test's clicks, and a shared
+    tab makes such a failure look like a bug in the feature under test.
+    """
+    tab = browser.new_page(viewport={"width": 1400, "height": 900})
+    errors: list[str] = []
+    tab.on("pageerror", lambda exc: errors.append(str(exc)))
+    tab.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
+
+    sample = tmp_path / "ejemplo.pdf"
+    sample.write_bytes(build_pdf())
+    tab.goto(server, wait_until="networkidle")
+    tab.set_input_files("#file-input", str(sample))
+    tab.wait_for_selector(".page .span", timeout=30000)
+
+    tab.console_errors = errors  # type: ignore[attr-defined]
+    yield tab
+    tab.close()
+
+
+def span_with(page, text: str):
+    """The overlay covering a given piece of text, found by what it covers.
+
+    Never by index: rewriting a line changes how the page splits into spans, so
+    positions shift under any test that edits something. The overlay itself is
+    empty, so the search goes through the text it carries as an attribute.
+    """
+    return page.locator(f'.page .span[data-text*="{text}"]').first
+
+
+def open_editor(page, text: str = "Primera linea"):
+    """Click a span the way a person would, and wait for its box."""
+    target = span_with(page, text)
+    target.wait_for(state="visible", timeout=10000)
+    target.click()
+    page.wait_for_selector(".span.is-editing .span__input", timeout=10000)
+
+
+@requires_fonts
+class TestClickingText:
+    def test_clicking_a_span_puts_the_caret_in_it(self, page):
+        """The box used to open with focus left on the body, so whatever the
+        user typed next went nowhere."""
+        open_editor(page)
+        focused = page.evaluate(
+            "() => document.activeElement?.classList?.contains('span__input') || false"
+        )
+        assert focused, "el foco no llegó al cuadro de edición"
+
+    def test_typing_after_clicking_reaches_the_text(self, page):
+        open_editor(page)
+        before = page.eval_on_selector(".span.is-editing .span__input", "e => e.textContent")
+        page.keyboard.type("ZZZ")
+        after = page.eval_on_selector(".span.is-editing .span__input", "e => e.textContent")
+        assert after != before and "ZZZ" in after
+
+
+@requires_fonts
+class TestFormatBar:
+    """Its controls used to be unclickable: a preventDefault meant to keep the
+    text box open also stopped the bar's own inputs from taking focus."""
+
+    def test_the_bar_appears_when_text_is_being_edited(self, page):
+        open_editor(page)
+        assert page.locator("#formatbar").is_visible()
+
+    def test_clicking_the_size_field_focuses_it(self, page):
+        open_editor(page)
+        page.locator("#fmt-size").click()
+        assert page.evaluate("() => document.activeElement?.id") == "fmt-size"
+
+    def test_typing_a_size_changes_the_field(self, page):
+        open_editor(page)
+        page.locator("#fmt-size").click()
+        page.keyboard.press("Control+a")
+        page.keyboard.type("21")
+        assert page.locator("#fmt-size").input_value() == "21"
+
+    def test_clicking_the_font_list_focuses_it(self, page):
+        open_editor(page)
+        page.locator("#fmt-family").click()
+        assert page.evaluate("() => document.activeElement?.id") == "fmt-family"
+
+    def test_the_font_list_offers_more_than_the_generic_families(self, page):
+        open_editor(page)
+        labels = page.eval_on_selector_all("#fmt-family optgroup", "els => els.map(e => e.label)")
+        options = page.eval_on_selector_all("#fmt-family option", "els => els.length")
+        assert any("Estándar" in label for label in labels)
+        assert any("Instaladas" in label for label in labels)
+        assert options > 6, "el desplegable debería ofrecer bastante más que las genéricas"
+
+    def test_the_size_field_is_not_rewritten_while_being_typed_in(self, page):
+        """Re-rendering the bar on every state change used to clobber input."""
+        open_editor(page)
+        page.locator("#fmt-size").click()
+        page.keyboard.press("Control+a")
+        page.keyboard.type("3")
+        page.keyboard.type("3")
+        assert page.locator("#fmt-size").input_value() == "33"
+
+
+@requires_fonts
+class TestApplyingChanges:
+    def test_a_size_change_reaches_the_document(self, page):
+        open_editor(page)
+        original = float(page.locator("#fmt-size").input_value())
+        assert original != 26
+
+        page.locator("#fmt-size").click()
+        page.keyboard.press("Control+a")
+        page.keyboard.type("26")
+        page.keyboard.press("Enter")  # Enter inside the bar applies
+        page.wait_for_function("() => !document.querySelector('.span.is-editing')", timeout=15000)
+        page.wait_for_selector(".page .span", timeout=15000)
+
+        # Read it back from the document, not from the bar's leftover state.
+        open_editor(page)
+        assert float(page.locator("#fmt-size").input_value()) == pytest.approx(26, abs=0.6)
+
+    def test_a_font_change_reaches_the_document(self, page):
+        open_editor(page)
+        page.locator("#fmt-family").click()
+        page.keyboard.press("Escape")  # close the native list, keep the box open
+        page.select_option("#fmt-family", "Liberation Mono")
+        page.click("#fmt-apply")
+        page.wait_for_function("() => !document.querySelector('.span.is-editing')", timeout=15000)
+        page.wait_for_selector(".page .span", timeout=15000)
+
+        open_editor(page)
+        assert "Mono" in page.locator("#fmt-family").input_value()
+
+    def test_no_console_errors_were_raised_along_the_way(self, page):
+        assert page.console_errors == []

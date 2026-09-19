@@ -67,6 +67,12 @@ export class PageView {
     }
     element.dataset.line = line.id;
     element.dataset.span = String(index);
+    // The overlay is empty — the glyphs are in the rendered image — so the text
+    // is carried here, both for screen readers and so the box can be found by
+    // what it covers rather than by its position on the page.
+    element.dataset.text = span.text;
+    element.setAttribute('role', 'textbox');
+    element.setAttribute('aria-label', span.text);
 
     const [x0, y0, x1, y1] = span.bbox;
     const z = this.zoom;

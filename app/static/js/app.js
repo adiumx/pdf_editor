@@ -110,8 +110,16 @@ const fmt = {
   align: $('fmt-align'),
 };
 
-// Clicking the bar must not count as leaving the text being edited.
-formatbar.addEventListener('mousedown', (event) => event.preventDefault());
+// Applying from the bar is the same as pressing Enter in the text.
+formatbar.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    editor.commitActive().catch(reportError);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    editor.cancelActive();
+  }
+});
 
 let familiesFor = null;
 
@@ -119,6 +127,7 @@ function fillFamilies() {
   fmt.family.replaceChildren();
   const groups = [
     ['Fuentes del documento', editor.families.filter((f) => f.source === 'document')],
+    ['Estándar del PDF', editor.families.filter((f) => f.source === 'standard')],
     ['Instaladas en este equipo', editor.families.filter((f) => f.source === 'system')],
     ['Genéricas', editor.families.filter((f) => f.source === 'generic')],
   ];
@@ -168,6 +177,8 @@ function syncFormatBar() {
     return;
   }
   const format = active.format;
+  // A control the user is typing in must not be rewritten under them.
+  const busy = document.activeElement;
   const currentFamily = format.family || (active.line ? familyOf(active.line.spans[active.spanIndex].font) : 'sans');
   if (![...fmt.family.options].some((option) => option.value === currentFamily)) {
     const option = document.createElement('option');
@@ -175,9 +186,9 @@ function syncFormatBar() {
     option.textContent = currentFamily;
     fmt.family.prepend(option);
   }
-  fmt.family.value = currentFamily;
-  fmt.size.value = String(format.size);
-  fmt.color.value = format.color;
+  if (busy !== fmt.family) fmt.family.value = currentFamily;
+  if (busy !== fmt.size) fmt.size.value = String(format.size);
+  if (busy !== fmt.color) fmt.color.value = format.color;
   fmt.bold.classList.toggle('is-active', !!format.bold);
   fmt.italic.classList.toggle('is-active', !!format.italic);
   fmt.fit.checked = !!format.fit;
@@ -191,7 +202,8 @@ function syncFormatBar() {
 fmt.family.addEventListener('change', () => editor.updateActiveFormat({ family: fmt.family.value }));
 fmt.size.addEventListener('input', () => {
   const size = Number(fmt.size.value);
-  if (size > 0) editor.updateActiveFormat({ size });
+  // An empty or half-typed value ("" on the way to "12") is not a size yet.
+  if (Number.isFinite(size) && size > 0) editor.updateActiveFormat({ size });
 });
 fmt.color.addEventListener('input', () => editor.updateActiveFormat({ color: fmt.color.value }));
 fmt.bold.addEventListener('click', () => editor.updateActiveFormat({ bold: !editor.active?.format.bold }));
