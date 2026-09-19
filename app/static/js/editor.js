@@ -263,7 +263,7 @@ export class Editor {
   }
 
   /** Write the active span back into the PDF, if anything actually changed. */
-  async commitActive() {
+  async commitActive({ reflow = false } = {}) {
     if (!this.active) return;
     // A new text box is committed by its own handler, which knows the
     // rectangle it was drawn in; there is no line to write back to.
@@ -276,7 +276,7 @@ export class Editor {
     this.active = null;
     view.closeEditor(line.id, spanIndex);
 
-    if (text === original && !formatDirty) {
+    if (text === original && !formatDirty && !reflow) {
       this._emit();
       return;
     }
@@ -295,20 +295,58 @@ export class Editor {
     });
 
     const kept = spans.filter((span) => span.text !== '');
-    const operation = {
-      op: 'replace_line',
+    const operation = this._writeOperation(view, line, kept, spanIndex, format, reflow);
+    await this.applyOperations([operation], { affected: [line.page] });
+  }
+
+  /**
+   * How to put a line's new spans back on the page.
+   *
+   * Text that runs across several lines is sent as its whole paragraph, so the
+   * server can re-break it: a line that no longer fits should push words down,
+   * not run into the margin. A standalone line is sent on its own, which lets
+   * the server leave everything before the edit untouched.
+   */
+  _writeOperation(view, line, spans, spanIndex, format, reflow) {
+    const paragraph = view.lines.filter((item) => item.paragraph === line.paragraph);
+    const base = {
       page: line.page,
+      align: format.align,
+      fit: format.fit ? 'shrink' : 'overflow',
+    };
+
+    if (paragraph.length > 1) {
+      return {
+        ...base,
+        op: 'replace_paragraph',
+        box: line.block_bbox,
+        reflow,
+        lines: paragraph.map((item) => (item.id === line.id ? { ...item, spans } : item)),
+        edited: {
+          line: paragraph.findIndex((item) => item.id === line.id),
+          span: spans.indexOf(spans[spanIndex]) >= 0 ? spanIndex : 0,
+        },
+      };
+    }
+
+    return {
+      ...base,
+      op: 'replace_line',
       bbox: line.bbox,
       origin: line.origin,
       rotation: line.rotation,
-      align: format.align,
-      fit: format.fit ? 'shrink' : 'overflow',
       // Everything before the edited span is unchanged, so the server can leave
       // it on the page untouched instead of redrawing it.
-      from_span: kept.indexOf(spans[spanIndex]),
-      spans: kept,
+      from_span: spanIndex,
+      spans,
     };
-    await this.applyOperations([operation], { affected: [line.page] });
+  }
+
+  /** Whether the text being edited is part of a paragraph that can re-wrap. */
+  get activeIsInParagraph() {
+    const active = this.active;
+    if (!active?.line) return false;
+    return active.view.lines.filter((item) => item.paragraph === active.line.paragraph).length > 1;
   }
 
   /** Remove the span being edited (or the whole line if it is the only one). */
@@ -319,15 +357,10 @@ export class Editor {
     view.closeEditor(line.id, spanIndex);
     const remaining = line.spans.filter((_span, index) => index !== spanIndex);
     const operation = remaining.length
-      ? {
-          op: 'replace_line',
-          page: line.page,
-          bbox: line.bbox,
-          origin: line.origin,
-          rotation: line.rotation,
-          align: line.align,
-          spans: remaining,
-        }
+      ? this._writeOperation(
+          view, line, remaining, 0,
+          { align: line.align, fit: 'overflow' }, true,
+        )
       : { op: 'delete_line', page: line.page, bbox: line.bbox, origin: line.origin, rotation: line.rotation };
     await this.applyOperations([operation], { affected: [line.page] });
   }

@@ -106,6 +106,18 @@ Los cambios de una misma página se agrupan: primero todos los borrados y despu�
 todos los redibujados, para que una edición no se coma el texto que otra acaba de
 escribir.
 
+**El texto se reparte entre las líneas.** Si al editar un renglón deja de caber,
+el párrafo se vuelve a partir: las palabras sobrantes bajan a las líneas
+siguientes en lugar de salirse por el margen. Mientras quepa, no se toca nada
+más que el renglón editado. El botón **⤶ Reajustar** fuerza el reparto cuando
+quieres recolocar un párrafo que se ha quedado con huecos.
+
+Un párrafo se reconoce por sus propias señales: mismo tipo y tamaño de letra,
+el interlineado propio del bloque, el mismo margen izquierdo y —la más
+reveladora— que la línea anterior llegara hasta el margen derecho en vez de
+quedarse corta, porque una línea corta es donde termina un párrafo. Así un
+titular pegado a un cuerpo de texto no se arrastra dentro de él.
+
 **Sólo se redibuja lo que hace falta.** Si editas la parte final de una línea —el
 caso típico: «**Habilidades:** Python, SQL…»—, lo que hay antes se queda tal cual
 en la página, sin volver a dibujarse. Importa cuando las fuentes del documento no
@@ -122,8 +134,13 @@ queda nada que pulsar.
 ## Limitaciones
 
 - **No hace OCR.** Un PDF escaneado sin capa de texto no tiene texto que editar.
-- **El reflujo es por línea**, no por párrafo: si alargas mucho una línea, sobresale
-  (o se encoge, con «Ajustar»), pero no se reparte en las líneas siguientes.
+- **El ancho del párrafo se deduce del propio texto**, porque el PDF no guarda
+  márgenes: es el de su línea más ancha. En un párrafo cuyas líneas son todas
+  cortas, el reparto usará esa medida corta.
+- **El texto girado no se reparte** entre líneas; se edita renglón a renglón.
+- **Un párrafo que crece puede solaparse con lo que viene debajo**: nada se mueve
+  para hacerle sitio. Se te avisa, y con «Ajustar» se reduce el tamaño para que
+  quepa en las líneas que tenía.
 - **Las fuentes en subconjunto** solo contienen los glifos que el documento usaba.
   Si escribes caracteres que no están, se sustituye la fuente y se avisa. Muchos
   subconjuntos, además, vienen sin tabla de caracteres Unicode —se direccionan

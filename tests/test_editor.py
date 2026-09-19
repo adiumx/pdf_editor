@@ -426,3 +426,130 @@ class TestUntouchedSpansAreLeftAlone:
         rect = self._redaction_for(doc, line, "left", 99)
         assert rect.x0 == pytest.approx(line["bbox"][0], abs=_REDACT_PAD + 0.1)
         doc.close()
+
+
+@requires_fonts
+class TestParagraphReflow:
+    """Editing running text used to leave one line overflowing into the margin,
+    because nothing pulled the extra words down into the lines below."""
+
+    def _paragraph(self, width_words=9, lines=4):
+        """A block of running text, wide enough to have a real measure."""
+        font = pymupdf.Font(fontfile=FONT_FILES["serif"])
+        rows, y = [], 100
+        for index in range(lines):
+            text = " ".join(f"palabra{index}{n}" for n in range(width_words))
+            rows.append(((72, y), text, "serif", 11))
+            y += 14
+        doc = pymupdf.open(stream=build_pdf(rows), filetype="pdf")
+        page = extract_page(doc, 0, FontResolver(doc))
+        group = [line for line in page["lines"] if line["paragraph_size"] > 1]
+        assert len(group) >= 3, "el PDF de prueba no produjo un párrafo"
+        return doc, group
+
+    def _reflow(self, doc, group, edited_line, new_text, **extra):
+        payload = [dict(line) for line in group]
+        payload[edited_line] = dict(payload[edited_line])
+        payload[edited_line]["spans"] = [dict(s) for s in group[edited_line]["spans"]]
+        payload[edited_line]["spans"][0]["text"] = new_text
+        return apply_operations(doc, FontResolver(doc), [{
+            "op": "replace_paragraph", "page": 0, "box": group[0]["block_bbox"],
+            "align": group[0]["align"], "lines": payload,
+            "edited": {"line": edited_line, "span": 0}, **extra,
+        }])
+
+    def test_a_line_that_grows_pushes_words_down_instead_of_overflowing(self):
+        doc, group = self._paragraph()
+        margin = group[0]["block_bbox"][2]
+        self._reflow(doc, group, 0, group[0]["text"] + " " + " ".join(["añadida"] * 12))
+        after = extract_page(doc, 0, FontResolver(doc))
+        for line in after["lines"]:
+            assert line["bbox"][2] <= margin + 1, f"se sale del margen: {line['text']!r}"
+        doc.close()
+
+    def test_no_word_is_lost_when_re_wrapping(self):
+        doc, group = self._paragraph()
+        before = set(" ".join(line["text"] for line in group).split())
+        self._reflow(doc, group, 1, group[1]["text"] + " intercalada")
+        after = set(text_of(doc).split())
+        assert before <= after, f"se perdieron {before - after}"
+        assert "intercalada" in after
+        doc.close()
+
+    def test_growing_past_the_original_height_is_reported(self):
+        doc, group = self._paragraph()
+        warnings = self._reflow(doc, group, 0, group[0]["text"] + " " + " ".join(["mas"] * 40))
+        assert any(w.kind == "paragraph-grew" for w in warnings)
+        doc.close()
+
+    def test_shrink_keeps_the_paragraph_in_its_original_number_of_lines(self):
+        doc, group = self._paragraph()
+        self._reflow(doc, group, 0, group[0]["text"] + " " + " ".join(["extra"] * 6),
+                     fit="shrink")
+        after = extract_page(doc, 0, FontResolver(doc))
+        rewritten = [l for l in after["lines"] if "palabra" in l["text"]]
+        assert len(rewritten) <= len(group)
+        doc.close()
+
+    def test_the_lines_do_not_run_into_each_other_when_the_size_grows(self):
+        """Keeping the original leading after a size increase overlaps them."""
+        doc, group = self._paragraph()
+        payload = [dict(line) for line in group]
+        payload[0] = dict(payload[0])
+        payload[0]["spans"] = [dict(s) for s in group[0]["spans"]]
+        payload[0]["spans"][0]["size"] = 24
+        apply_operations(doc, FontResolver(doc), [{
+            "op": "replace_paragraph", "page": 0, "box": group[0]["block_bbox"],
+            "align": group[0]["align"], "lines": payload,
+            "edited": {"line": 0, "span": 0}, "reflow": True,
+        }])
+        after = extract_page(doc, 0, FontResolver(doc))
+        rows = sorted(
+            (l for l in after["lines"] if "palabra" in l["text"]),
+            key=lambda item: item["bbox"][1],
+        )
+        for previous, current in zip(rows, rows[1:]):
+            assert current["bbox"][1] >= previous["bbox"][3] - 0.5, "las líneas se solapan"
+        doc.close()
+
+    def test_an_edit_that_still_fits_does_not_disturb_the_paragraph(self):
+        """Only the edited line is touched while it stays inside the margin."""
+        doc, group = self._paragraph()
+        before = [list(line["bbox"]) for line in group[1:]]
+        self._reflow(doc, group, 0, "corta")
+        after = extract_page(doc, 0, FontResolver(doc))
+        rows = [l for l in after["lines"] if "palabra1" in l["text"] or "palabra2" in l["text"]]
+        for line in rows:
+            assert any(
+                line["bbox"][1] == pytest.approx(box[1], abs=0.2) for box in before
+            ), "una línea que no se editó se movió"
+        doc.close()
+
+    def test_a_single_line_paragraph_is_never_reflowed(self, doc, resolver):
+        page = extract_page(doc, 0, resolver)
+        alone = next(line for line in page["lines"] if line["paragraph_size"] == 1)
+        spans = [dict(s) for s in alone["spans"]]
+        spans[0]["text"] = "texto sustituido"
+        apply_operations(doc, resolver, [{
+            "op": "replace_paragraph", "page": 0, "box": alone["block_bbox"],
+            "align": alone["align"], "lines": [{**alone, "spans": spans}],
+            "edited": {"line": 0, "span": 0},
+        }])
+        assert "texto sustituido" in text_of(doc)
+
+    def test_links_follow_the_words_they_sat_over(self, linked_doc):
+        """Re-wrapping moves every word; the links have to move with them."""
+        page = extract_page(linked_doc, 0, FontResolver(linked_doc))
+        group = [line for line in page["lines"] if line["paragraph_size"] > 1]
+        assert len(group) >= 2, "el PDF enlazado no produjo un párrafo de varias líneas"
+        before = {link["uri"] for link in linked_doc[0].get_links()}
+        payload = [dict(line) for line in group]
+        payload[0]["spans"] = [dict(s) for s in group[0]["spans"]]
+        payload[0]["spans"][0]["text"] += " con bastante texto adicional para forzar el corte"
+        apply_operations(linked_doc, FontResolver(linked_doc), [{
+            "op": "replace_paragraph", "page": 0, "box": group[0]["block_bbox"],
+            "align": group[0]["align"], "lines": payload,
+            "edited": {"line": 0, "span": 0}, "reflow": True,
+        }])
+        after = {link["uri"] for link in linked_doc[0].get_links()}
+        assert before <= after, f"se perdieron {before - after}"

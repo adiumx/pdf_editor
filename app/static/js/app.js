@@ -108,6 +108,7 @@ const fmt = {
   apply: $('fmt-apply'),
   remove: $('fmt-delete'),
   align: $('fmt-align'),
+  reflow: $('fmt-reflow'),
 };
 
 // Applying from the bar is the same as pressing Enter in the text.
@@ -193,6 +194,8 @@ function syncFormatBar() {
   fmt.italic.classList.toggle('is-active', !!format.italic);
   fmt.fit.checked = !!format.fit;
   fmt.remove.hidden = !active.line;
+  // Only text that spans several lines has anything to re-wrap.
+  fmt.reflow.hidden = !editor.activeIsInParagraph;
   for (const button of fmt.align.querySelectorAll('[data-align]')) {
     button.classList.toggle('is-active', button.dataset.align === format.align);
   }
@@ -213,6 +216,9 @@ for (const button of fmt.align.querySelectorAll('[data-align]')) {
   button.addEventListener('click', () => editor.updateActiveFormat({ align: button.dataset.align }));
 }
 fmt.remove.addEventListener('click', () => editor.deleteActive().catch(reportError));
+fmt.reflow.addEventListener('click', () =>
+  editor.commitActive({ reflow: true }).catch(reportError),
+);
 fmt.apply.addEventListener('click', () => editor.commitActive().catch(reportError));
 
 /* ---------- keyboard ---------- */

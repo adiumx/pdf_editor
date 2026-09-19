@@ -189,7 +189,9 @@ class TestFormatBar:
 @requires_fonts
 class TestApplyingChanges:
     def test_a_size_change_reaches_the_document(self, page):
-        open_editor(page)
+        # A line of its own, so the change takes the single-line path and the
+        # text stays findable; re-wrapping is covered on its own below.
+        open_editor(page, "Titulo en negrita")
         original = float(page.locator("#fmt-size").input_value())
         assert original != 26
 
@@ -201,11 +203,11 @@ class TestApplyingChanges:
         page.wait_for_selector(".page .span", timeout=15000)
 
         # Read it back from the document, not from the bar's leftover state.
-        open_editor(page)
+        open_editor(page, "Titulo en negrita")
         assert float(page.locator("#fmt-size").input_value()) == pytest.approx(26, abs=0.6)
 
     def test_a_font_change_reaches_the_document(self, page):
-        open_editor(page)
+        open_editor(page, "Titulo en negrita")
         page.locator("#fmt-family").click()
         page.keyboard.press("Escape")  # close the native list, keep the box open
         page.select_option("#fmt-family", "Liberation Mono")
@@ -213,8 +215,32 @@ class TestApplyingChanges:
         page.wait_for_function("() => !document.querySelector('.span.is-editing')", timeout=15000)
         page.wait_for_selector(".page .span", timeout=15000)
 
-        open_editor(page)
+        open_editor(page, "Titulo en negrita")
         assert "Mono" in page.locator("#fmt-family").input_value()
 
     def test_no_console_errors_were_raised_along_the_way(self, page):
         assert page.console_errors == []
+
+
+@requires_fonts
+class TestReflow:
+    """Text that runs across several lines re-wraps; a line on its own does not."""
+
+    def test_the_reflow_button_appears_only_for_multi_line_text(self, page):
+        open_editor(page, "Primera linea")
+        assert page.locator("#fmt-reflow").is_visible()
+
+        page.keyboard.press("Escape")
+        open_editor(page, "Una linea en sans")
+        assert page.locator("#fmt-reflow").is_hidden()
+
+    def test_re_wrapping_keeps_every_word(self, page):
+        open_editor(page, "Primera linea")
+        page.click("#fmt-reflow")
+        page.wait_for_function("() => !document.querySelector('.span.is-editing')", timeout=15000)
+        page.wait_for_selector(".page .span", timeout=15000)
+        text = " ".join(
+            page.eval_on_selector_all(".page .span", "els => els.map(e => e.dataset.text)")
+        )
+        for word in ("Primera", "documento", "Segunda", "debajo"):
+            assert word in text, f"se perdió «{word}» al reajustar"

@@ -9,6 +9,7 @@ the text an earlier edit just wrote.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
@@ -24,6 +25,33 @@ _REDACT_PAD = 0.4
 # A replacement is never shrunk past this fraction of its original size; below
 # it the result looks wrong enough that overflowing is the better answer.
 _MIN_SHRINK = 0.5
+
+
+@dataclass
+class _Token:
+    """A word or a run of spaces, with where it was and how it is set."""
+
+    text: str
+    run: int
+    is_space: bool
+    width: float
+    source_line: int = -1
+    source_from: float = 0.0
+    source_to: float = 0.0
+    placed_line: int = -1
+    placed_from: float = 0.0
+    placed_to: float = 0.0
+
+
+@dataclass
+class _Run:
+    """A stretch of text set one way, as it goes into the paragraph."""
+
+    text: str
+    font: ResolvedFont
+    size: float
+    color: tuple[float, float, float]
+    opacity: float = 1.0
 
 
 class EditError(ValueError):
@@ -78,6 +106,7 @@ class _PageBatch:
     texts: list[_PendingText] = field(default_factory=list)
     images: list[tuple[pymupdf.Rect, bytes, int]] = field(default_factory=list)
     rewrites: list[_LineRewrite] = field(default_factory=list)
+    new_links: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _axis_extent(bbox: Sequence[float], rotation: int) -> float:
@@ -162,6 +191,76 @@ def _line_start(
     if rotation == 270:
         return (ox, y0 + offset)
     return (x0 + offset, oy)
+
+
+def _tokenize(runs: list[_Run]) -> list[_Token]:
+    """Break the paragraph into the pieces a line can be broken between."""
+    tokens: list[_Token] = []
+    for index, run in enumerate(runs):
+        for piece in re.split(r"(\s+)", run.text):
+            if not piece:
+                continue
+            tokens.append(
+                _Token(
+                    text=piece,
+                    run=index,
+                    is_space=piece.isspace(),
+                    width=run.font.text_length(piece, run.size),
+                )
+            )
+    return tokens
+
+
+def _wrap(tokens: list[_Token], first_width: float, width: float) -> list[list[_Token]]:
+    """Greedily break tokens into lines, the way a text engine does.
+
+    The first line may be narrower than the rest, because a paragraph's opening
+    line is often indented.
+    """
+    lines: list[list[_Token]] = []
+    current: list[_Token] = []
+    used = 0.0
+    limit = max(first_width, 1.0)
+
+    for token in tokens:
+        if token.is_space and not current:
+            continue  # a wrapped line does not start with a space
+        if not token.is_space and current and used + token.width > limit:
+            while current and current[-1].is_space:
+                used -= current.pop().width
+            lines.append(current)
+            current, used, limit = [], 0.0, max(width, 1.0)
+        current.append(token)
+        used += token.width
+
+    while current and current[-1].is_space:
+        current.pop()
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _group_into_runs(line: list[_Token]) -> list[tuple[int, str]]:
+    """Merge a wrapped line's tokens back into one piece per style."""
+    grouped: list[tuple[int, str]] = []
+    for token in line:
+        if grouped and grouped[-1][0] == token.run:
+            grouped[-1] = (token.run, grouped[-1][1] + token.text)
+        else:
+            grouped.append((token.run, token.text))
+    return grouped
+
+
+def _median_leading(
+    origins: list[tuple[float, float]], boxes: list[pymupdf.Rect]
+) -> float:
+    """The paragraph's own line spacing, read from its baselines."""
+    deltas = sorted(
+        b[1] - a[1] for a, b in zip(origins, origins[1:]) if b[1] - a[1] > 0
+    )
+    if deltas:
+        return deltas[len(deltas) // 2]
+    return max((box.y1 - box.y0 for box in boxes), default=12.0) * 1.2
 
 
 def _span_font(
@@ -348,6 +447,254 @@ class EditSession:
             return [x0, box[1], x1, y1], origin
         return [box[0], y0, x1, y1], origin
 
+    def replace_paragraph(self, op: dict[str, Any]) -> None:
+        """Rewrite a paragraph, re-wrapping it across its lines.
+
+        Editing one line of running text used to leave it overflowing into the
+        margin, because nothing pulled the extra words down into the lines
+        below. Here the paragraph is rebuilt as one stream of styled words and
+        broken again at its own measure.
+
+        The cheap path still applies: while the edited line fits between its
+        start and the paragraph's right margin, only that line is touched, which
+        leaves the rest of the paragraph on the page untouched.
+        """
+        pno = int(op["page"])
+        lines = op.get("lines") or []
+        edited = op.get("edited") or {}
+        if not lines:
+            raise EditError("El párrafo no tiene líneas")
+
+        index = max(0, min(int(edited.get("line", 0)), len(lines) - 1))
+        align = op.get("align", "left")
+        box = self._rect(pno, op.get("box") or lines[0]["bbox"])
+
+        rotated = any(int(line.get("rotation", 0)) % 360 for line in lines)
+        single = len(lines) == 1
+        forced = bool(op.get("reflow"))
+
+        if not forced and (rotated or single or self._line_still_fits(pno, lines[index], box, align)):
+            # Nothing has to move but the line being edited.
+            self.replace_line({**lines[index], "op": "replace_line", "page": pno,
+                               "align": align, "fit": op.get("fit", "overflow"),
+                               "from_span": edited.get("span", 0)})
+            return
+
+        if rotated:
+            self._warn(pno, "no-reflow", "El texto girado no se reajusta entre líneas.")
+            self.replace_line({**lines[index], "op": "replace_line", "page": pno, "align": align})
+            return
+
+        self._reflow(pno, lines, box, align, op.get("fit", "overflow"))
+
+    def _line_still_fits(
+        self, pno: int, line: dict[str, Any], box: pymupdf.Rect, align: str
+    ) -> bool:
+        """Whether the edited line stays inside the paragraph's right margin."""
+        if align != "left":
+            return False
+        spans = [s for s in line.get("spans", []) if s.get("text")]
+        if not spans:
+            return True
+        needed = sum(
+            _span_font(self._resolver, pno, span).text_length(
+                span["text"], float(span.get("size", 11.0))
+            )
+            for span in spans
+        )
+        start = self._rect(pno, line["bbox"]).x0
+        return needed <= (box.x1 - start) + 0.5
+
+    def _paragraph_stream(
+        self, pno: int, lines: list[dict[str, Any]]
+    ) -> tuple[list[_Run], list[_Token]]:
+        """Flatten a paragraph into styled runs and the words that make it up.
+
+        Each word keeps where it was on the page, so anything anchored to it —
+        a hyperlink — can be found again after the paragraph is re-broken.
+        """
+        runs: list[_Run] = []
+        tokens: list[_Token] = []
+
+        for position, line in enumerate(lines):
+            cursor = self._rect(pno, line["bbox"]).x0
+            for span in line.get("spans", []):
+                text = span.get("text", "")
+                if not text:
+                    continue
+                font = _span_font(self._resolver, pno, span)
+                if font.note:
+                    self._warn(pno, "font-substituted", font.note)
+                size = float(span.get("size", 11.0))
+                runs.append(
+                    _Run(
+                        text=text,
+                        font=font,
+                        size=size,
+                        color=hex_to_pdf(span.get("color", "#000000")),
+                        opacity=float(span.get("alpha", 255)) / 255.0,
+                    )
+                )
+                run_index = len(runs) - 1
+                for piece in re.split(r"(\s+)", text):
+                    if not piece:
+                        continue
+                    width = font.text_length(piece, size)
+                    tokens.append(
+                        _Token(
+                            text=piece, run=run_index, is_space=piece.isspace(),
+                            width=width, source_line=position,
+                            source_from=cursor, source_to=cursor + width,
+                        )
+                    )
+                    cursor += width
+
+            # Lines of one paragraph are joined by a space, which is what the
+            # break between them stood for — unless one is already there, or the
+            # line broke mid-word on a hyphen.
+            last = tokens[-1] if tokens else None
+            if position < len(lines) - 1 and last is not None and not last.is_space:
+                if not last.text.endswith("-"):
+                    run = runs[last.run]
+                    tokens.append(
+                        _Token(text=" ", run=last.run, is_space=True,
+                               width=run.font.text_length(" ", run.size),
+                               source_line=position, source_from=cursor, source_to=cursor)
+                    )
+        return runs, tokens
+
+    def _reflow(
+        self,
+        pno: int,
+        lines: list[dict[str, Any]],
+        box: pymupdf.Rect,
+        align: str,
+        fit: str,
+    ) -> None:
+        """Re-break a paragraph and lay it out again from its first baseline."""
+        batch = self._batch(pno)
+        runs, tokens = self._paragraph_stream(pno, lines)
+        if not tokens:
+            for line in lines:
+                batch.redactions.append(
+                    self._rect(pno, line["bbox"])
+                    + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD)
+                )
+            return
+
+        boxes = [self._rect(pno, line["bbox"]) for line in lines]
+        origins = [self._point(pno, line.get("origin") or [b.x0, b.y1]) for line, b in zip(lines, boxes)]
+        first_left = boxes[0].x0
+        body_left = boxes[1].x0 if len(boxes) > 1 else first_left
+        leading = _median_leading(origins, boxes)
+
+        # Bigger text needs more room between baselines. The paragraph's own
+        # spacing is the right starting point — it may be deliberately loose —
+        # but it cannot be less than the text itself needs, or the lines run
+        # into each other. What it needs comes from the fonts being drawn, not
+        # from the sizes the request arrived with: those already carry any
+        # change the user just made.
+        natural = max(
+            (
+                (run.font.font.ascender - run.font.font.descender) * run.size
+                for run in runs
+            ),
+            default=0.0,
+        )
+        leading = max(leading, natural)
+
+        scale = 1.0
+        for _ in range(8):
+            wrapped = _wrap(tokens, box.x1 - first_left, box.x1 - body_left)
+            if fit != "shrink" or len(wrapped) <= len(lines) or scale <= _MIN_SHRINK:
+                break
+            scale = max(scale * 0.94, _MIN_SHRINK)
+            for run in runs:
+                run.size = float(run.size) * 0.94
+            for token in tokens:
+                token.width = runs[token.run].font.text_length(
+                    token.text, runs[token.run].size
+                )
+            leading *= 0.94
+        else:
+            wrapped = _wrap(tokens, box.x1 - first_left, box.x1 - body_left)
+
+        if len(wrapped) > len(lines):
+            self._warn(
+                pno,
+                "paragraph-grew",
+                f"El párrafo pasa de {len(lines)} a {len(wrapped)} líneas y puede "
+                "solaparse con lo que viene debajo.",
+            )
+
+        for rect in boxes:
+            batch.redactions.append(rect + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD))
+
+        baseline = origins[0][1]
+        for number, wrapped_line in enumerate(wrapped):
+            left = first_left if number == 0 else body_left
+            total = sum(token.width for token in wrapped_line)
+            cursor = left + _start_offset(align, box.x1 - left, total)
+            for token in wrapped_line:
+                token.placed_line = number
+                token.placed_from = cursor
+                token.placed_to = cursor + token.width
+                cursor += token.width
+
+            cursor = left + _start_offset(align, box.x1 - left, total)
+            for run_index, text in _group_into_runs(wrapped_line):
+                run = runs[run_index]
+                batch.texts.append(
+                    _PendingText(
+                        page=pno, point=(cursor, baseline), text=text,
+                        resolved=run.font, fontsize=run.size, color=run.color,
+                        rotate=0, opacity=run.opacity,
+                    )
+                )
+                cursor += run.font.text_length(text, run.size)
+            baseline += leading
+
+        self._relocate_links(pno, boxes, origins, tokens, wrapped, leading, batch)
+
+    def _relocate_links(
+        self,
+        pno: int,
+        boxes: list[pymupdf.Rect],
+        origins: list[tuple[float, float]],
+        tokens: list[_Token],
+        wrapped: list[list[_Token]],
+        leading: float,
+        batch: _PageBatch,
+    ) -> None:
+        """Move the paragraph's links onto the words they used to sit over."""
+        page = self._doc[pno]
+        for link in page.get_links():
+            rect = pymupdf.Rect(link["from"])
+            covered = [
+                token
+                for token in tokens
+                if token.placed_line >= 0
+                and 0 <= token.source_line < len(boxes)
+                and rect.y0 < boxes[token.source_line].y1
+                and rect.y1 > boxes[token.source_line].y0
+                and token.source_to > rect.x0
+                and token.source_from < rect.x1
+            ]
+            if not covered:
+                continue
+            by_line: dict[int, list[_Token]] = {}
+            for token in covered:
+                by_line.setdefault(token.placed_line, []).append(token)
+            height = boxes[0].y1 - boxes[0].y0
+            for number, group in by_line.items():
+                top = origins[0][1] + number * leading - height + (boxes[0].y1 - origins[0][1])
+                moved = dict(link)
+                moved["from"] = pymupdf.Rect(
+                    min(t.placed_from for t in group), top,
+                    max(t.placed_to for t in group), top + height,
+                )
+                batch.new_links.append(moved)
+
     def delete_line(self, op: dict[str, Any]) -> None:
         """Erase a line without putting anything back."""
         self.replace_line({**op, "spans": []})
@@ -462,7 +809,12 @@ class EditSession:
                 except Exception as exc:
                     raise EditError(f"No se pudo insertar la imagen: {exc}") from exc
 
-            if links_before:
+            for link in batch.new_links:
+                try:
+                    page.insert_link(link)
+                except Exception:
+                    continue
+            if links_before and not batch.new_links:
                 self._restore_links(page, links_before, batch)
 
         return self.warnings
@@ -519,6 +871,8 @@ def apply_operations(
         kind = op.get("op")
         if kind == "replace_line":
             session.replace_line(op)
+        elif kind == "replace_paragraph":
+            session.replace_paragraph(op)
         elif kind == "delete_line":
             session.delete_line(op)
         elif kind == "add_text":

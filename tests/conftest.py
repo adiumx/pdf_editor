@@ -107,13 +107,18 @@ def build_pdf_with_links() -> bytes:
     page = doc.new_page()
     for name, path in _available.items():
         page.insert_font(fontname=name, fontfile=path)
-    page.insert_text((72, 100), "Contacto: alguien@example.com y su web", fontname="serif", fontsize=12)
-    page.insert_text((72, 140), "Otra linea con su propio enlace aqui", fontname="serif", fontsize=12)
-    page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(120, 88, 220, 104),
+    # Two lines close enough, and even enough, to read as one paragraph, so
+    # re-wrapping has something to work on.
+    page.insert_text((72, 100), "Contacto: alguien@example.com y tambien su web",
+                     fontname="serif", fontsize=12)
+    page.insert_text((72, 115), "personal, con su propio enlace puesto justo aqui",
+                     fontname="serif", fontsize=12)
+    page.insert_text((72, 180), "Una linea suelta, lejos y sola", fontname="serif", fontsize=12)
+    page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(120, 90, 220, 102),
                       "uri": "mailto:alguien@example.com"})
-    page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(240, 88, 280, 104),
+    page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(250, 90, 290, 102),
                       "uri": "https://example.com"})
-    page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(200, 128, 260, 144),
+    page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(200, 168, 280, 182),
                       "uri": "https://otra.example.com"})
     data = doc.tobytes(garbage=4, deflate=True)
     doc.close()

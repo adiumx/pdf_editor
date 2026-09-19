@@ -106,6 +106,57 @@ def _cluster_lines(lines: list[dict]) -> list[list[dict]]:
     return clusters
 
 
+def _dominant_style(line: dict) -> tuple[str, float]:
+    """The typeface a line is mostly set in, as (font name, size)."""
+    widest = max(line["spans"], key=lambda span: len(span["text"]))
+    return (widest["font"], round(widest["size"], 1))
+
+
+def _paragraph_clusters(lines: list[dict]) -> list[list[dict]]:
+    """Group lines that are the same paragraph of running text.
+
+    Stricter than :func:`_cluster_lines`, which only needs to see enough to
+    guess alignment. Re-wrapping rewrites every line it is given, so a heading
+    swept in with the body below it would be reflowed into that body. A line
+    continues a paragraph only when it is set the same way, follows at the
+    paragraph's own line spacing, starts at the same margin, and — the telling
+    one — the line before it ran to the right margin instead of stopping short,
+    because a short line is where a paragraph ends.
+    """
+    clusters: list[list[dict]] = []
+    for line in sorted(lines, key=lambda item: (item["bbox"][1], item["bbox"][0])):
+        if clusters and _continues(clusters[-1], line):
+            clusters[-1].append(line)
+        else:
+            clusters.append([line])
+    return clusters
+
+
+def _continues(cluster: list[dict], line: dict) -> bool:
+    """Whether ``line`` is the next line of ``cluster``'s paragraph."""
+    previous = cluster[-1]
+    if previous["rotation"] != line["rotation"] or line["rotation"] != 0:
+        return False  # re-wrapping rotated text is not attempted
+    if _dominant_style(previous) != _dominant_style(line):
+        return False
+
+    height = max(previous["bbox"][3] - previous["bbox"][1], 1.0)
+    leading = line["origin"][1] - previous["origin"][1]
+    if not 0.7 * height <= leading <= 2.2 * height:
+        return False
+
+    # The paragraph's own left margin: the first line may be indented, the rest
+    # are not, so the margin is set by the second line onwards.
+    margin = cluster[1]["bbox"][0] if len(cluster) > 1 else line["bbox"][0]
+    if abs(line["bbox"][0] - margin) > 2.0:
+        return False
+
+    # A line that stopped well short of the right margin ended its paragraph.
+    right = max(item["bbox"][2] for item in cluster)
+    slack = 2.5 * _dominant_style(previous)[1]
+    return previous["bbox"][2] >= right - slack
+
+
 def _detect_alignment(lines: list[dict]) -> str:
     """Guess how a paragraph's lines are aligned, so re-flow can preserve it.
 
@@ -219,18 +270,25 @@ def extract_page(
             )
         lines.extend(block_lines)
 
-    # Alignment is decided across the whole page, not per block.
+    # Alignment is read from loosely grouped neighbours, which is all it needs.
     for cluster in _cluster_lines(lines):
         alignment = _detect_alignment(cluster)
-        paragraph = [
+        for line in cluster:
+            line["align"] = alignment
+
+    # Paragraphs, for re-wrapping, are grouped far more strictly.
+    for index, cluster in enumerate(_paragraph_clusters(lines)):
+        box = [
             min(line["bbox"][0] for line in cluster),
             min(line["bbox"][1] for line in cluster),
             max(line["bbox"][2] for line in cluster),
             max(line["bbox"][3] for line in cluster),
         ]
-        for line in cluster:
-            line["align"] = alignment
-            line["block_bbox"] = [round(v, 2) for v in paragraph]
+        for position, line in enumerate(cluster):
+            line["block_bbox"] = [round(v, 2) for v in box]
+            line["paragraph"] = f"p{pno}-par{index}"
+            line["paragraph_index"] = position
+            line["paragraph_size"] = len(cluster)
 
     return {
         "page": pno,
