@@ -294,6 +294,7 @@ export class Editor {
       return updated;
     });
 
+    const kept = spans.filter((span) => span.text !== '');
     const operation = {
       op: 'replace_line',
       page: line.page,
@@ -302,7 +303,10 @@ export class Editor {
       rotation: line.rotation,
       align: format.align,
       fit: format.fit ? 'shrink' : 'overflow',
-      spans: spans.filter((span) => span.text !== ''),
+      // Everything before the edited span is unchanged, so the server can leave
+      // it on the page untouched instead of redrawing it.
+      from_span: kept.indexOf(spans[spanIndex]),
+      spans: kept,
     };
     await this.applyOperations([operation], { affected: [line.page] });
   }

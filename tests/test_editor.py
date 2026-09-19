@@ -5,10 +5,17 @@ from __future__ import annotations
 import pymupdf
 import pytest
 
-from app.editor import EditError, apply_operations
+from app.editor import _REDACT_PAD, EditError, EditSession, apply_operations
 from app.extract import extract_page
 from app.fonts import FontResolver
-from tests.conftest import build_pdf, requires_fonts, spans_of, text_of
+from tests.conftest import (
+    FONT_FILES,
+    build_pdf,
+    build_pdf_with_links,
+    requires_fonts,
+    spans_of,
+    text_of,
+)
 
 
 def edit_line(doc, line, text, **extra):
@@ -267,4 +274,155 @@ class TestPageOperations:
         apply_operations(doc, FontResolver(doc), [{"op": "insert_page", "at": 1}])
         assert doc.page_count == 2
         assert doc[1].get_text().strip() == ""
+        doc.close()
+
+
+@requires_fonts
+class TestLinksSurviveEditing:
+    """Redaction takes a page's links with it. A CV edited here used to come
+    out with its email and repository links silently gone."""
+
+    def _edit(self, doc, needle, replacement):
+        line = line_named(doc, needle)
+        return edit_line(doc, line, replacement), line
+
+    def test_a_links_on_an_edited_line_are_kept(self, linked_doc):
+        before = {link["uri"] for link in linked_doc[0].get_links()}
+        self._edit(linked_doc, "Contacto", "Contacto: otra direccion distinta")
+        after = {link["uri"] for link in linked_doc[0].get_links()}
+        assert before == after, f"desaparecieron {before - after}"
+
+    def test_links_on_other_lines_are_untouched(self, linked_doc):
+        original = next(
+            link for link in linked_doc[0].get_links() if "otra" in link["uri"]
+        )
+        self._edit(linked_doc, "Contacto", "Texto nuevo")
+        survivor = next(
+            link for link in linked_doc[0].get_links() if "otra" in link["uri"]
+        )
+        assert list(survivor["from"]) == pytest.approx(list(original["from"]), abs=0.1)
+
+    def test_a_link_follows_the_text_that_replaced_it(self, linked_doc):
+        """A line that grows or shrinks carries its links along with it."""
+        before = next(
+            link for link in linked_doc[0].get_links() if link["uri"].startswith("mailto")
+        )
+        self._edit(linked_doc, "Contacto", "Contacto breve")
+        after = next(
+            link for link in linked_doc[0].get_links() if link["uri"].startswith("mailto")
+        )
+        assert list(after["from"]) != pytest.approx(list(before["from"]), abs=0.1)
+        line = line_named(linked_doc, "Contacto breve")
+        assert after["from"][0] >= line["bbox"][0] - 1
+        assert after["from"][2] <= line["bbox"][2] + 1
+
+    def test_deleting_a_line_drops_its_link(self, linked_doc):
+        """Nothing is left to click, so putting the link back would be wrong."""
+        line = line_named(linked_doc, "Contacto")
+        apply_operations(linked_doc, FontResolver(linked_doc), [{
+            "op": "delete_line", "page": 0, "bbox": line["bbox"],
+            "origin": line["origin"], "rotation": line["rotation"],
+        }])
+        remaining = {link["uri"] for link in linked_doc[0].get_links()}
+        assert not any(uri.startswith("mailto") for uri in remaining)
+        assert any("otra" in uri for uri in remaining)
+
+
+@requires_fonts
+class TestUntouchedSpansAreLeftAlone:
+    """Rewriting a whole line re-renders spans nobody edited. On a document
+    whose fonts cannot be reused that means untouched words change typeface, so
+    the part before the edit is left on the page as it was.
+
+    What that comes down to is where the erasure starts, so that is what these
+    check: the text assertions alone cannot tell the two paths apart, because a
+    left-aligned line redrawn in full puts its first span back where it was.
+    """
+
+    def _mixed_line(self):
+        """A bold label followed by ordinary text, as one line.
+
+        The second run has to start exactly where the first ends, or extraction
+        reads them as two separate lines and there is no mixed line to test.
+        """
+        label = "Etiqueta:"
+        width = pymupdf.Font(fontfile=FONT_FILES["serif-bold"]).text_length(label, 12)
+        doc = pymupdf.open(stream=build_pdf([
+            ((72, 100), label, "serif-bold", 12),
+            ((72 + width, 100), "valor que si se edita", "serif", 12),
+        ]), filetype="pdf")
+        page = extract_page(doc, 0, FontResolver(doc))
+        line = max(page["lines"], key=lambda item: len(item["spans"]))
+        assert len(line["spans"]) >= 2, "el PDF de prueba no produjo una línea mixta"
+        return doc, line
+
+    def _redaction_for(self, doc, line, align, from_span):
+        """The rectangle an edit would erase, without applying it."""
+        session = EditSession(doc, FontResolver(doc))
+        spans = [dict(span) for span in line["spans"]]
+        spans[1]["text"] = "otro valor"
+        session.replace_line({
+            "op": "replace_line", "page": 0, "bbox": line["bbox"], "origin": line["origin"],
+            "rotation": line["rotation"], "align": align, "from_span": from_span,
+            "spans": spans,
+        })
+        return session._batches[0].redactions[0]
+
+    def test_the_erasure_starts_at_the_edited_span_not_the_line(self):
+        doc, line = self._mixed_line()
+        partial = self._redaction_for(doc, line, "left", 1)
+        assert partial.x0 == pytest.approx(line["spans"][1]["bbox"][0], abs=_REDACT_PAD + 0.1)
+        assert partial.x1 == pytest.approx(line["bbox"][2], abs=_REDACT_PAD + 0.1)
+        doc.close()
+
+    def test_editing_the_first_span_erases_the_whole_line(self):
+        doc, line = self._mixed_line()
+        whole = self._redaction_for(doc, line, "left", 0)
+        assert whole.x0 == pytest.approx(line["bbox"][0], abs=_REDACT_PAD + 0.1)
+        doc.close()
+
+    def test_a_centred_line_is_erased_whole(self):
+        """Centring moves every span when the width changes, so none can stay."""
+        doc, line = self._mixed_line()
+        for align in ("center", "right"):
+            rect = self._redaction_for(doc, line, align, 1)
+            assert rect.x0 == pytest.approx(line["bbox"][0], abs=_REDACT_PAD + 0.1), align
+        doc.close()
+
+    def test_the_untouched_label_survives_the_edit(self):
+        doc, line = self._mixed_line()
+        before = dict(line["spans"][0])
+        spans = [dict(span) for span in line["spans"]]
+        spans[1]["text"] = "valor mucho mas largo que antes"
+        apply_operations(doc, FontResolver(doc), [{
+            "op": "replace_line", "page": 0, "bbox": line["bbox"], "origin": line["origin"],
+            "rotation": line["rotation"], "align": "left", "from_span": 1, "spans": spans,
+        }])
+        after = extract_page(doc, 0, FontResolver(doc))
+        kept = next(
+            span
+            for item in after["lines"]
+            for span in item["spans"]
+            if span["text"].startswith("Etiqueta")
+        )
+        assert kept["bbox"] == pytest.approx(before["bbox"], abs=0.1)
+        assert kept["font"] == before["font"]
+        doc.close()
+
+    def test_the_edited_span_still_changes(self):
+        doc, line = self._mixed_line()
+        spans = [dict(span) for span in line["spans"]]
+        spans[1]["text"] = "TEXTO SUSTITUIDO"
+        apply_operations(doc, FontResolver(doc), [{
+            "op": "replace_line", "page": 0, "bbox": line["bbox"], "origin": line["origin"],
+            "rotation": line["rotation"], "align": "left", "from_span": 1, "spans": spans,
+        }])
+        assert "TEXTO SUSTITUIDO" in text_of(doc)
+        assert "valor que si se edita" not in text_of(doc)
+        doc.close()
+
+    def test_an_out_of_range_index_is_ignored(self):
+        doc, line = self._mixed_line()
+        rect = self._redaction_for(doc, line, "left", 99)
+        assert rect.x0 == pytest.approx(line["bbox"][0], abs=_REDACT_PAD + 0.1)
         doc.close()

@@ -106,6 +106,19 @@ Los cambios de una misma página se agrupan: primero todos los borrados y despu�
 todos los redibujados, para que una edición no se coma el texto que otra acaba de
 escribir.
 
+**Sólo se redibuja lo que hace falta.** Si editas la parte final de una línea —el
+caso típico: «**Habilidades:** Python, SQL…»—, lo que hay antes se queda tal cual
+en la página, sin volver a dibujarse. Importa cuando las fuentes del documento no
+se pueden reutilizar: si se reescribiera la línea entera, verías cambiar de
+tipografía palabras que no tocaste. En una línea centrada o alineada a la derecha
+no se puede: al cambiar el ancho se mueve todo, así que ahí sí se rehace entera.
+
+**Los enlaces se conservan.** Borrar el texto de una línea se lleva por delante
+los hipervínculos que hubiera encima, así que se guardan antes y se vuelven a
+colocar sobre el texto nuevo, manteniendo su posición relativa dentro de la
+línea. Si en cambio borras la línea entera, el enlace desaparece con ella: no
+queda nada que pulsar.
+
 ## Limitaciones
 
 - **No hace OCR.** Un PDF escaneado sin capa de texto no tiene texto que editar.
@@ -122,6 +135,9 @@ escribir.
   equipo sin esa fuente instalada el texto editado se verá bien y el resto no.
   Para evitarlo, edita el documento entero o parte de uno que sí embeba.
 - **El texto en trazado o en imagen** no es editable, porque no es texto.
+- **Un enlace sobrevive a la edición de su línea aunque borres el texto que
+  describía**, recolocado proporcionalmente. Se prefiere conservarlo a adivinar
+  que ya no hace falta; si sobra, deshaz o bórralo desde otra herramienta.
 - Los PDF protegidos con contraseña requieren la contraseña al abrirlos.
 - Los documentos viven en memoria del servidor y se descartan tras dos horas sin
   actividad. **Guarda antes de cerrar.**

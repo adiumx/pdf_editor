@@ -101,6 +101,32 @@ def build_pdf_naming_fonts_it_does_not_embed(
     return bytes(out)
 
 
+def build_pdf_with_links() -> bytes:
+    """A page whose text carries hyperlinks, as a CV or a report does."""
+    doc = pymupdf.open()
+    page = doc.new_page()
+    for name, path in _available.items():
+        page.insert_font(fontname=name, fontfile=path)
+    page.insert_text((72, 100), "Contacto: alguien@example.com y su web", fontname="serif", fontsize=12)
+    page.insert_text((72, 140), "Otra linea con su propio enlace aqui", fontname="serif", fontsize=12)
+    page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(120, 88, 220, 104),
+                      "uri": "mailto:alguien@example.com"})
+    page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(240, 88, 280, 104),
+                      "uri": "https://example.com"})
+    page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(200, 128, 260, 144),
+                      "uri": "https://otra.example.com"})
+    data = doc.tobytes(garbage=4, deflate=True)
+    doc.close()
+    return data
+
+
+@pytest.fixture
+def linked_doc():
+    document = pymupdf.open(stream=build_pdf_with_links(), filetype="pdf")
+    yield document
+    document.close()
+
+
 @pytest.fixture
 def unembedded_doc():
     document = pymupdf.open(stream=build_pdf_naming_fonts_it_does_not_embed(), filetype="pdf")

@@ -57,12 +57,27 @@ class _PendingText:
 
 
 @dataclass
+class _LineRewrite:
+    """Where a line was, and where its replacement ended up.
+
+    Redaction takes the page's links with it, so anything anchored to a line —
+    a hyperlink over an email address or a repository URL — has to be put back
+    over the text that replaced it.
+    """
+
+    old: pymupdf.Rect
+    new: pymupdf.Rect
+    rotation: int
+
+
+@dataclass
 class _PageBatch:
     """Everything one page needs doing, in the only order that is safe."""
 
     redactions: list[pymupdf.Rect] = field(default_factory=list)
     texts: list[_PendingText] = field(default_factory=list)
     images: list[tuple[pymupdf.Rect, bytes, int]] = field(default_factory=list)
+    rewrites: list[_LineRewrite] = field(default_factory=list)
 
 
 def _axis_extent(bbox: Sequence[float], rotation: int) -> float:
@@ -92,6 +107,46 @@ def _advance(point: tuple[float, float], distance: float, rotation: int) -> tupl
     if rotation == 270:
         return (x, y + distance)
     return (x + distance, y)
+
+
+def _drawn_rect(
+    start: tuple[float, float], length: float, old: Sequence[float], rotation: int
+) -> pymupdf.Rect:
+    """The box the re-flowed text occupies, given where it starts and its length."""
+    x, y = start
+    x0, y0, x1, y1 = (float(v) for v in old)
+    if rotation == 90:
+        return pymupdf.Rect(x0, y - length, x1, y)
+    if rotation == 180:
+        return pymupdf.Rect(x - length, y0, x, y1)
+    if rotation == 270:
+        return pymupdf.Rect(x0, y, x1, y + length)
+    return pymupdf.Rect(x, y0, x + length, y1)
+
+
+def _remap(
+    rect: pymupdf.Rect, rewrite: _LineRewrite
+) -> pymupdf.Rect:
+    """Move a rectangle anchored to a line onto that line's replacement.
+
+    Its position along the writing direction is kept as a fraction of the line,
+    so a link over the third word stays over the third word when the line grows
+    or shrinks.
+    """
+    old, new = rewrite.old, rewrite.new
+    vertical = rewrite.rotation in (90, 270)
+    span = (old.y1 - old.y0) if vertical else (old.x1 - old.x0)
+    if span <= 0:
+        return pymupdf.Rect(new)
+    if vertical:
+        start = (rect.y0 - old.y0) / span
+        end = (rect.y1 - old.y0) / span
+        height = new.y1 - new.y0
+        return pymupdf.Rect(new.x0, new.y0 + start * height, new.x1, new.y0 + end * height)
+    start = (rect.x0 - old.x0) / span
+    end = (rect.x1 - old.x0) / span
+    width = new.x1 - new.x0
+    return pymupdf.Rect(new.x0 + start * width, new.y0, new.x0 + end * width, new.y1)
 
 
 def _line_start(
@@ -177,7 +232,13 @@ class EditSession:
         return page_rotation_of(self._doc[pno].rotation, int(rotation) % 360)
 
     def replace_line(self, op: dict[str, Any]) -> None:
-        """Rewrite one line, re-flowing its spans from the original baseline."""
+        """Rewrite one line, re-flowing its spans from the original baseline.
+
+        When only the tail of a line changed and the line starts at a fixed
+        edge, the spans before the change are left exactly as they are: redrawing
+        them would re-render text nobody edited, which on a document whose fonts
+        cannot be reused means watching untouched words change typeface.
+        """
         pno = int(op["page"])
         batch = self._batch(pno)
         bbox = list(self._rect(pno, op["bbox"]))
@@ -187,6 +248,11 @@ class EditSession:
         align = op.get("align", "left")
         fit = op.get("fit", "overflow")
         spans = [s for s in op.get("spans", []) if s.get("text")]
+
+        keep = self._untouched_prefix(op, spans, align)
+        if keep:
+            spans = spans[keep:]
+            bbox, origin = self._segment(pno, op["spans"][keep], bbox, rotation)
 
         batch.redactions.append(pymupdf.Rect(bbox) + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD))
         if not spans:
@@ -228,6 +294,13 @@ class EditSession:
             )
 
         point = _line_start(bbox, origin, rotation, _start_offset(align, extent, needed))
+        batch.rewrites.append(
+            _LineRewrite(
+                old=pymupdf.Rect(bbox),
+                new=_drawn_rect(point, needed, bbox, rotation),
+                rotation=rotation,
+            )
+        )
         for (font, span), size in zip(resolved, sizes):
             batch.texts.append(
                 _PendingText(
@@ -242,6 +315,38 @@ class EditSession:
                 )
             )
             point = _advance(point, font.text_length(span["text"], size), rotation)
+
+    @staticmethod
+    def _untouched_prefix(op: dict[str, Any], spans: list[dict], align: str) -> int:
+        """How many leading spans can be left alone.
+
+        Only with a left-anchored line: centring or right-aligning moves every
+        span when the total width changes, so none of them can stay put.
+        """
+        first = int(op.get("from_span", 0) or 0)
+        if first <= 0 or align != "left":
+            return 0
+        if first >= len(spans) or first >= len(op.get("spans", [])):
+            return 0
+        anchor = op["spans"][first]
+        if not anchor.get("bbox") or not anchor.get("origin"):
+            return 0
+        return first
+
+    def _segment(
+        self, pno: int, anchor: dict[str, Any], bbox: list[float], rotation: int
+    ) -> tuple[list[float], tuple[float, float]]:
+        """The part of a line that starts at ``anchor`` and runs to its end."""
+        box = list(self._rect(pno, anchor["bbox"]))
+        origin = self._point(pno, anchor["origin"])
+        x0, y0, x1, y1 = bbox
+        if rotation == 90:
+            return [x0, y0, x1, box[3]], origin
+        if rotation == 180:
+            return [x0, y0, box[2], y1], origin
+        if rotation == 270:
+            return [x0, box[1], x1, y1], origin
+        return [box[0], y0, x1, y1], origin
 
     def delete_line(self, op: dict[str, Any]) -> None:
         """Erase a line without putting anything back."""
@@ -322,6 +427,7 @@ class EditSession:
         """Erase, then redraw, page by page."""
         for pno, batch in self._batches.items():
             page = self._doc[pno]
+            links_before = page.get_links() if batch.redactions else []
             if batch.redactions:
                 for rect in batch.redactions:
                     if not rect.is_empty:
@@ -356,7 +462,41 @@ class EditSession:
                 except Exception as exc:
                     raise EditError(f"No se pudo insertar la imagen: {exc}") from exc
 
+            if links_before:
+                self._restore_links(page, links_before, batch)
+
         return self.warnings
+
+    @staticmethod
+    def _restore_links(
+        page: pymupdf.Page, before: list[dict[str, Any]], batch: _PageBatch
+    ) -> None:
+        """Put back the links redaction removed, over the text that replaced them.
+
+        A link whose line was rewritten moves with the new text. One whose text
+        was deleted outright is not restored: there is nothing left to click.
+        """
+        surviving = {
+            (link.get("uri"), tuple(round(v, 1) for v in link["from"]))
+            for link in page.get_links()
+        }
+        for link in before:
+            rect = pymupdf.Rect(link["from"])
+            key = (link.get("uri"), tuple(round(v, 1) for v in link["from"]))
+            if key in surviving:
+                continue
+            rewrite = next(
+                (r for r in batch.rewrites if rect.intersects(r.old) and not r.new.is_empty),
+                None,
+            )
+            if rewrite is None:
+                continue
+            restored = dict(link)
+            restored["from"] = _remap(rect, rewrite)
+            try:
+                page.insert_link(restored)
+            except Exception:
+                continue  # a link type this page can no longer carry
 
 
 def apply_operations(
