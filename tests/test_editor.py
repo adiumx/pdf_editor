@@ -1,0 +1,270 @@
+"""Applying edits: does the text change, and does nothing else?"""
+
+from __future__ import annotations
+
+import pymupdf
+import pytest
+
+from app.editor import EditError, apply_operations
+from app.extract import extract_page
+from app.fonts import FontResolver
+from tests.conftest import build_pdf, requires_fonts, spans_of, text_of
+
+
+def edit_line(doc, line, text, **extra):
+    """Replace a whole line's first span with `text`, as the client would."""
+    spans = [dict(span) for span in line["spans"]]
+    spans[0]["text"] = text
+    operation = {
+        "op": "replace_line",
+        "page": line["page"],
+        "bbox": line["bbox"],
+        "origin": line["origin"],
+        "rotation": line["rotation"],
+        "align": line.get("align", "left"),
+        "spans": spans,
+        **extra,
+    }
+    return apply_operations(doc, FontResolver(doc), [operation])
+
+
+def line_named(doc, needle, resolver=None):
+    page = extract_page(doc, 0, resolver or FontResolver(doc))
+    return next(line for line in page["lines"] if needle in line["text"])
+
+
+@requires_fonts
+class TestReplacingText:
+    def test_the_replacement_keeps_font_size_and_colour(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        before = line_named(doc, "Primera linea")["spans"][0]
+        edit_line(doc, line_named(doc, "Primera linea"), "Texto completamente nuevo")
+        after = line_named(doc, "Texto completamente")["spans"][0]
+
+        assert after["font"] == before["font"]
+        assert after["size"] == pytest.approx(before["size"], abs=0.01)
+        assert after["color"] == before["color"]
+        assert after["embedded"] is True
+        doc.close()
+
+    def test_the_replacement_sits_on_the_original_baseline(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        before = line_named(doc, "Primera linea")
+        edit_line(doc, before, "Otro texto")
+        after = line_named(doc, "Otro texto")
+        assert after["origin"][1] == pytest.approx(before["origin"][1], abs=0.5)
+        assert after["bbox"][0] == pytest.approx(before["bbox"][0], abs=0.5)
+        doc.close()
+
+    def test_editing_a_line_leaves_the_line_below_it_untouched(self):
+        """Redaction rectangles must not reach into neighbouring lines."""
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        neighbours = [
+            line["text"] for line in extract_page(doc, 0, FontResolver(doc))["lines"]
+            if "Primera linea" not in line["text"]
+        ]
+        edit_line(doc, line_named(doc, "Primera linea"), "Cambiada")
+        after = [line["text"] for line in extract_page(doc, 0, FontResolver(doc))["lines"]]
+        for neighbour in neighbours:
+            assert neighbour in after, f"la edición se comió «{neighbour}»"
+        doc.close()
+
+    def test_accented_and_symbol_characters_survive(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        edit_line(doc, line_named(doc, "Primera linea"), "Año: 1.500,40 € — ñáéíóú ¿qué?")
+        assert "Año" in text_of(doc)
+        assert "€" in text_of(doc)
+        assert "ñáéíóú" in text_of(doc)
+        doc.close()
+
+    def test_unrepresentable_characters_are_reported_not_silently_dropped(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        warnings = edit_line(doc, line_named(doc, "Primera linea"), "日本語のテキスト")
+        assert any(w.kind in {"font-substituted", "missing-glyphs"} for w in warnings)
+        doc.close()
+
+    def test_shrink_keeps_longer_text_inside_the_original_width(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        original = line_named(doc, "Primera linea")
+        edit_line(doc, original, "Primera linea del documento algo mas larga", fit="shrink")
+        after = line_named(doc, "Primera linea del documento algo")
+        original_width = original["bbox"][2] - original["bbox"][0]
+        assert after["bbox"][2] - after["bbox"][0] <= original_width + 1
+        assert after["spans"][0]["size"] < original["spans"][0]["size"]
+        doc.close()
+
+    def test_shrink_stops_before_the_text_becomes_illegible(self):
+        """Past a point, overflowing is better than microscopic text — and the
+        user is told rather than left to discover it."""
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        original = line_named(doc, "Primera linea")
+        warnings = edit_line(
+            doc, original,
+            "Un texto muchisimo mas largo que el que habia originalmente aqui puesto",
+            fit="shrink",
+        )
+        after = line_named(doc, "Un texto muchisimo")
+        assert after["spans"][0]["size"] >= original["spans"][0]["size"] * 0.5 - 0.01
+        assert any(w.kind == "overflow" for w in warnings)
+        doc.close()
+
+    def test_overflow_is_allowed_but_warned_about(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        warnings = edit_line(
+            doc, line_named(doc, "Primera linea"),
+            "Un texto mucho mas largo que el que habia originalmente aqui",
+        )
+        assert any(w.kind == "overflow" for w in warnings)
+        doc.close()
+
+    def test_right_aligned_text_stays_anchored_to_its_right_edge(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        original = line_named(doc, "Primera linea")
+        edit_line(doc, original, "Corto", align="right")
+        after = line_named(doc, "Corto")
+        assert after["bbox"][2] == pytest.approx(original["bbox"][2], abs=1.0)
+        doc.close()
+
+    @pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+    def test_edits_land_correctly_on_a_rotated_page(self, rotation):
+        doc = pymupdf.open(stream=build_pdf(rotation=rotation), filetype="pdf")
+        original = line_named(doc, "Primera linea")
+        edit_line(doc, original, "Rotado y cambiado")
+        after = line_named(doc, "Rotado y cambiado")
+        assert after["rotation"] == original["rotation"]
+        rect = doc[0].rect
+        assert 0 <= after["bbox"][0] <= rect.width
+        assert 0 <= after["bbox"][1] <= rect.height
+        doc.close()
+
+
+@requires_fonts
+class TestOtherOperations:
+    def test_deleting_a_line_removes_only_that_line(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        line = line_named(doc, "Primera linea")
+        apply_operations(doc, FontResolver(doc), [{
+            "op": "delete_line", "page": 0, "bbox": line["bbox"],
+            "origin": line["origin"], "rotation": line["rotation"],
+        }])
+        remaining = text_of(doc)
+        assert "Primera linea" not in remaining
+        assert "Segunda linea" in remaining
+        doc.close()
+
+    def test_added_text_appears_with_the_requested_size(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        apply_operations(doc, FontResolver(doc), [{
+            "op": "add_text", "page": 0, "rect": [72, 400, 400, 440],
+            "text": "Texto nuevo insertado", "size": 14, "color": "#cc0000", "family": "sans",
+        }])
+        span = next(s for s in spans_of(doc) if "Texto nuevo" in s["text"])
+        assert span["size"] == pytest.approx(14, abs=0.1)
+        assert span["color"] == 0xCC0000
+        doc.close()
+
+    def test_added_multiline_text_becomes_several_lines(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        apply_operations(doc, FontResolver(doc), [{
+            "op": "add_text", "page": 0, "rect": [72, 400, 400, 460],
+            "text": "Primera\nSegunda\nTercera", "size": 12,
+        }])
+        text = text_of(doc)
+        assert "Primera" in text and "Segunda" in text and "Tercera" in text
+        doc.close()
+
+    def test_erasing_an_area_clears_the_text_inside_it(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        apply_operations(doc, FontResolver(doc), [
+            {"op": "erase_area", "page": 0, "rect": [60, 85, 400, 125]},
+        ])
+        text = text_of(doc)
+        assert "Primera linea" not in text
+        assert "Titulo en negrita" in text
+        doc.close()
+
+    def test_a_whole_batch_is_applied_at_once(self):
+        """Two edits on one page must not erase each other's new text."""
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        page = extract_page(doc, 0, FontResolver(doc))
+        operations = []
+        for line, replacement in zip(page["lines"][:2], ["Alfa cambiada", "Beta cambiada"]):
+            spans = [dict(span) for span in line["spans"]]
+            spans[0]["text"] = replacement
+            operations.append({
+                "op": "replace_line", "page": 0, "bbox": line["bbox"],
+                "origin": line["origin"], "rotation": line["rotation"],
+                "align": line["align"], "spans": spans,
+            })
+        apply_operations(doc, FontResolver(doc), operations)
+        text = text_of(doc)
+        assert "Alfa cambiada" in text
+        assert "Beta cambiada" in text
+        doc.close()
+
+    def test_an_image_can_be_placed_on_the_page(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        pixmap = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 40, 40))
+        pixmap.set_rect(pixmap.irect, (200, 30, 30))
+        before = len(doc[0].get_images())
+        apply_operations(doc, FontResolver(doc), [
+            {"op": "insert_image", "page": 0, "rect": [300, 400, 400, 500], "asset": "a1"},
+        ], {"a1": pixmap.tobytes("png")})
+        assert len(doc[0].get_images()) == before + 1
+        doc.close()
+
+    def test_a_missing_image_asset_is_an_error_not_a_crash(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        with pytest.raises(EditError):
+            apply_operations(doc, FontResolver(doc), [
+                {"op": "insert_image", "page": 0, "rect": [0, 0, 10, 10], "asset": "desaparecida"},
+            ], {})
+        doc.close()
+
+    def test_an_unknown_operation_is_rejected(self, doc, resolver):
+        with pytest.raises(EditError):
+            apply_operations(doc, resolver, [{"op": "formatear_el_disco"}])
+
+    def test_an_edit_to_a_page_that_does_not_exist_is_rejected(self, doc, resolver):
+        with pytest.raises(EditError):
+            apply_operations(doc, resolver, [
+                {"op": "replace_line", "page": 99, "bbox": [0, 0, 10, 10], "spans": []},
+            ])
+
+
+@requires_fonts
+class TestPageOperations:
+    def test_pages_can_be_reordered(self):
+        doc = pymupdf.open(stream=build_pdf(pages=3), filetype="pdf")
+        first = doc[0].get_text()
+        apply_operations(doc, FontResolver(doc), [{"op": "move_page", "page": 0, "to": 3}])
+        assert doc.page_count == 3
+        assert doc[2].get_text() == first
+        doc.close()
+
+    def test_a_page_can_be_deleted(self):
+        doc = pymupdf.open(stream=build_pdf(pages=3), filetype="pdf")
+        apply_operations(doc, FontResolver(doc), [{"op": "delete_page", "page": 1}])
+        assert doc.page_count == 2
+        doc.close()
+
+    def test_the_last_page_cannot_be_deleted(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        with pytest.raises(EditError):
+            apply_operations(doc, FontResolver(doc), [{"op": "delete_page", "page": 0}])
+        doc.close()
+
+    def test_a_page_can_be_rotated(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        apply_operations(doc, FontResolver(doc), [
+            {"op": "rotate_page", "page": 0, "rotation": 90},
+        ])
+        assert doc[0].rotation == 90
+        doc.close()
+
+    def test_a_blank_page_can_be_added(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        apply_operations(doc, FontResolver(doc), [{"op": "insert_page", "at": 1}])
+        assert doc.page_count == 2
+        assert doc[1].get_text().strip() == ""
+        doc.close()
