@@ -16,6 +16,7 @@ from typing import Any, Iterable, Sequence
 import pymupdf
 
 from .extract import (
+    DEFAULT_MARK_COLOR,
     across,
     across_span,
     along,
@@ -139,6 +140,12 @@ class _PageBatch:
     moved_annots: list[tuple[int, float, float]] = field(default_factory=list)
     """Annotations (xref, dx, dy) that have to follow the text they mark."""
 
+    new_marks: list[dict[str, Any]] = field(default_factory=list)
+    """Marks to put on the page once its text is final."""
+
+    dropped_marks: list[int] = field(default_factory=list)
+    """Xrefs of marks to take off the page."""
+
     carried_links: set[tuple] = field(default_factory=set)
     """Links already taken to a continuation page, so the ordinary shift does
     not add them a second time."""
@@ -161,9 +168,34 @@ _MARKUP_ANNOTS = {
     "Squiggly": "add_squiggly_annot",
 }
 
+# How each mark is put on the page. A note is a point, the rest are laid over
+# the text they cover.
+_MARK_MAKERS = {
+    "highlight": "add_highlight_annot",
+    "underline": "add_underline_annot",
+    "strikeout": "add_strikeout_annot",
+    "squiggly": "add_squiggly_annot",
+    "note": "add_text_annot",
+}
+
 # Annotations that are not ours to shift: a widget belongs to the document's
 # form, and a redaction is a pending instruction, not a mark on the page.
 _UNMOVABLE_ANNOTS = {"Widget", "Redact", "Link", "Popup"}
+
+
+def _place_mark(page: pymupdf.Page, mark: dict[str, Any]) -> None:
+    """Draw one mark the user asked for."""
+    kind = mark["kind"]
+    if kind == "note":
+        rect = mark["rect"]
+        annot = page.add_text_annot((rect.x0, rect.y0), mark["note"] or " ")
+    else:
+        quads = mark.get("quads") or [mark["rect"].quad]
+        annot = getattr(page, _MARK_MAKERS[kind])(quads)
+        if mark["note"]:
+            annot.set_info(content=mark["note"])
+    annot.set_colors(stroke=mark["color"])
+    annot.update()
 
 
 def _shift_annot(page: pymupdf.Page, annot: pymupdf.Annot, dx: float, dy: float) -> None:
@@ -1409,6 +1441,83 @@ class EditSession:
         pno = int(op["page"])
         self._batch(pno).redactions.append(self._rect(pno, op["rect"]))
 
+    def add_mark(self, op: dict[str, Any]) -> None:
+        """Put a highlight, underline, strikeout or note on the page.
+
+        A text mark is laid over the words it covers rather than over the
+        rectangle the user drew: one quadrilateral per line, clipped to what
+        the drag actually crossed, so marking two lines of a paragraph does
+        not paint the margin between them. With no text under it — over a
+        picture, say — the rectangle itself is marked, which is what a reader
+        drawing a box around a figure means.
+        """
+        pno = int(op["page"])
+        kind = str(op.get("kind", "highlight")).lower()
+        if kind not in _MARK_MAKERS:
+            raise EditError(f"Marca desconocida: {kind}")
+        batch = self._batch(pno)
+        rect = self._rect(pno, op["rect"])
+        # A sweep along a line has no height, which is the ordinary way to use
+        # a highlighter; only a gesture with no extent at all is nothing.
+        if rect.is_infinite or (rect.width < 1 and rect.height < 1):
+            raise EditError("La marca no tiene extensión.")
+
+        mark: dict[str, Any] = {
+            "kind": kind,
+            "rect": rect,
+            "color": hex_to_pdf(op.get("color") or DEFAULT_MARK_COLOR),
+            "note": str(op.get("note", "")),
+        }
+        if kind != "note":
+            mark["quads"] = self._text_quads(pno, rect)
+        batch.new_marks.append(mark)
+
+    def delete_mark(self, op: dict[str, Any]) -> None:
+        """Take a mark off the page."""
+        pno = int(op["page"])
+        self._batch(pno).dropped_marks.append(int(op["xref"]))
+
+    # A line counts as marked when the drag covered this much of its height.
+    _MARK_COVERAGE = 0.3
+
+    def _text_quads(self, pno: int, rect: pymupdf.Rect) -> list[pymupdf.Quad]:
+        """One quadrilateral per line of text the drag crossed.
+
+        A highlighter is swept along a line, not around it, so a drag with no
+        height at all is the ordinary case rather than a mistake: it marks
+        whatever line it was drawn through. A drag with real height marks the
+        lines it genuinely covers — clipping a descender by a hair means the
+        line above was the one meant.
+
+        Either way a line is marked only from where the drag entered it to
+        where it left, so half a sentence stays half a sentence.
+        """
+        page = self._doc[pno]
+        quads: list[pymupdf.Quad] = []
+        sweep = rect.height < 2
+        middle = (rect.y0 + rect.y1) / 2
+        try:
+            raw = page.get_text("dict")
+        except Exception:  # pragma: no cover - defensive
+            return quads
+        for block in raw.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                box = pymupdf.Rect(line["bbox"])
+                if box.is_empty:
+                    continue
+                if sweep:
+                    if not box.y0 - 1 <= middle <= box.y1 + 1:
+                        continue
+                elif (min(rect.y1, box.y1) - max(rect.y0, box.y0)) < box.height * self._MARK_COVERAGE:
+                    continue
+                x0, x1 = max(rect.x0, box.x0), min(rect.x1, box.x1)
+                if x1 - x0 < 1:
+                    continue
+                quads.append(pymupdf.Rect(x0, box.y0, x1, box.y1).quad)
+        return quads
+
     def insert_image(self, op: dict[str, Any], data: bytes) -> None:
         """Place an uploaded image inside a rectangle."""
         pno = int(op["page"])
@@ -1519,6 +1628,14 @@ class EditSession:
                     _shift_annot(page, annot, dx, dy)
                 except Exception:  # pragma: no cover - defensive
                     continue
+
+            for xref in batch.dropped_marks:
+                annot = next((a for a in page.annots() if a.xref == xref), None)
+                if annot is not None:
+                    page.delete_annot(annot)
+
+            for mark in batch.new_marks:
+                _place_mark(page, mark)
 
         return self.warnings
 
@@ -1655,6 +1772,10 @@ def apply_operations(
             session.add_text(op)
         elif kind == "erase_area":
             session.erase_area(op)
+        elif kind == "add_mark":
+            session.add_mark(op)
+        elif kind == "delete_mark":
+            session.delete_mark(op)
         elif kind == "insert_image":
             asset_id = op.get("asset")
             if asset_id not in assets:

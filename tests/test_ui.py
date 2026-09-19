@@ -575,3 +575,110 @@ class TestGridAndSnapping:
         after = span_with(page, "Primera linea").bounding_box()
         assert abs(after["x"] - before["x"]) < 0.5, "el clic movió el bloque"
         assert abs(after["y"] - before["y"]) < 0.5, "el clic movió el bloque"
+
+
+@requires_fonts
+class TestAnnotating:
+    """Marks put on the page with the mouse, and taken off with it."""
+
+    def _pick_tool(self, page, kind="highlight"):
+        page.click('[data-tool="mark"]')
+        page.wait_for_selector("#markbar:not([hidden])", timeout=5000)
+        page.locator("#mark-kind").select_option(kind)
+        page.wait_for_timeout(100)
+
+    def _drag_over(self, page, text):
+        """Drag across a line of text the way a highlighter is used."""
+        box = span_with(page, text).bounding_box()
+        page.mouse.move(box["x"] + 1, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] - 1, box["y"] + box["height"] / 2, steps=8)
+        page.mouse.up()
+        page.wait_for_timeout(2500)
+
+    def _marks(self, page):
+        return page.evaluate(
+            "() => (window.__editor.pages.get(0).marks || []).map(m => [m.kind, m.color])"
+        )
+
+    def _mark_boxes(self, page):
+        return page.evaluate(
+            "() => (window.__editor.pages.get(0).marks || []).map(m => m.bbox)"
+        )
+
+    def test_the_bar_comes_up_with_the_tool(self, page):
+        assert page.locator("#markbar").is_hidden()
+        self._pick_tool(page)
+        assert page.locator("#mark-kind").locator("option").count() == 5
+
+    def test_the_bar_goes_away_with_the_tool(self, page):
+        self._pick_tool(page)
+        page.click('[data-tool="select"]')
+        page.wait_for_timeout(300)
+        assert page.locator("#markbar").is_hidden()
+
+    def test_dragging_over_a_line_highlights_it(self, page):
+        self._pick_tool(page)
+        assert self._marks(page) == []
+        self._drag_over(page, "Primera linea")
+        assert [kind for kind, _ in self._marks(page)] == ["highlight"]
+        # The sweep has no height of its own; the mark takes it from the line.
+        box = self._mark_boxes(page)[0]
+        assert box[3] - box[1] > 8, f"la marca quedó de {box[3] - box[1]:.1f} pt"
+
+    def test_the_colour_chosen_is_the_colour_drawn(self, page):
+        self._pick_tool(page)
+        page.locator("#mark-color").evaluate(
+            "el => { el.value = '#66ccff'; el.dispatchEvent(new Event('input')); }"
+        )
+        self._drag_over(page, "Primera linea")
+        assert self._marks(page) == [["highlight", "#66ccff"]]
+
+    def test_another_kind_of_mark_can_be_chosen(self, page):
+        self._pick_tool(page, "strikeout")
+        self._drag_over(page, "Primera linea")
+        assert [kind for kind, _ in self._marks(page)] == ["strikeout"]
+
+    def test_clicking_a_mark_takes_it_off(self, page):
+        self._pick_tool(page)
+        self._drag_over(page, "Primera linea")
+        assert len(self._marks(page)) == 1
+        page.locator(".page .markhit").first.click()
+        page.wait_for_timeout(2500)
+        assert self._marks(page) == []
+
+    def test_marks_are_only_clickable_with_the_tool_in_hand(self, page):
+        """Otherwise they would swallow every click meant for the text."""
+        self._pick_tool(page)
+        self._drag_over(page, "Primera linea")
+        page.click('[data-tool="select"]')
+        page.wait_for_timeout(300)
+        clickable = page.eval_on_selector(
+            ".page .markhit", "el => getComputedStyle(el).pointerEvents"
+        )
+        assert clickable == "none"
+
+    def test_the_text_underneath_is_still_there(self, page):
+        """A highlight marks the words; it does not replace them."""
+        self._pick_tool(page)
+        self._drag_over(page, "Primera linea")
+        assert span_with(page, "Primera linea").count() >= 1
+
+    def test_undo_takes_the_mark_back_off(self, page):
+        self._pick_tool(page)
+        self._drag_over(page, "Primera linea")
+        page.keyboard.press("Control+z")
+        page.wait_for_timeout(2500)
+        assert self._marks(page) == []
+
+    def test_its_key_reaches_the_tool(self, page):
+        page.keyboard.press("a")
+        page.wait_for_timeout(400)
+        assert page.locator("#markbar").is_visible()
+
+    def test_no_console_errors_while_annotating(self, page):
+        self._pick_tool(page)
+        self._drag_over(page, "Primera linea")
+        page.locator(".page .markhit").first.click()
+        page.wait_for_timeout(1500)
+        assert page.console_errors == []

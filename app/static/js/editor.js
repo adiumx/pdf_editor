@@ -21,6 +21,8 @@ export class Editor {
     this.zoom = 1.5;
     this.revision = 0;
     this.tool = 'select';
+    this.markKind = 'highlight';
+    this.markColor = '#ffd83d';
     this.pages = new Map();
     this.active = null;
     this.pendingImage = null;
@@ -94,6 +96,7 @@ export class Editor {
         measure: (dx, dy) => this.grid?.format(dx, dy) || '',
         onBlankClick: () => this.commitActive(),
         onMarquee: (...args) => this.handleMarquee(...args),
+        removeMark: (...args) => this.removeMark(...args),
       });
       view.setTool(this.tool);
       this.pages.set(geometry.page, view);
@@ -114,6 +117,7 @@ export class Editor {
         view.setGeometry(geometry, this.zoom, api.renderUrl(this.doc.id, pno, this.zoom, this.revision));
         const page = await api.pageText(this.doc.id, pno);
         view.setLines(page.lines);
+        view.setMarks(page.marks);
         this.grid?.paint(view);
         if (this.picked?.view === view) this.clearPick();
       }),
@@ -558,6 +562,8 @@ export class Editor {
       await this.applyOperations([{ op: 'erase_area', page: view.pageNumber, rect }], {
         affected: [view.pageNumber],
       });
+    } else if (tool === 'mark') {
+      await this.addMark(view, rect, start);
     } else if (tool === 'image') {
       if (!this.pendingImage) {
         toast('Elige primero una imagen con el botón «Imagen».', 'warn');
@@ -572,6 +578,41 @@ export class Editor {
         { affected: [view.pageNumber] },
       );
     }
+  }
+
+  /** Put a mark on whatever the drag crossed. */
+  async addMark(view, rect, start) {
+    const kind = this.markKind || 'highlight';
+    let box = rect;
+    if (kind === 'note') {
+      // A note is a pin, not an area: it goes where the click landed.
+      box = [start.x, start.y, start.x + 18, start.y + 18];
+    } else if (rect[2] - rect[0] < 3 && rect[3] - rect[1] < 3) {
+      // A highlighter is swept along a line, so a drag with no height is the
+      // ordinary gesture, not an empty one. Only a click marks nothing.
+      return;
+    }
+    let note = '';
+    if (kind === 'note') {
+      note = (window.prompt('Texto de la nota:', '') || '').trim();
+      if (!note) return;
+    }
+    await this.applyOperations(
+      [{
+        op: 'add_mark', page: view.pageNumber, kind, rect: box,
+        color: this.markColor || '#ffd83d', note,
+      }],
+      { affected: [view.pageNumber] },
+    );
+  }
+
+  /** Take a mark off the page. */
+  async removeMark(view, mark) {
+    if (this.tool !== 'mark') return;
+    await this.applyOperations(
+      [{ op: 'delete_mark', page: view.pageNumber, xref: mark.xref }],
+      { affected: [view.pageNumber] },
+    );
   }
 
   /** A floating textarea that becomes an `add_text` operation when confirmed. */

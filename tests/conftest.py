@@ -390,3 +390,11 @@ def annot_named(document: pymupdf.Document, note: str, pno: int = 0) -> AnnotSna
                 opacity=annot.opacity,
             )
     return None
+
+
+def mark_quads(document: pymupdf.Document, pno: int = 0, index: int = 0) -> list:
+    """The quadrilaterals of one text mark, read out where it is still valid."""
+    for position, annot in enumerate(document[pno].annots()):
+        if position == index:
+            return list(annot.vertices or [])
+    return []

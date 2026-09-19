@@ -13,8 +13,10 @@ from tests.conftest import (
     annot_named,
     annots_of,
     build_pdf,
+    build_pdf_with_a_form,
     build_pdf_with_links,
     build_pdf_with_marks,
+    mark_quads,
     requires_fonts,
     spans_of,
     text_of,
@@ -1115,3 +1117,168 @@ class TestMarksFollowTheTextTheyMark:
         before = sorted((kind, note) for kind, note, _ in annots_of(doc))
         self._move(doc, resolver, 40, 120)
         assert sorted((kind, note) for kind, note, _ in annots_of(doc)) == before
+
+
+class TestPuttingMarksOnThePage:
+    """Highlighting, underlining, striking out and annotating."""
+
+    def _doc(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        return doc, FontResolver(doc)
+
+    def _mark(self, doc, resolver, **op):
+        apply_operations(doc, resolver, [{"op": "add_mark", "page": 0, **op}])
+
+    def test_a_highlight_lands_on_the_text_it_crossed(self):
+        doc, resolver = self._doc()
+        line = extract_page(doc, 0, resolver)["lines"][0]
+        box = line["bbox"]
+        self._mark(doc, resolver, kind="highlight",
+                   rect=[box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2])
+        marks = extract_page(doc, 0, resolver)["marks"]
+        assert len(marks) == 1 and marks[0]["kind"] == "highlight"
+        # The drawn mark is a touch wider than the glyphs: a highlight that
+        # stopped exactly at the ink would look clipped.
+        assert marks[0]["bbox"][0] == pytest.approx(box[0], abs=5)
+        assert marks[0]["bbox"][2] == pytest.approx(box[2], abs=5)
+
+    def test_it_stops_at_the_words_not_at_the_drag(self):
+        """A drag that runs past the end of a line marks the line, not the
+        margin it crossed on the way."""
+        doc, resolver = self._doc()
+        line = extract_page(doc, 0, resolver)["lines"][0]
+        self._mark(doc, resolver, kind="highlight",
+                   rect=[line["bbox"][0], line["bbox"][1], 560, line["bbox"][3]])
+        mark = extract_page(doc, 0, resolver)["marks"][0]
+        assert mark["bbox"][2] < line["bbox"][2] + 5, "se pintó el margen vacío"
+
+    def test_two_lines_get_one_mark_each_not_one_big_box(self):
+        doc, resolver = self._doc()
+        lines = extract_page(doc, 0, resolver)["lines"][:2]
+        rect = [
+            min(l["bbox"][0] for l in lines), lines[0]["bbox"][1],
+            max(l["bbox"][2] for l in lines), lines[1]["bbox"][3],
+        ]
+        self._mark(doc, resolver, kind="highlight", rect=rect)
+        quads = mark_quads(doc)
+        assert len(quads) == 8, f"se esperaban dos cuadriláteros, hay {len(quads) // 4}"
+
+    def test_a_line_barely_clipped_is_left_alone(self):
+        """Catching a descender by a hair means the line above was meant."""
+        doc, resolver = self._doc()
+        lines = extract_page(doc, 0, resolver)["lines"][:2]
+        rect = [lines[0]["bbox"][0], lines[0]["bbox"][1],
+                lines[0]["bbox"][2], lines[0]["bbox"][3] + 1.0]
+        self._mark(doc, resolver, kind="highlight", rect=rect)
+        assert len(mark_quads(doc)) == 4
+
+    @pytest.mark.parametrize("kind", ["highlight", "underline", "strikeout", "squiggly"])
+    def test_every_kind_of_mark_can_be_made(self, kind):
+        doc, resolver = self._doc()
+        box = extract_page(doc, 0, resolver)["lines"][0]["bbox"]
+        self._mark(doc, resolver, kind=kind, rect=list(box))
+        assert extract_page(doc, 0, resolver)["marks"][0]["kind"] == kind
+
+    def test_the_colour_asked_for_is_the_colour_drawn(self):
+        doc, resolver = self._doc()
+        box = extract_page(doc, 0, resolver)["lines"][0]["bbox"]
+        self._mark(doc, resolver, kind="highlight", rect=list(box), color="#66ccff")
+        assert extract_page(doc, 0, resolver)["marks"][0]["color"] == "#66ccff"
+
+    def test_a_note_carries_its_text(self):
+        doc, resolver = self._doc()
+        self._mark(doc, resolver, kind="note", rect=[400, 100, 416, 116],
+                   note="revisar esta cifra")
+        mark = extract_page(doc, 0, resolver)["marks"][0]
+        assert mark["kind"] == "text" and mark["note"] == "revisar esta cifra"
+
+    def test_a_mark_over_no_text_still_marks_the_area(self):
+        """Over a picture, the rectangle drawn is what was meant."""
+        doc, resolver = self._doc()
+        self._mark(doc, resolver, kind="highlight", rect=[400, 600, 500, 640])
+        mark = extract_page(doc, 0, resolver)["marks"][0]
+        assert mark["bbox"][0] == pytest.approx(400, abs=12)
+        assert mark["bbox"][2] == pytest.approx(500, abs=12)
+        assert mark["bbox"][2] > mark["bbox"][0] + 80
+
+    def test_a_mark_can_be_taken_off_again(self):
+        doc, resolver = self._doc()
+        box = extract_page(doc, 0, resolver)["lines"][0]["bbox"]
+        self._mark(doc, resolver, kind="highlight", rect=list(box))
+        xref = extract_page(doc, 0, resolver)["marks"][0]["xref"]
+        apply_operations(doc, resolver, [{"op": "delete_mark", "page": 0, "xref": xref}])
+        assert extract_page(doc, 0, resolver)["marks"] == []
+
+    def test_an_unknown_kind_is_refused(self):
+        doc, resolver = self._doc()
+        with pytest.raises(EditError):
+            self._mark(doc, resolver, kind="garabato", rect=[10, 10, 100, 40])
+
+    def test_marking_is_undoable(self):
+        from app.store import DocumentStore
+
+        local = DocumentStore()
+        document = local.open(build_pdf(), "uno.pdf")
+        try:
+            box = extract_page(document.doc, 0, document.resolver)["lines"][0]["bbox"]
+            document.snapshot([0])
+            apply_operations(document.doc, document.resolver, [{
+                "op": "add_mark", "page": 0, "kind": "highlight", "rect": list(box),
+            }])
+            assert len(extract_page(document.doc, 0, document.resolver)["marks"]) == 1
+            assert document.undo() is True
+            assert extract_page(document.doc, 0, document.resolver)["marks"] == []
+        finally:
+            local.close_all()
+
+    def test_a_form_field_is_not_reported_as_a_mark(self):
+        """A widget belongs to the document's form, not to the reader."""
+        doc = pymupdf.open(stream=build_pdf_with_a_form(), filetype="pdf")
+        kinds = {m["kind"] for m in extract_page(doc, 0, FontResolver(doc))["marks"]}
+        assert "widget" not in kinds
+        assert kinds == {"highlight"}
+
+    def test_a_sweep_along_a_line_marks_it(self):
+        """A highlighter is dragged along the text, not around it: the gesture
+        has no height at all, and it used to mark nothing."""
+        doc, resolver = self._doc()
+        box = extract_page(doc, 0, resolver)["lines"][0]["bbox"]
+        middle = (box[1] + box[3]) / 2
+        self._mark(doc, resolver, kind="highlight",
+                   rect=[box[0], middle, box[2], middle])
+        marks = extract_page(doc, 0, resolver)["marks"]
+        assert len(marks) == 1
+        assert marks[0]["bbox"][2] == pytest.approx(box[2], abs=5)
+        # The stroke has no height, so the mark has to take its height from the
+        # line. Falling back to the stroke itself draws nothing at all.
+        drawn = marks[0]["bbox"][3] - marks[0]["bbox"][1]
+        assert drawn >= (box[3] - box[1]) * 0.9, f"la marca quedó de {drawn:.1f} pt"
+
+    def test_a_sweep_marks_the_line_it_was_drawn_through_and_no_other(self):
+        doc, resolver = self._doc()
+        lines = extract_page(doc, 0, resolver)["lines"]
+        first, second = lines[0]["bbox"], lines[1]["bbox"]
+        middle = (second[1] + second[3]) / 2
+        self._mark(doc, resolver, kind="highlight",
+                   rect=[second[0], middle, second[2], middle])
+        mark = extract_page(doc, 0, resolver)["marks"][0]
+        assert mark["bbox"][1] > first[3] - 2, "marcó la línea de arriba"
+        quads = mark_quads(doc)
+        assert len(quads) == 4
+        assert quads[2][1] - quads[0][1] >= (second[3] - second[1]) * 0.9
+
+    def test_half_a_line_stays_half_a_line(self):
+        doc, resolver = self._doc()
+        box = extract_page(doc, 0, resolver)["lines"][0]["bbox"]
+        middle_y = (box[1] + box[3]) / 2
+        half = box[0] + (box[2] - box[0]) / 2
+        self._mark(doc, resolver, kind="highlight",
+                   rect=[box[0], middle_y, half, middle_y])
+        mark = extract_page(doc, 0, resolver)["marks"][0]
+        assert mark["bbox"][2] < box[2] - 10, "se marcó la línea entera"
+        assert mark["bbox"][3] - mark["bbox"][1] >= (box[3] - box[1]) * 0.9
+
+    def test_a_gesture_with_no_extent_at_all_is_refused(self):
+        doc, resolver = self._doc()
+        with pytest.raises(EditError):
+            self._mark(doc, resolver, kind="highlight", rect=[100, 100, 100, 100])

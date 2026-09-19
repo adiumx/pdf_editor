@@ -23,6 +23,7 @@
       <button class="btn btn--tool" data-tool="move" title="Arrastrar texto a otro sitio (M)">✥ Mover</button>
       <button class="btn btn--tool" data-tool="text" title="Añadir un cuadro de texto (T)">➕ Texto</button>
       <button class="btn btn--tool" data-tool="image" title="Insertar una imagen (I)">🖼️ Imagen</button>
+      <button class="btn btn--tool" data-tool="mark" title="Resaltar, subrayar, tachar o anotar (A)">🖍️ Anotar</button>
       <button class="btn btn--tool" data-tool="erase" title="Borrar una zona (E)">🧽 Borrar</button>
     </div>
     <span class="sep"></span>
@@ -67,6 +68,26 @@
   <span class="sep"></span>
   <span class="find-count">Mayús al arrastrar: recto · Flechas: empujar · Mayús+flechas: un paso</span>
   <button class="btn btn--icon" id="grid-close" title="Cerrar">✕</button>
+</div>
+
+<div class="findbar" id="markbar" hidden>
+  <label class="field">
+    <span>Marca</span>
+    <select id="mark-kind">
+      <option value="highlight">Resaltar</option>
+      <option value="underline">Subrayar</option>
+      <option value="strikeout">Tachar</option>
+      <option value="squiggly">Subrayado ondulado</option>
+      <option value="note">Nota</option>
+    </select>
+  </label>
+  <label class="field">
+    <span>Color</span>
+    <input type="color" id="mark-color" value="#ffd83d">
+  </label>
+  <span class="sep"></span>
+  <span class="find-count">Arrastra sobre el texto · Clic en una marca para quitarla</span>
+  <button class="btn btn--icon" id="mark-close" title="Cerrar">✕</button>
 </div>
 
 <div class="findbar" id="findbar" hidden>

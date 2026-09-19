@@ -50,6 +50,7 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | **Mover** | Arrastra un párrafo a otro sitio de la página. Sus enlaces viajan con él. |
 | **Texto** | Dibuja un rectángulo e inserta texto nuevo con la fuente que elijas. |
 | **Imagen** | Sube una imagen y colócala dibujando un rectángulo. |
+| **Anotar** | Resalta, subraya, tacha o deja una nota. Arrastra sobre el texto; clic en una marca para quitarla. |
 | **Borrar** | Elimina todo lo que haya dentro de un rectángulo. |
 | **Reconocer texto** | Lee el texto de las páginas escaneadas para poder editarlas. Aparece solo cuando hay alguna. |
 | **Buscar** | `Ctrl+F` abre la búsqueda: resalta todas las apariciones, salta entre ellas y reemplaza todas de una vez. |
@@ -82,6 +83,26 @@ encuentra «Computación». Los botones `Aa` y `|ab|` exigen coincidencia exacta
 palabra completa. Reemplazar todo es **un solo paso de deshacer**, y el texto
 reemplazado se reajusta como cualquier otra edición.
 
+### Anotar
+
+`A` abre la herramienta. Eliges el tipo de marca —resaltado, subrayado,
+tachado, subrayado ondulado o nota— y su color, y **arrastras sobre el texto**
+como con un rotulador: el gesto no tiene altura, y la marca toma la suya de la
+línea por la que pasaste. Se marca desde donde entraste hasta donde saliste, así
+que media frase queda como media frase, y se para en las palabras: por mucho que
+el arrastre siga hasta el borde, no se pinta el margen vacío. Dos líneas
+cruzadas reciben una marca cada una, no un rectángulo que se las come junto con
+el espacio entre ellas.
+
+Sobre algo que no es texto —una figura, una foto— se marca el rectángulo que
+dibujes, que es lo que significa rodear una imagen.
+
+Una **nota** es una chincheta: clic donde la quieras y escribe el texto.
+
+Las marcas que ya trae el documento también se ven. Con la herramienta en la
+mano se perfilan y un clic las quita; con cualquier otra son invisibles y no
+estorban al texto de debajo. Todo ello se deshace como cualquier otra edición.
+
 ### Cuadrícula, ajuste y guías
 
 `G` abre la barra de la cuadrícula. **Mostrar cuadrícula** raya la página con el
@@ -111,7 +132,8 @@ de ahí las **flechas** lo empujan un punto y **Mayús+flechas** un paso entero 
 la cuadrícula, que es la forma de afinar una posición sin pelearse con el ratón.
 `Esc` lo deselecciona.
 
-Atajos: `V` editar · `M` mover · `T` texto · `I` imagen · `E` borrar · `G` cuadrícula ·
+Atajos: `V` editar · `M` mover · `T` texto · `I` imagen · `E` borrar · `A` anotar ·
+`G` cuadrícula ·
 `Ctrl+F` buscar · `Ctrl+Z` / `Ctrl+Mayús+Z` deshacer y rehacer · `Ctrl+S` guardar ·
 `Enter` aplicar · `Esc` cancelar. Las letras sueltas no actúan mientras escribes en un
 campo o en el propio documento.

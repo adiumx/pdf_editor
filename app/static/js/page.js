@@ -14,6 +14,7 @@ export class PageView {
     this.geometry = geometry;
     this.handlers = handlers;
     this.lines = [];
+    this.marks = [];
     this.zoom = 1.5;
     this._sampler = null;
 
@@ -55,6 +56,44 @@ export class PageView {
       line.spans.forEach((span, index) => {
         this.layer.append(this._spanElement(line, span, index));
       });
+    }
+    this._renderMarks();
+  }
+
+  /** The marks already on the page, as targets to click rather than as paint.
+   *
+   * What the reader sees is the rendered image, annotations and all; these are
+   * only the handles for taking one off again, and they show only while the
+   * annotate tool is the one in hand.
+   */
+  setMarks(marks) {
+    this.marks = marks || [];
+    this._renderMarks();
+  }
+
+  _renderMarks() {
+    for (const stale of this.layer.querySelectorAll('.markhit')) stale.remove();
+    const z = this.zoom;
+    for (const mark of this.marks) {
+      const element = document.createElement('div');
+      element.className = 'markhit';
+      element.dataset.xref = String(mark.xref);
+      element.title = mark.note
+        ? `${mark.note} — clic para quitarla`
+        : 'Clic para quitar la marca';
+      Object.assign(element.style, {
+        left: `${mark.bbox[0] * z}px`,
+        top: `${mark.bbox[1] * z}px`,
+        width: `${Math.max(mark.bbox[2] - mark.bbox[0], 6) * z}px`,
+        height: `${Math.max(mark.bbox[3] - mark.bbox[1], 6) * z}px`,
+        boxShadow: `inset 0 0 0 1.5px ${mark.color}`,
+      });
+      element.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.handlers.removeMark?.(this, mark);
+      });
+      this.layer.append(element);
     }
   }
 

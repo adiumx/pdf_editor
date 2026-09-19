@@ -53,6 +53,13 @@ def hex_to_pdf(value: str) -> tuple[float, float, float]:
     return pymupdf.sRGB_to_pdf(number)
 
 
+def pdf_to_hex(triple: Sequence[float] | None) -> str | None:
+    """The 0..1 RGB triple PyMuPDF reports back to ``#rrggbb``."""
+    if not triple or len(triple) < 3:
+        return None
+    return "#" + "".join(f"{max(0, min(255, round(v * 255))):02x}" for v in triple[:3])
+
+
 def to_display(page: pymupdf.Page, rect_or_point):
     """Map page coordinates into the space the rendered image uses.
 
@@ -465,7 +472,42 @@ def extract_page(
         "height": round(page.rect.height, 2),
         "rotation": page.rotation,
         "lines": lines,
+        "marks": page_marks(page),
     }
+
+
+# Marks a reader can put on a page and take off again. A widget belongs to the
+# document's form and a redaction is a pending instruction, so neither is one
+# of these; a link has its own machinery.
+MARK_TYPES = {"Highlight", "Underline", "StrikeOut", "Squiggly", "Text", "FreeText", "Square"}
+
+# What a mark is drawn in when the file does not say.
+DEFAULT_MARK_COLOR = "#ffd83d"
+
+
+def page_marks(page: pymupdf.Page) -> list[dict[str, Any]]:
+    """The annotations of a page, in the space the browser draws it in.
+
+    Read out into plain values as they are visited: a live annotation belongs
+    to the walk that produced it, and reading one after the fact is not safe.
+    """
+    marks = []
+    for annot in page.annots():
+        kind = annot.type[1]
+        if kind not in MARK_TYPES:
+            continue
+        rect = to_display(page, pymupdf.Rect(annot.rect))
+        stroke = annot.colors.get("stroke") or annot.colors.get("fill")
+        marks.append(
+            {
+                "xref": annot.xref,
+                "kind": kind.lower(),
+                "bbox": [round(v, 2) for v in rect],
+                "color": pdf_to_hex(stroke) or DEFAULT_MARK_COLOR,
+                "note": annot.info.get("content", ""),
+            }
+        )
+    return marks
 
 
 def page_summaries(doc: pymupdf.Document) -> list[dict[str, Any]]:

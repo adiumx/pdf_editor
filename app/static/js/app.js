@@ -21,6 +21,17 @@ const grid = new Grid({
 }, editor);
 editor.grid = grid;
 
+// The annotate tool's own bar: which mark the drag makes, and in what colour.
+const markBar = {
+  bar: $('markbar'),
+  kind: $('mark-kind'),
+  color: $('mark-color'),
+  close: $('mark-close'),
+};
+markBar.kind.addEventListener('change', () => { editor.markKind = markBar.kind.value; });
+markBar.color.addEventListener('input', () => { editor.markColor = markBar.color.value; });
+markBar.close.addEventListener('click', () => { editor.setTool('select').catch(reportError); });
+
 const search = new SearchBar({
   bar: $('findbar'),
   query: $('find-query'),
@@ -329,7 +340,7 @@ document.addEventListener('keydown', (event) => {
     editor.nudge(dx, dy, event.shiftKey).catch(reportError);
     return;
   }
-  const shortcuts = { v: 'select', m: 'move', t: 'text', e: 'erase' };
+  const shortcuts = { v: 'select', m: 'move', t: 'text', e: 'erase', a: 'mark' };
   const tool = shortcuts[event.key.toLowerCase()];
   if (tool) {
     event.preventDefault();
@@ -365,6 +376,8 @@ editor.onChange(() => {
   // leave the previous document's fonts in place.
   $('findbar').hidden = $('findbar').hidden || !open;
   $('gridbar').hidden = $('gridbar').hidden || !open;
+  // The annotate bar is the tool: it is up exactly while the tool is in hand.
+  $('markbar').hidden = !open || editor.tool !== 'mark';
   search.refresh();
 
   if (open) grid.paintAll();

@@ -461,6 +461,30 @@ body {
 .page.tool-erase .span,
 .page.tool-image .span { pointer-events: none; }
 
+/* A mark already on the page: invisible until the annotate tool is in hand,
+   because the mark itself is drawn in the rendered image. */
+.markhit {
+  position: absolute;
+  border-radius: 2px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .12s;
+  z-index: 14;
+}
+
+.page.tool-mark .markhit {
+  pointer-events: auto;
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.page.tool-mark .markhit:hover {
+  opacity: 1;
+  background: rgba(220, 38, 38, .18);
+}
+
+.page.tool-mark .span { pointer-events: none; }
+
 .marquee {
   position: absolute;
   border: 1.5px dashed var(--accent);
