@@ -354,3 +354,48 @@ class TestFindBar:
         page.click("#find-next")
         page.wait_for_timeout(400)
         assert page.console_errors == []
+
+
+@requires_fonts
+class TestMoveTool:
+    def test_dragging_a_block_moves_it(self, page):
+        page.click('[data-tool="move"]')
+        target = span_with(page, "Primera linea")
+        before = target.bounding_box()
+
+        page.mouse.move(before["x"] + before["width"] / 2, before["y"] + before["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(
+            before["x"] + before["width"] / 2 + 120,
+            before["y"] + before["height"] / 2 + 140,
+            steps=10,
+        )
+        assert page.locator(".ghost").count() >= 1, "no se ve dónde caería"
+        page.mouse.up()
+        page.wait_for_timeout(3500)
+
+        after = span_with(page, "Primera linea").bounding_box()
+        assert after["x"] > before["x"] + 60
+        assert after["y"] > before["y"] + 80
+
+    def test_the_ghost_disappears_after_dropping(self, page):
+        page.click('[data-tool="move"]')
+        target = span_with(page, "Primera linea")
+        box = target.bounding_box()
+        page.mouse.move(box["x"] + 20, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + 90, box["y"] + 100, steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(3000)
+        assert page.locator(".ghost").count() == 0
+
+    def test_moving_does_not_open_the_editor(self, page):
+        page.click('[data-tool="move"]')
+        target = span_with(page, "Titulo en negrita")
+        box = target.bounding_box()
+        page.mouse.move(box["x"] + 10, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + 60, box["y"] + 60, steps=5)
+        page.mouse.up()
+        page.wait_for_timeout(2500)
+        assert page.locator(".span.is-editing").count() == 0

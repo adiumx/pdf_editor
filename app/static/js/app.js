@@ -299,7 +299,7 @@ document.addEventListener('keydown', (event) => {
   }
   if (typing || !editor.isOpen) return;
 
-  const shortcuts = { v: 'select', t: 'text', e: 'erase' };
+  const shortcuts = { v: 'select', m: 'move', t: 'text', e: 'erase' };
   const tool = shortcuts[event.key.toLowerCase()];
   if (tool) {
     event.preventDefault();

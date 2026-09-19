@@ -93,6 +93,10 @@ export class PageView {
       // handler, undoing the focus() that puts the caret in the editable — the
       // box would open and typing would go nowhere.
       event.preventDefault();
+      if (this.element.classList.contains('tool-move')) {
+        this.handlers.onMoveStart?.(this, line, event);
+        return;
+      }
       this.handlers.onSpanActivate?.(this, line, index, element, event);
     });
     return element;
@@ -208,6 +212,28 @@ export class PageView {
     if (!host) return;
     host.classList.remove('is-editing');
     host.querySelector('.span__input')?.remove();
+  }
+
+  /** Show where a block would land, as boxes following the cursor. */
+  showGhost(rects, dx, dy) {
+    this.layer.querySelectorAll('.ghost').forEach((node) => node.remove());
+    const z = this.zoom;
+    for (const [x0, y0, x1, y1] of rects) {
+      const element = document.createElement('div');
+      element.className = 'ghost';
+      Object.assign(element.style, {
+        left: `${(x0 + dx) * z}px`,
+        top: `${(y0 + dy) * z}px`,
+        width: `${Math.max(x1 - x0, 1) * z}px`,
+        height: `${Math.max(y1 - y0, 1) * z}px`,
+      });
+      this.layer.append(element);
+    }
+  }
+
+  clearGhost() {
+    this.layer.querySelectorAll('.ghost').forEach((node) => node.remove());
+    this.element.classList.remove('is-dragging');
   }
 
   /** Convert a mouse event to page coordinates (points, not pixels). */

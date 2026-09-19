@@ -1043,6 +1043,69 @@ class EditSession:
                 )
                 batch.new_links.append(moved)
 
+    def move_block(self, op: dict[str, Any]) -> None:
+        """Pick a run of text up and set it down somewhere else on the page.
+
+        Only the text moves, with whatever links sit on it. A drawing or a
+        picture the block happens to overlap belongs to the page, not to the
+        words, and stays where the page put it.
+        """
+        pno = int(op["page"])
+        batch = self._batch(pno)
+        lines = op.get("lines") or []
+        if not lines:
+            raise EditError("No hay nada que mover")
+
+        page = self._doc[pno]
+        shift = pymupdf.Point(float(op.get("dx", 0.0)), float(op.get("dy", 0.0)))
+        if page.rotation:
+            # The client drags in the space it sees; the page is drawn in its own.
+            origin = to_page(page, pymupdf.Point(0, 0))
+            moved = to_page(page, pymupdf.Point(shift.x, shift.y))
+            shift = pymupdf.Point(moved.x - origin.x, moved.y - origin.y)
+
+        if abs(shift.x) < 0.5 and abs(shift.y) < 0.5:
+            return  # a click, not a drag
+
+        boxes = [self._rect(pno, line["bbox"]) for line in lines]
+        landing = [rect + (shift.x, shift.y, shift.x, shift.y) for rect in boxes]
+        if not all(page.rect.contains(rect) for rect in landing):
+            raise EditError("El texto no cabe ahí; quedaría fuera de la página.")
+
+        for line, rect in zip(lines, boxes):
+            batch.redactions.append(
+                rect + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD)
+            )
+            rotation = self._rotation(pno, line.get("rotation", 0))
+            for span in line.get("spans", []):
+                text = span.get("text", "")
+                if not text.strip():
+                    continue
+                font = _span_font(self._resolver, pno, span)
+                if font.note:
+                    self._warn(pno, "font-substituted", font.note)
+                start = self._point(pno, span.get("origin") or [rect.x0, rect.y1])
+                batch.texts.append(
+                    _PendingText(
+                        page=pno,
+                        point=(start[0] + shift.x, start[1] + shift.y),
+                        text=text,
+                        resolved=font,
+                        fontsize=float(span.get("size", 11.0)),
+                        color=hex_to_pdf(span.get("color", "#000000")),
+                        rotate=rotation,
+                        opacity=_visible_opacity(span.get("alpha", 255)),
+                    )
+                )
+
+        for link in page.get_links():
+            rect = pymupdf.Rect(link["from"])
+            if not any(rect.intersects(box) for box in boxes):
+                continue
+            moved = dict(link)
+            moved["from"] = rect + (shift.x, shift.y, shift.x, shift.y)
+            batch.new_links.append(moved)
+
     def delete_line(self, op: dict[str, Any]) -> None:
         """Erase a line without putting anything back."""
         self.replace_line({**op, "spans": []})
@@ -1332,6 +1395,8 @@ def apply_operations(
             session.replace_line(op)
         elif kind == "replace_paragraph":
             session.replace_paragraph(op)
+        elif kind == "move_block":
+            session.move_block(op)
         elif kind == "delete_line":
             session.delete_line(op)
         elif kind == "add_text":

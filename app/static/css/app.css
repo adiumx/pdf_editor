@@ -406,6 +406,20 @@ body {
   pointer-events: none;
 }
 
+.page.tool-move .span { cursor: grab; }
+.page.tool-move .span:hover { background: rgba(47, 109, 246, .12); }
+.page.tool-move.is-dragging .span { cursor: grabbing; }
+
+/* Where the block would land if it were dropped now. */
+.ghost {
+  position: absolute;
+  background: rgba(47, 109, 246, .2);
+  box-shadow: 0 0 0 1px var(--accent);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 15;
+}
+
 .page.tool-text .page__layer,
 .page.tool-erase .page__layer,
 .page.tool-image .page__layer { cursor: crosshair; }

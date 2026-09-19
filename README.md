@@ -47,6 +47,7 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | Herramienta | Qué hace |
 |---|---|
 | **Editar** | Haz clic en cualquier texto y escribe encima. Conserva fuente, tamaño y color. |
+| **Mover** | Arrastra un párrafo a otro sitio de la página. Sus enlaces viajan con él. |
 | **Texto** | Dibuja un rectángulo e inserta texto nuevo con la fuente que elijas. |
 | **Imagen** | Sube una imagen y colócala dibujando un rectángulo. |
 | **Borrar** | Elimina todo lo que haya dentro de un rectángulo. |
@@ -80,7 +81,7 @@ encuentra «Computación». Los botones `Aa` y `|ab|` exigen coincidencia exacta
 palabra completa. Reemplazar todo es **un solo paso de deshacer**, y el texto
 reemplazado se reajusta como cualquier otra edición.
 
-Atajos: `V` editar · `T` texto · `I` imagen · `E` borrar · `Ctrl+F` buscar ·
+Atajos: `V` editar · `M` mover · `T` texto · `I` imagen · `E` borrar · `Ctrl+F` buscar ·
 `Ctrl+Z` / `Ctrl+Mayús+Z` deshacer y rehacer · `Ctrl+S` guardar · `Enter`
 aplicar · `Esc` cancelar.
 

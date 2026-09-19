@@ -85,6 +85,7 @@ export class Editor {
     for (const geometry of this.doc.pages) {
       const view = new PageView(geometry.page, geometry, {
         onSpanActivate: (...args) => this.activateSpan(...args),
+        onMoveStart: (...args) => this.startMove(...args),
         onBlankClick: () => this.commitActive(),
         onMarquee: (...args) => this.handleMarquee(...args),
       });
@@ -431,6 +432,43 @@ export class Editor {
         )
       : { op: 'delete_line', page: line.page, bbox: line.bbox, origin: line.origin, rotation: line.rotation };
     await this.applyOperations([operation], { affected: [line.page] });
+  }
+
+  /**
+   * Drag a block of text to another place on the page.
+   *
+   * What moves is the paragraph the grabbed line belongs to, because a line
+   * pulled out of its paragraph leaves a hole behind it.
+   */
+  startMove(view, line, event) {
+    if (this.tool !== 'move') return;
+    const block = view.lines.filter((item) => item.paragraph === line.paragraph);
+    const rects = block.map((item) => item.bbox);
+    const start = view.toPagePoint(event);
+    view.element.classList.add('is-dragging');
+    view.showGhost(rects, 0, 0);
+
+    const move = (moveEvent) => {
+      const at = view.toPagePoint(moveEvent);
+      view.showGhost(rects, at.x - start.x, at.y - start.y);
+    };
+
+    const up = async (upEvent) => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      const at = view.toPagePoint(upEvent);
+      view.clearGhost();
+      const dx = at.x - start.x;
+      const dy = at.y - start.y;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      await this.applyOperations(
+        [{ op: 'move_block', page: view.pageNumber, lines: block, dx, dy }],
+        { affected: [view.pageNumber] },
+      ).catch(() => {});
+    };
+
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
   }
 
   /* ---------- new content ---------- */

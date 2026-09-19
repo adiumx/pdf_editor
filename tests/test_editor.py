@@ -863,3 +863,113 @@ class TestMovingFiguresOutOfTheWay:
         after = sorted(round(i["bbox"][1], 1) for i in doc[0].get_image_info())
         assert after == before, "movió una imagen que estaba en otra columna"
         doc.close()
+
+
+@requires_fonts
+class TestMovingABlock:
+    """Text could be edited where it stood, but not put somewhere else."""
+
+    def _doc(self, rotation=0):
+        document = pymupdf.open(stream=build_pdf([
+            ((72, 100), "Primera linea del bloque", "serif", 12),
+            ((72, 116), "Segunda linea del bloque", "serif", 12),
+            ((72, 220), "Texto que no se mueve", "serif", 12),
+        ]), filetype="pdf")
+        if rotation:
+            document[0].set_rotation(rotation)
+            document = pymupdf.open(stream=document.tobytes(), filetype="pdf")
+        document[0].insert_link({
+            "kind": pymupdf.LINK_URI,
+            "from": pymupdf.Rect(72, 90, 200, 104),
+            "uri": "https://ejemplo.com",
+        })
+        return pymupdf.open(stream=document.tobytes(), filetype="pdf")
+
+    def _block(self, document):
+        page = extract_page(document, 0, FontResolver(document))
+        lines = [line for line in page["lines"] if "bloque" in line["text"]]
+        return lines, page
+
+    def _move(self, document, lines, dx, dy):
+        return apply_operations(document, FontResolver(document), [{
+            "op": "move_block", "page": 0, "lines": [dict(line) for line in lines],
+            "dx": dx, "dy": dy,
+        }])
+
+    def test_the_block_lands_where_it_was_dropped(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        before = [list(line["bbox"]) for line in lines]
+        self._move(document, lines, 140, 200)
+        after = self._block(document)[0]
+        assert len(after) == len(before)
+        for original, moved in zip(before, sorted(after, key=lambda l: l["bbox"][1])):
+            assert moved["bbox"][0] == pytest.approx(original[0] + 140, abs=1.5)
+            assert moved["bbox"][1] == pytest.approx(original[1] + 200, abs=1.5)
+        document.close()
+
+    def test_the_rest_of_the_page_stays_put(self):
+        document = self._doc()
+        lines, page = self._block(document)
+        other = next(l for l in page["lines"] if "no se mueve" in l["text"])
+        self._move(document, lines, 100, 150)
+        after = extract_page(document, 0, FontResolver(document))
+        moved = next(l for l in after["lines"] if "no se mueve" in l["text"])
+        assert moved["bbox"] == pytest.approx(other["bbox"], abs=0.2)
+        document.close()
+
+    def test_the_text_itself_survives(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        self._move(document, lines, 60, 120)
+        text = text_of(document)
+        assert "Primera linea del bloque" in text
+        assert "Segunda linea del bloque" in text
+        assert "Texto que no se mueve" in text
+        document.close()
+
+    def test_a_link_travels_with_the_words_it_sits_on(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        before = list(document[0].get_links()[0]["from"])
+        self._move(document, lines, 90, 130)
+        links = document[0].get_links()
+        assert len(links) == 1
+        assert list(links[0]["from"]) == pytest.approx(
+            [before[0] + 90, before[1] + 130, before[2] + 90, before[3] + 130], abs=1.5
+        )
+        document.close()
+
+    def test_a_click_is_not_a_drag(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        before = [list(line["bbox"]) for line in lines]
+        self._move(document, lines, 0.2, 0.1)
+        after = sorted(self._block(document)[0], key=lambda l: l["bbox"][1])
+        for original, unmoved in zip(before, after):
+            assert unmoved["bbox"] == pytest.approx(original, abs=0.2)
+        document.close()
+
+    def test_dropping_it_off_the_page_is_refused(self):
+        """Better to say no than to put the text where nobody can read it."""
+        document = self._doc()
+        lines, _page = self._block(document)
+        with pytest.raises(EditError):
+            self._move(document, lines, 0, 900)
+        document.close()
+
+    def test_nothing_to_move_is_an_error_not_a_crash(self, doc, resolver):
+        with pytest.raises(EditError):
+            apply_operations(doc, resolver, [{"op": "move_block", "page": 0, "lines": []}])
+
+    @pytest.mark.parametrize("rotation", [90, 270])
+    def test_a_drag_on_a_rotated_page_follows_the_cursor(self, rotation):
+        """The client drags in the space it sees, not in the page's own."""
+        document = self._doc(rotation)
+        lines, _page = self._block(document)
+        before = sorted(line["bbox"] for line in lines)
+        self._move(document, lines, 50, 70)
+        after = sorted(line["bbox"] for line in self._block(document)[0])
+        assert after[0][0] == pytest.approx(before[0][0] + 50, abs=2.0)
+        assert after[0][1] == pytest.approx(before[0][1] + 70, abs=2.0)
+        document.close()
