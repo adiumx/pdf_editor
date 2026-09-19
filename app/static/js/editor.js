@@ -186,7 +186,7 @@ export class Editor {
         bold: span.bold,
         italic: span.italic,
         align: line.align || 'left',
-        fit: false,
+        fit: 'overflow',
       },
       formatDirty: false,
     };
@@ -312,7 +312,7 @@ export class Editor {
     const base = {
       page: line.page,
       align: format.align,
-      fit: format.fit ? 'shrink' : 'overflow',
+      fit: format.fit || 'overflow',
     };
 
     if (paragraph.length > 1) {
@@ -321,7 +321,10 @@ export class Editor {
         op: 'replace_paragraph',
         // The paragraph's own box, widened to the column it sits in: its widest
         // line is not necessarily how far the text is allowed to run.
-        box: [line.block_bbox[0], line.block_bbox[1], line.measure ?? line.block_bbox[2], line.block_bbox[3]],
+        box: line.block_bbox,
+        // How far the text may run, as a point on the page: for text that does
+        // not read left to right, a margin is not simply the box's right edge.
+        measure_point: line.measure_point,
         reflow,
         lines: paragraph.map((item) => (item.id === line.id ? { ...item, spans } : item)),
         edited: {
@@ -423,7 +426,7 @@ export class Editor {
     view.layer.append(box);
     input.focus();
 
-    const format = { ...DEFAULT_NEW_TEXT, align: 'left', fit: false };
+    const format = { ...DEFAULT_NEW_TEXT, align: 'left', fit: 'overflow' };
     this.active = {
       view,
       newBox: { box, input, rect, format },

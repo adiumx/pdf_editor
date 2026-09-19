@@ -15,7 +15,16 @@ from typing import Any, Iterable, Sequence
 
 import pymupdf
 
-from .extract import hex_to_pdf, page_rotation_of, to_page
+from .extract import (
+    across,
+    across_span,
+    along,
+    along_span,
+    from_axes,
+    hex_to_pdf,
+    page_rotation_of,
+    to_page,
+)
 from .fonts import FLAG_BOLD, FLAG_ITALIC, FontResolver, ResolvedFont
 
 # Redaction rectangles are grown by this much so no anti-aliased sliver of the
@@ -119,6 +128,10 @@ class _PageBatch:
     images: list[tuple[pymupdf.Rect, bytes, int]] = field(default_factory=list)
     rewrites: list[_LineRewrite] = field(default_factory=list)
     new_links: list[dict[str, Any]] = field(default_factory=list)
+    drawings: list[tuple[dict[str, Any], pymupdf.Point]] = field(default_factory=list)
+    remove_line_art: bool = False
+    """Set when something has to move: line art is then erased along with the
+    text and put back where it belongs, instead of being left behind."""
 
 
 def _axis_extent(bbox: Sequence[float], rotation: int) -> float:
@@ -275,16 +288,32 @@ def _group_into_runs(line: list[_Token]) -> list[tuple[int, str]]:
     return grouped
 
 
+def _redraw(page: pymupdf.Page, drawing: dict[str, Any], shift: pymupdf.Point) -> None:
+    """Put a simple drawing back on the page, moved by ``shift``."""
+    colour = drawing.get("color")
+    fill = drawing.get("fill")
+    width = drawing.get("width") or 1.0
+    for item in drawing.get("items", []):
+        try:
+            if item[0] == "l":
+                page.draw_line(item[1] + shift, item[2] + shift, color=colour, width=width)
+            elif item[0] == "re":
+                rect = pymupdf.Rect(item[1]) + (shift.x, shift.y, shift.x, shift.y)
+                page.draw_rect(rect, color=colour, fill=fill, width=width)
+        except Exception:
+            continue
+
+
 def _median_leading(
-    origins: list[tuple[float, float]], boxes: list[pymupdf.Rect]
+    origins: list[tuple[float, float]], boxes: list[pymupdf.Rect], rotation: int = 0
 ) -> float:
     """The paragraph's own line spacing, read from its baselines."""
-    deltas = sorted(
-        b[1] - a[1] for a, b in zip(origins, origins[1:]) if b[1] - a[1] > 0
-    )
+    positions = [across(rotation, *origin) for origin in origins]
+    deltas = sorted(b - a for a, b in zip(positions, positions[1:]) if b - a > 0)
     if deltas:
         return deltas[len(deltas) // 2]
-    return max((box.y1 - box.y0 for box in boxes), default=12.0) * 1.2
+    heights = [across_span(rotation, box) for box in boxes]
+    return max((high - low for low, high in heights), default=12.0) * 1.2
 
 
 def _span_font(
@@ -493,28 +522,30 @@ class EditSession:
         align = op.get("align", "left")
         box = self._rect(pno, op.get("box") or lines[0]["bbox"])
 
-        rotated = any(int(line.get("rotation", 0)) % 360 for line in lines)
         single = len(lines) == 1
         forced = bool(op.get("reflow"))
+        measure_point = op.get("measure_point")
 
-        if not forced and (rotated or single or self._line_still_fits(pno, lines[index], box, align)):
+        if not forced and (
+            single or self._line_still_fits(pno, lines[index], box, align, measure_point)
+        ):
             # Nothing has to move but the line being edited.
             self.replace_line({**lines[index], "op": "replace_line", "page": pno,
                                "align": align, "fit": op.get("fit", "overflow"),
                                "from_span": edited.get("span", 0)})
             return
 
-        if rotated:
-            self._warn(pno, "no-reflow", "El texto girado no se reajusta entre líneas.")
-            self.replace_line({**lines[index], "op": "replace_line", "page": pno, "align": align})
-            return
-
-        self._reflow(pno, lines, box, align, op.get("fit", "overflow"))
+        self._reflow(pno, lines, box, align, op.get("fit", "overflow"), measure_point)
 
     def _line_still_fits(
-        self, pno: int, line: dict[str, Any], box: pymupdf.Rect, align: str
+        self,
+        pno: int,
+        line: dict[str, Any],
+        box: pymupdf.Rect,
+        align: str,
+        measure_point: Sequence[float] | None = None,
     ) -> bool:
-        """Whether the edited line stays inside the paragraph's right margin."""
+        """Whether the edited line stays inside the paragraph's far margin."""
         if align != "left":
             return False
         spans = [s for s in line.get("spans", []) if s.get("text")]
@@ -526,11 +557,17 @@ class EditSession:
             )
             for span in spans
         )
-        start = self._rect(pno, line["bbox"]).x0
-        return needed <= (box.x1 - start) + 0.5
+        rotation = self._rotation(pno, line.get("rotation", 0))
+        start = along_span(rotation, self._rect(pno, line["bbox"]))[0]
+        limit = (
+            along(rotation, *self._point(pno, measure_point))
+            if measure_point
+            else along_span(rotation, box)[1]
+        )
+        return needed <= (limit - start) + 0.5
 
     def _paragraph_stream(
-        self, pno: int, lines: list[dict[str, Any]]
+        self, pno: int, lines: list[dict[str, Any]], rotation: int = 0
     ) -> tuple[list[_Run], list[_Token]]:
         """Flatten a paragraph into styled runs and the words that make it up.
 
@@ -541,7 +578,7 @@ class EditSession:
         tokens: list[_Token] = []
 
         for position, line in enumerate(lines):
-            cursor = self._rect(pno, line["bbox"]).x0
+            cursor = along_span(rotation, self._rect(pno, line["bbox"]))[0]
             for span in line.get("spans", []):
                 text = span.get("text", "")
                 if not text:
@@ -588,19 +625,26 @@ class EditSession:
         return runs, tokens
 
     def _room_below(
-        self, pno: int, boxes: list[pymupdf.Rect]
+        self, pno: int, boxes: list[pymupdf.Rect], rotation: int
     ) -> float:
-        """How far down the paragraph may reach before it hits something.
+        """How far the paragraph may reach before it runs into something.
 
-        Nothing is moved to make room, so growing into the next paragraph is a
-        real collision. What is actually below is worth looking up: a paragraph
-        with white space under it can simply take it.
+        Measured across the lines, in the paragraph's own direction, so it works
+        the same for text that reads upwards. Nothing is moved aside on its own,
+        so growing into the next paragraph is a real collision; what is actually
+        below is worth looking up, because a paragraph with white space under it
+        can simply take it.
         """
         page = self._doc[pno]
-        floor = page.rect.y1 - 18  # a hair above the bottom of the sheet
-        bottom = max(box.y1 for box in boxes)
-        left = min(box.x0 for box in boxes)
-        right = max(box.x1 for box in boxes)
+        page_limit = max(
+            across(rotation, x, y)
+            for x, y in ((page.rect.x0, page.rect.y0), (page.rect.x1, page.rect.y1))
+        )
+        floor = page_limit - 18  # a hair inside the edge of the sheet
+        spans = [across_span(rotation, box) for box in boxes]
+        bottom = max(span[1] for span in spans)
+        reach = [along_span(rotation, box) for box in boxes]
+        near, far = min(r[0] for r in reach), max(r[1] for r in reach)
 
         try:
             raw = page.get_text("dict")
@@ -609,13 +653,132 @@ class EditSession:
 
         for block in raw.get("blocks", []):
             for line in block.get("lines", []) if block.get("type") == 0 else []:
-                x0, y0, x1, y1 = line.get("bbox", (0, 0, 0, 0))
-                if y0 <= bottom + 0.5:
-                    continue  # level with the paragraph or above it
-                if x1 <= left + 1 or x0 >= right - 1:
+                bbox = line.get("bbox", (0, 0, 0, 0))
+                start, end = across_span(rotation, bbox)
+                if start <= bottom + 0.5:
+                    continue  # level with the paragraph or before it
+                a0, a1 = along_span(rotation, bbox)
+                if a1 <= near + 1 or a0 >= far - 1:
                     continue  # beside it, in another column
-                floor = min(floor, y0)
+                floor = min(floor, start)
         return floor
+
+    # Items a moved drawing may be made of. Anything else — a curve, a clip, an
+    # image — is left alone by refusing to move the block at all, because half a
+    # figure in its old place is worse than a paragraph that overflows.
+    _MOVABLE_ITEMS = {"l", "re"}
+
+    def _push_down(
+        self,
+        pno: int,
+        rotation: int,
+        boxes: list[pymupdf.Rect],
+        delta: float,
+        batch: _PageBatch,
+    ) -> bool:
+        """Move whatever sits below the paragraph out of its way.
+
+        Returns False, changing nothing, when the block below cannot be moved
+        faithfully: a figure, an image, or anything that would be pushed off the
+        sheet. Refusing is the right answer there — the caller falls back to
+        resizing the text or to saying it does not fit.
+        """
+        page = self._doc[pno]
+        bottom = max(across_span(rotation, box)[1] for box in boxes)
+        near = min(along_span(rotation, box)[0] for box in boxes)
+        far = max(along_span(rotation, box)[1] for box in boxes)
+        page_limit = max(
+            across(rotation, x, y)
+            for x, y in ((page.rect.x0, page.rect.y0), (page.rect.x1, page.rect.y1))
+        )
+
+        def below(bbox) -> bool:
+            start, _end = across_span(rotation, bbox)
+            if start <= bottom + 0.5:
+                return False
+            a0, a1 = along_span(rotation, bbox)
+            return a1 > near + 1 and a0 < far - 1
+
+        if page.get_images():
+            for info in page.get_image_info():
+                if below(info["bbox"]):
+                    return False
+
+        moving_drawings = []
+        for drawing in page.get_drawings():
+            if not below(drawing["rect"]):
+                continue
+            if any(item[0] not in self._MOVABLE_ITEMS for item in drawing["items"]):
+                return False
+            moving_drawings.append(drawing)
+
+        try:
+            raw = page.get_text("dict")
+        except Exception:
+            return False
+
+        moving_lines = [
+            line
+            for block in raw.get("blocks", [])
+            if block.get("type") == 0
+            for line in block.get("lines", [])
+            if below(line.get("bbox", (0, 0, 0, 0)))
+        ]
+
+        # Would any of it fall off the sheet?
+        edges = [across_span(rotation, line["bbox"])[1] for line in moving_lines]
+        edges += [across_span(rotation, d["rect"])[1] for d in moving_drawings]
+        if edges and max(edges) + delta > page_limit - 4:
+            return False
+        if not moving_lines and not moving_drawings:
+            return True
+
+        shift = pymupdf.Point(*from_axes(rotation, 0.0, delta))
+        batch.remove_line_art = True
+
+        for line in moving_lines:
+            batch.redactions.append(
+                pymupdf.Rect(line["bbox"])
+                + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD)
+            )
+            for span in line.get("spans", []):
+                text = span.get("text", "")
+                if not text.strip():
+                    continue
+                descriptor = {
+                    "text": text,
+                    "font": span.get("font"),
+                    "size": float(span.get("size", 11.0)),
+                    "flags": int(span.get("flags", 0)),
+                }
+                origin = span.get("origin", (0, 0))
+                batch.texts.append(
+                    _PendingText(
+                        page=pno,
+                        point=(origin[0] + shift.x, origin[1] + shift.y),
+                        text=text,
+                        resolved=_span_font(self._resolver, pno, descriptor),
+                        fontsize=descriptor["size"],
+                        color=pymupdf.sRGB_to_pdf(int(span.get("color", 0))),
+                        rotate=rotation,
+                        opacity=float(span.get("alpha", 255)) / 255.0,
+                    )
+                )
+
+        for drawing in moving_drawings:
+            batch.redactions.append(
+                drawing["rect"] + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD)
+            )
+            batch.drawings.append((drawing, shift))
+
+        for link in page.get_links():
+            if not below(link["from"]):
+                continue
+            moved = dict(link)
+            moved["from"] = pymupdf.Rect(link["from"]) + (shift.x, shift.y, shift.x, shift.y)
+            batch.new_links.append(moved)
+
+        return True
 
     def _reflow(
         self,
@@ -624,59 +787,78 @@ class EditSession:
         box: pymupdf.Rect,
         align: str,
         fit: str,
+        measure_point: Sequence[float] | None = None,
     ) -> None:
         """Re-break a paragraph and lay it out again from its first baseline."""
         batch = self._batch(pno)
-        runs, tokens = self._paragraph_stream(pno, lines)
+        rotation = self._rotation(pno, lines[0].get("rotation", 0))
+        runs, tokens = self._paragraph_stream(pno, lines, rotation)
+        boxes = [self._rect(pno, line["bbox"]) for line in lines]
         if not tokens:
-            for line in lines:
+            for rect in boxes:
                 batch.redactions.append(
-                    self._rect(pno, line["bbox"])
-                    + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD)
+                    rect + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD)
                 )
             return
 
-        boxes = [self._rect(pno, line["bbox"]) for line in lines]
-        origins = [self._point(pno, line.get("origin") or [b.x0, b.y1]) for line, b in zip(lines, boxes)]
-        first_left = boxes[0].x0
-        body_left = boxes[1].x0 if len(boxes) > 1 else first_left
-        leading = _median_leading(origins, boxes)
+        origins = [
+            self._point(pno, line.get("origin") or [rect.x0, rect.y1])
+            for line, rect in zip(lines, boxes)
+        ]
+        starts = [along_span(rotation, rect)[0] for rect in boxes]
+        first_start, body_start = starts[0], (starts[1] if len(starts) > 1 else starts[0])
+        limit = (
+            along(rotation, *self._point(pno, measure_point))
+            if measure_point
+            else along_span(rotation, box)[1]
+        )
+        base_across = across(rotation, *origins[0])
+        leading = _median_leading(origins, boxes, rotation)
 
-        # Bigger text needs more room between baselines. The paragraph's own
-        # spacing is the right starting point — it may be deliberately loose —
-        # but it cannot be less than the text itself needs, or the lines run
-        # into each other. What it needs comes from the fonts being drawn, not
-        # from the sizes the request arrived with: those already carry any
-        # change the user just made.
+        # The paragraph's own spacing is the right starting point — it may be
+        # deliberately loose — but never less than the text itself needs, or the
+        # lines run into each other. What it needs comes from the fonts being
+        # drawn, not from the sizes the request arrived with: those already
+        # carry any change the user just made.
         natural = max(
-            (
-                (run.font.font.ascender - run.font.font.descender) * run.size
-                for run in runs
-            ),
+            ((run.font.font.ascender - run.font.font.descender) * run.size for run in runs),
             default=0.0,
         )
         leading = max(leading, natural)
 
-        # How much vertical room there is, measured to whatever comes next.
         descent = max((-run.font.font.descender * run.size for run in runs), default=0.0)
-        ceiling = self._room_below(pno, boxes) - descent
+        ceiling = self._room_below(pno, boxes, rotation) - descent
         natural_leading = leading
 
-        def height_of(count: int, spacing: float) -> float:
-            return origins[0][1] + max(count - 1, 0) * spacing
+        def reach(count: int, spacing: float) -> float:
+            return base_across + max(count - 1, 0) * spacing
 
         scale = 1.0
         for _ in range(10):
-            wrapped = _wrap(tokens, box.x1 - first_left, box.x1 - body_left)
-            if height_of(len(wrapped), leading) <= ceiling + 0.5:
+            wrapped = _wrap(tokens, limit - first_start, limit - body_start)
+            if reach(len(wrapped), leading) <= ceiling + 0.5:
                 break
 
             # First give up some line spacing: much less visible than resizing.
             if len(wrapped) > 1:
-                tight = (ceiling - origins[0][1]) / (len(wrapped) - 1)
+                tight = (ceiling - base_across) / (len(wrapped) - 1)
                 if tight >= natural_leading * _MIN_LEADING:
                     leading = tight
                     break
+
+            # Then, if asked, move what is in the way instead of shrinking.
+            if fit == "push":
+                needed = reach(len(wrapped), leading) - ceiling
+                if self._push_down(pno, rotation, boxes, needed, batch):
+                    ceiling += needed
+                    break
+                self._warn(
+                    pno,
+                    "cannot-push",
+                    "No se puede desplazar lo que hay debajo sin romperlo; "
+                    "prueba con «ajustar el tamaño».",
+                )
+                break
 
             if fit != "shrink" or scale <= _MIN_SHRINK:
                 break
@@ -692,7 +874,7 @@ class EditSession:
             natural_leading *= 0.94
             leading = natural_leading
 
-        if height_of(len(wrapped), leading) > ceiling + 0.5:
+        if reach(len(wrapped), leading) > ceiling + 0.5:
             self._warn(
                 pno,
                 "paragraph-grew",
@@ -703,68 +885,85 @@ class EditSession:
         for rect in boxes:
             batch.redactions.append(rect + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD))
 
-        baseline = origins[0][1]
         for number, wrapped_line in enumerate(wrapped):
-            left = first_left if number == 0 else body_left
+            start = first_start if number == 0 else body_start
             total = sum(token.width for token in wrapped_line)
-            cursor = left + _start_offset(align, box.x1 - left, total)
+            line_across = base_across + number * leading
+            cursor = start + _start_offset(align, limit - start, total)
+
             for token in wrapped_line:
                 token.placed_line = number
                 token.placed_from = cursor
                 token.placed_to = cursor + token.width
                 cursor += token.width
 
-            cursor = left + _start_offset(align, box.x1 - left, total)
+            cursor = start + _start_offset(align, limit - start, total)
             for run_index, text in _group_into_runs(wrapped_line):
                 run = runs[run_index]
                 batch.texts.append(
                     _PendingText(
-                        page=pno, point=(cursor, baseline), text=text,
-                        resolved=run.font, fontsize=run.size, color=run.color,
-                        rotate=0, opacity=run.opacity,
+                        page=pno,
+                        point=from_axes(rotation, cursor, line_across),
+                        text=text,
+                        resolved=run.font,
+                        fontsize=run.size,
+                        color=run.color,
+                        rotate=rotation,
+                        opacity=run.opacity,
                     )
                 )
                 cursor += run.font.text_length(text, run.size)
-            baseline += leading
 
-        self._relocate_links(pno, boxes, origins, tokens, wrapped, leading, batch)
+        self._relocate_links(pno, boxes, base_across, tokens, wrapped, leading, rotation, batch)
 
     def _relocate_links(
         self,
         pno: int,
         boxes: list[pymupdf.Rect],
-        origins: list[tuple[float, float]],
+        base_across: float,
         tokens: list[_Token],
         wrapped: list[list[_Token]],
         leading: float,
+        rotation: int,
         batch: _PageBatch,
     ) -> None:
         """Move the paragraph's links onto the words they used to sit over."""
         page = self._doc[pno]
+        spans = [(along_span(rotation, box), across_span(rotation, box)) for box in boxes]
+        thickness = spans[0][1][1] - spans[0][1][0]
+        offset = spans[0][1][1] - base_across  # baseline to the bottom of the line
+
         for link in page.get_links():
             rect = pymupdf.Rect(link["from"])
+            link_along = along_span(rotation, rect)
+            link_across = across_span(rotation, rect)
             covered = [
                 token
                 for token in tokens
                 if token.placed_line >= 0
-                and 0 <= token.source_line < len(boxes)
-                and rect.y0 < boxes[token.source_line].y1
-                and rect.y1 > boxes[token.source_line].y0
-                and token.source_to > rect.x0
-                and token.source_from < rect.x1
+                and 0 <= token.source_line < len(spans)
+                and link_across[0] < spans[token.source_line][1][1]
+                and link_across[1] > spans[token.source_line][1][0]
+                and token.source_to > link_along[0]
+                and token.source_from < link_along[1]
             ]
             if not covered:
                 continue
+
             by_line: dict[int, list[_Token]] = {}
             for token in covered:
                 by_line.setdefault(token.placed_line, []).append(token)
-            height = boxes[0].y1 - boxes[0].y0
+
             for number, group in by_line.items():
-                top = origins[0][1] + number * leading - height + (boxes[0].y1 - origins[0][1])
+                bottom = base_across + number * leading + offset
+                corners = [
+                    from_axes(rotation, min(t.placed_from for t in group), bottom - thickness),
+                    from_axes(rotation, max(t.placed_to for t in group), bottom),
+                ]
                 moved = dict(link)
                 moved["from"] = pymupdf.Rect(
-                    min(t.placed_from for t in group), top,
-                    max(t.placed_to for t in group), top + height,
+                    min(corners[0][0], corners[1][0]), min(corners[0][1], corners[1][1]),
+                    max(corners[0][0], corners[1][0]), max(corners[0][1], corners[1][1]),
                 )
                 batch.new_links.append(moved)
 
@@ -849,12 +1048,23 @@ class EditSession:
             page = self._doc[pno]
             links_before = page.get_links() if batch.redactions else []
             if batch.redactions:
+                if batch.remove_line_art:
+                    # Erasing line art is all or nothing over the page's
+                    # redactions, so anything caught that is not being moved has
+                    # to be put back exactly where it was. Taken before the
+                    # annotations go on, because their own marks would otherwise
+                    # be read as drawings of the page.
+                    self._preserve_untouched_drawings(page, batch)
                 for rect in batch.redactions:
                     if not rect.is_empty:
-                        page.add_redact_annot(rect)
+                        page.add_redact_annot(rect, cross_out=False)
                 page.apply_redactions(
                     images=pymupdf.PDF_REDACT_IMAGE_NONE,
-                    graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
+                    graphics=(
+                        pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED
+                        if batch.remove_line_art
+                        else pymupdf.PDF_REDACT_LINE_ART_NONE
+                    ),
                     text=pymupdf.PDF_REDACT_TEXT_REMOVE,
                 )
                 # The content stream was rewritten; page font resources with it.
@@ -887,6 +1097,9 @@ class EditSession:
                 except Exception as exc:  # pragma: no cover - defensive
                     raise EditError(f"No se pudo escribir el texto: {exc}") from exc
 
+            for drawing, shift in batch.drawings:
+                _redraw(page, drawing, shift)
+
             for rect, data, rotate in batch.images:
                 try:
                     page.insert_image(rect, stream=data, rotate=rotate, keep_proportion=True)
@@ -902,6 +1115,23 @@ class EditSession:
                 self._restore_links(page, links_before, batch)
 
         return self.warnings
+
+    @staticmethod
+    def _preserve_untouched_drawings(page: pymupdf.Page, batch: _PageBatch) -> None:
+        """Queue every drawing a redaction would take but nothing asked to move."""
+        moving = {id(drawing) for drawing, _shift in batch.drawings}
+        marked = [
+            (tuple(round(v, 2) for v in drawing["rect"]), drawing)
+            for drawing, _shift in batch.drawings
+        ]
+        moving_rects = {key for key, _drawing in marked}
+        nothing = pymupdf.Point(0, 0)
+        for drawing in page.get_drawings():
+            key = tuple(round(v, 2) for v in drawing["rect"])
+            if id(drawing) in moving or key in moving_rects:
+                continue
+            if any(rect.contains(drawing["rect"]) for rect in batch.redactions):
+                batch.drawings.append((drawing, nothing))
 
     @staticmethod
     def _restore_links(

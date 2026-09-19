@@ -10,7 +10,7 @@ paragraph — is captured here, because once a line is redacted it is gone.
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 import pymupdf
 
@@ -78,6 +78,47 @@ def page_rotation_of(page_rotation: int, display_line_rotation: int) -> int:
     return (display_line_rotation - page_rotation) % 360
 
 
+# Text does not always run left to right. Rather than special-casing each
+# quarter turn everywhere, a line's geometry is expressed in two coordinates
+# tied to its own direction: `along`, which grows the way the text reads, and
+# `across`, which grows the way the next line lies. For unrotated text they are
+# plain x and y, and everything below reads as it always did.
+
+
+def along(rotation: int, x: float, y: float) -> float:
+    """Position in the direction the text reads."""
+    return {0: x, 90: -y, 180: -x, 270: y}[rotation % 360]
+
+
+def across(rotation: int, x: float, y: float) -> float:
+    """Position in the direction successive lines lie."""
+    return {0: y, 90: x, 180: -y, 270: -x}[rotation % 360]
+
+
+def from_axes(rotation: int, a: float, c: float) -> tuple[float, float]:
+    """Back from ``(along, across)`` to a point on the page."""
+    return {
+        0: (a, c),
+        90: (c, -a),
+        180: (-a, -c),
+        270: (-c, a),
+    }[rotation % 360]
+
+
+def along_span(rotation: int, bbox: Sequence[float]) -> tuple[float, float]:
+    """Where a box starts and ends in the reading direction."""
+    x0, y0, x1, y1 = (float(v) for v in bbox)
+    first, last = along(rotation, x0, y0), along(rotation, x1, y1)
+    return (min(first, last), max(first, last))
+
+
+def across_span(rotation: int, bbox: Sequence[float]) -> tuple[float, float]:
+    """Where a box starts and ends across the lines."""
+    x0, y0, x1, y1 = (float(v) for v in bbox)
+    first, last = across(rotation, x0, y0), across(rotation, x1, y1)
+    return (min(first, last), max(first, last))
+
+
 def _cluster_lines(lines: list[dict]) -> list[list[dict]]:
     """Group lines that read as one paragraph.
 
@@ -88,25 +129,28 @@ def _cluster_lines(lines: list[dict]) -> list[list[dict]]:
     uses, so that is what is used here.
     """
     clusters: list[list[dict]] = []
-    for line in sorted(lines, key=lambda item: (item["bbox"][1], item["bbox"][0])):
-        placed = False
-        if clusters:
-            previous = clusters[-1][-1]
-            same_direction = previous["rotation"] == line["rotation"]
-            height = max(previous["bbox"][3] - previous["bbox"][1], 1.0)
-            gap = line["bbox"][1] - previous["bbox"][3]
-            overlap = min(previous["bbox"][2], line["bbox"][2]) - max(
-                previous["bbox"][0], line["bbox"][0]
-            )
-            if same_direction and -height <= gap <= height * 1.4 and overlap > 0:
-                clusters[-1].append(line)
-                placed = True
-        if not placed:
-            clusters.append([line])
+    for rotation, group in _by_rotation(lines):
+        for line in group:
+            placed = False
+            if clusters and clusters[-1][-1]["rotation"] == rotation:
+                previous = clusters[-1][-1]
+                low, high = across_span(rotation, previous["bbox"])
+                height = max(high - low, 1.0)
+                gap = across_span(rotation, line["bbox"])[0] - high
+                previous_along = along_span(rotation, previous["bbox"])
+                line_along = along_span(rotation, line["bbox"])
+                overlap = min(previous_along[1], line_along[1]) - max(
+                    previous_along[0], line_along[0]
+                )
+                if -height <= gap <= height * 1.4 and overlap > 0:
+                    clusters[-1].append(line)
+                    placed = True
+            if not placed:
+                clusters.append([line])
     return clusters
 
 
-def _column_measure(lines: list[dict]) -> dict[int, float]:
+def _column_measure(lines: list[dict]) -> dict[tuple[int, int], float]:
     """How far the text runs, per left margin, across the whole page.
 
     A PDF records no margins, so a paragraph's measure has to be inferred. Its
@@ -116,16 +160,16 @@ def _column_measure(lines: list[dict]) -> dict[int, float]:
     reach is a much better answer. The ninth decile rather than the maximum, so
     one line that overshoots cannot stretch the column for everything.
     """
-    grouped: dict[int, list[float]] = {}
+    grouped: dict[tuple[int, int], list[float]] = {}
     for line in lines:
-        if line["rotation"] != 0:
-            continue
-        grouped.setdefault(round(line["bbox"][0]), []).append(line["bbox"][2])
+        rotation = line["rotation"]
+        start, end = along_span(rotation, line["bbox"])
+        grouped.setdefault((rotation, round(start)), []).append(end)
 
-    measures: dict[int, float] = {}
-    for margin, rights in grouped.items():
-        rights.sort()
-        measures[margin] = rights[min(int(len(rights) * 0.9), len(rights) - 1)]
+    measures: dict[tuple[int, int], float] = {}
+    for key, ends in grouped.items():
+        ends.sort()
+        measures[key] = ends[min(int(len(ends) * 0.9), len(ends) - 1)]
     return measures
 
 
@@ -147,37 +191,61 @@ def _paragraph_clusters(lines: list[dict]) -> list[list[dict]]:
     because a short line is where a paragraph ends.
     """
     clusters: list[list[dict]] = []
-    for line in sorted(lines, key=lambda item: (item["bbox"][1], item["bbox"][0])):
-        if clusters and _continues(clusters[-1], line):
-            clusters[-1].append(line)
-        else:
-            clusters.append([line])
+    for rotation, group in _by_rotation(lines):
+        for line in group:
+            if clusters and clusters[-1][-1]["rotation"] == rotation and _continues(clusters[-1], line):
+                clusters[-1].append(line)
+            else:
+                clusters.append([line])
     return clusters
+
+
+def _by_rotation(lines: list[dict]) -> list[tuple[int, list[dict]]]:
+    """Lines grouped by direction, each group in its own reading order.
+
+    Sorting by plain page coordinates reads upside-down text backwards, which
+    puts a paragraph's lines in reverse and makes each one look like the start
+    of a new one.
+    """
+    grouped: dict[int, list[dict]] = {}
+    for line in lines:
+        grouped.setdefault(line["rotation"], []).append(line)
+    for rotation, group in grouped.items():
+        group.sort(
+            key=lambda item: (
+                across_span(rotation, item["bbox"])[0],
+                along_span(rotation, item["bbox"])[0],
+            )
+        )
+    return sorted(grouped.items())
 
 
 def _continues(cluster: list[dict], line: dict) -> bool:
     """Whether ``line`` is the next line of ``cluster``'s paragraph."""
     previous = cluster[-1]
-    if previous["rotation"] != line["rotation"] or line["rotation"] != 0:
-        return False  # re-wrapping rotated text is not attempted
+    rotation = line["rotation"]
+    if previous["rotation"] != rotation:
+        return False
     if _dominant_style(previous) != _dominant_style(line):
         return False
 
-    height = max(previous["bbox"][3] - previous["bbox"][1], 1.0)
-    leading = line["origin"][1] - previous["origin"][1]
+    previous_across = across_span(rotation, previous["bbox"])
+    height = max(previous_across[1] - previous_across[0], 1.0)
+    leading = across(rotation, *line["origin"]) - across(rotation, *previous["origin"])
     if not 0.7 * height <= leading <= 2.2 * height:
         return False
 
-    # The paragraph's own left margin: the first line may be indented, the rest
-    # are not, so the margin is set by the second line onwards.
-    margin = cluster[1]["bbox"][0] if len(cluster) > 1 else line["bbox"][0]
-    if abs(line["bbox"][0] - margin) > 2.0:
+    # The paragraph's own starting margin: the first line may be indented, the
+    # rest are not, so the margin is set by the second line onwards.
+    reference = cluster[1] if len(cluster) > 1 else line
+    margin = along_span(rotation, reference["bbox"])[0]
+    if abs(along_span(rotation, line["bbox"])[0] - margin) > 2.0:
         return False
 
-    # A line that stopped well short of the right margin ended its paragraph.
-    right = max(item["bbox"][2] for item in cluster)
+    # A line that stopped well short of the far margin ended its paragraph.
+    far = max(along_span(rotation, item["bbox"])[1] for item in cluster)
     slack = 2.5 * _dominant_style(previous)[1]
-    return previous["bbox"][2] >= right - slack
+    return along_span(rotation, previous["bbox"])[1] >= far - slack
 
 
 def _detect_alignment(lines: list[dict]) -> str:
@@ -188,9 +256,11 @@ def _detect_alignment(lines: list[dict]) -> str:
     """
     if len(lines) < 2:
         return "left"
-    lefts = [line["bbox"][0] for line in lines]
-    rights = [line["bbox"][2] for line in lines]
-    centers = [(line["bbox"][0] + line["bbox"][2]) / 2 for line in lines]
+    rotation = lines[0]["rotation"]
+    spans = [along_span(rotation, line["bbox"]) for line in lines]
+    lefts = [span[0] for span in spans]
+    rights = [span[1] for span in spans]
+    centers = [(span[0] + span[1]) / 2 for span in spans]
 
     def spread(values: list[float]) -> float:
         return max(values) - min(values)
@@ -308,10 +378,15 @@ def extract_page(
             max(line["bbox"][2] for line in cluster),
             max(line["bbox"][3] for line in cluster),
         ]
-        measure = max(box[2], columns.get(round(box[0]), box[2]))
+        rotation = cluster[0]["rotation"]
+        own_start, own_end = along_span(rotation, box)
+        reach = max(own_end, columns.get((rotation, round(own_start)), own_end))
+        # Reported back on the page, as the far corner the text may run to.
+        measure_point = from_axes(rotation, reach, across(rotation, box[2], box[3]))
         for position, line in enumerate(cluster):
             line["block_bbox"] = [round(v, 2) for v in box]
-            line["measure"] = round(measure, 2)
+            line["measure"] = round(reach, 2)
+            line["measure_point"] = [round(v, 2) for v in measure_point]
             line["paragraph"] = f"p{pno}-par{index}"
             line["paragraph_index"] = position
             line["paragraph_size"] = len(cluster)

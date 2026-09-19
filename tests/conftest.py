@@ -139,6 +139,53 @@ def build_pdf_with_links() -> bytes:
     return data
 
 
+def build_rotated_paragraph(rotation: int, lines: int = 3) -> bytes:
+    """A paragraph of running text set at a quarter turn."""
+    steps = {0: (0, 14), 90: (14, 0), 180: (0, -14), 270: (-14, 0)}[rotation % 360]
+    doc = pymupdf.open()
+    page = doc.new_page()
+    for name, path in _available.items():
+        page.insert_font(fontname=name, fontfile=path)
+    for index in range(lines):
+        page.insert_text(
+            pymupdf.Point(300 + steps[0] * index, 420 + steps[1] * index),
+            " ".join(f"pal{index}{n}" for n in range(9)),
+            fontname="serif",
+            fontsize=11,
+            rotate=rotation,
+        )
+    data = doc.tobytes(garbage=4, deflate=True)
+    doc.close()
+    return data
+
+
+def build_pdf_with_section_below(gap: float = 20.0, top: float = 100.0) -> bytes:
+    """A paragraph, a rule, and a section under it — a page with things in the way."""
+    doc = pymupdf.open()
+    page = doc.new_page()
+    for name, path in _available.items():
+        page.insert_font(fontname=name, fontfile=path)
+    for index in range(3):
+        page.insert_text(
+            (72, top + 14 * index),
+            " ".join(f"pal{index}{n}" for n in range(10)),
+            fontname="serif",
+            fontsize=11,
+        )
+    below = top + 28 + gap
+    page.draw_line((72, below), (500, below), color=(0.2, 0.2, 0.2), width=0.8)
+    page.insert_text((72, below + 20), "SECCION SIGUIENTE", fontname="serif-bold", fontsize=11)
+    page.insert_text((72, below + 40), "contenido de la seccion", fontname="serif", fontsize=11)
+    page.insert_link({
+        "kind": pymupdf.LINK_URI,
+        "from": pymupdf.Rect(72, below + 30, 200, below + 44),
+        "uri": "https://ejemplo.com",
+    })
+    data = doc.tobytes(garbage=4, deflate=True)
+    doc.close()
+    return data
+
+
 @pytest.fixture
 def linked_doc():
     document = pymupdf.open(stream=build_pdf_with_links(), filetype="pdf")

@@ -192,7 +192,7 @@ function syncFormatBar() {
   if (busy !== fmt.color) fmt.color.value = format.color;
   fmt.bold.classList.toggle('is-active', !!format.bold);
   fmt.italic.classList.toggle('is-active', !!format.italic);
-  fmt.fit.checked = !!format.fit;
+  if (busy !== fmt.fit) fmt.fit.value = format.fit || 'overflow';
   fmt.remove.hidden = !active.line;
   // Only text that spans several lines has anything to re-wrap.
   fmt.reflow.hidden = !editor.activeIsInParagraph;
@@ -211,7 +211,7 @@ fmt.size.addEventListener('input', () => {
 fmt.color.addEventListener('input', () => editor.updateActiveFormat({ color: fmt.color.value }));
 fmt.bold.addEventListener('click', () => editor.updateActiveFormat({ bold: !editor.active?.format.bold }));
 fmt.italic.addEventListener('click', () => editor.updateActiveFormat({ italic: !editor.active?.format.italic }));
-fmt.fit.addEventListener('change', () => editor.updateActiveFormat({ fit: fmt.fit.checked }));
+fmt.fit.addEventListener('change', () => editor.updateActiveFormat({ fit: fmt.fit.value }));
 for (const button of fmt.align.querySelectorAll('[data-align]')) {
   button.addEventListener('click', () => editor.updateActiveFormat({ align: button.dataset.align }));
 }

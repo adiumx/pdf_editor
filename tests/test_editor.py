@@ -601,3 +601,156 @@ class TestParagraphReflow:
         }])
         after = {link["uri"] for link in linked_doc[0].get_links()}
         assert before <= after, f"se perdieron {before - after}"
+
+
+@requires_fonts
+class TestReflowOfRotatedText:
+    """Text does not always read left to right. Re-wrapping used to be refused
+    outright for anything at a quarter turn."""
+
+    @pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+    def test_a_rotated_paragraph_re_wraps(self, rotation):
+        from tests.conftest import build_rotated_paragraph
+
+        doc = pymupdf.open(stream=build_rotated_paragraph(rotation), filetype="pdf")
+        page = extract_page(doc, 0, FontResolver(doc))
+        group = [line for line in page["lines"] if line["paragraph_size"] > 1]
+        assert len(group) >= 2, f"no se agrupó como párrafo a {rotation}°"
+
+        before = set(" ".join(line["text"] for line in group).split())
+        payload = [dict(line) for line in group]
+        payload[0]["spans"] = [dict(s) for s in group[0]["spans"]]
+        payload[0]["spans"][0]["text"] += " AGREGADO AGREGADO AGREGADO"
+        apply_operations(doc, FontResolver(doc), [{
+            "op": "replace_paragraph", "page": 0, "box": group[0]["block_bbox"],
+            "measure_point": group[0]["measure_point"], "align": group[0]["align"],
+            "lines": payload, "edited": {"line": 0, "span": 0},
+        }])
+
+        after = extract_page(doc, 0, FontResolver(doc))
+        rows = [l for l in after["lines"] if "pal" in l["text"] or "AGREGADO" in l["text"]]
+        words = set(" ".join(l["text"] for l in rows).split())
+        assert before <= words, f"se perdieron {before - words}"
+        assert "AGREGADO" in words
+        assert {l["rotation"] for l in rows} == {rotation}
+        assert len(rows) > len(group), "debería haber ganado una línea"
+        doc.close()
+
+    @pytest.mark.parametrize("rotation", [90, 180, 270])
+    def test_a_rotated_paragraph_keeps_its_own_measure(self, rotation):
+        from app.extract import along_span
+        from tests.conftest import build_rotated_paragraph
+
+        doc = pymupdf.open(stream=build_rotated_paragraph(rotation), filetype="pdf")
+        page = extract_page(doc, 0, FontResolver(doc))
+        group = [line for line in page["lines"] if line["paragraph_size"] > 1]
+        limit = group[0]["measure"]
+        payload = [dict(line) for line in group]
+        payload[0]["spans"] = [dict(s) for s in group[0]["spans"]]
+        payload[0]["spans"][0]["text"] += " palabras de mas para forzar el corte"
+        apply_operations(doc, FontResolver(doc), [{
+            "op": "replace_paragraph", "page": 0, "box": group[0]["block_bbox"],
+            "measure_point": group[0]["measure_point"], "align": group[0]["align"],
+            "lines": payload, "edited": {"line": 0, "span": 0},
+        }])
+        after = extract_page(doc, 0, FontResolver(doc))
+        for line in after["lines"]:
+            if "pal" not in line["text"] and "palabras" not in line["text"]:
+                continue
+            assert along_span(rotation, line["bbox"])[1] <= limit + 1
+        doc.close()
+
+
+@requires_fonts
+class TestPushingContentOutOfTheWay:
+    """When a paragraph outgrows its room, `push` moves what is below it
+    instead of shrinking the text or giving up."""
+
+    def _setup(self, gap=20.0, top=100.0):
+        from tests.conftest import build_pdf_with_section_below
+
+        doc = pymupdf.open(stream=build_pdf_with_section_below(gap, top), filetype="pdf")
+        page = extract_page(doc, 0, FontResolver(doc))
+        group = [line for line in page["lines"] if line["text"].startswith("pal")]
+        group = [line for line in group if line["paragraph"] == group[0]["paragraph"]]
+        return doc, group
+
+    def _grow(self, doc, group, words=40, fit="push"):
+        payload = [dict(line) for line in group]
+        payload[0]["spans"] = [dict(s) for s in group[0]["spans"]]
+        payload[0]["spans"][0]["text"] += " " + " ".join(["anadido"] * words)
+        return apply_operations(doc, FontResolver(doc), [{
+            "op": "replace_paragraph", "page": 0, "box": group[0]["block_bbox"],
+            "measure_point": group[0]["measure_point"], "align": group[0]["align"],
+            "lines": payload, "edited": {"line": 0, "span": 0}, "fit": fit,
+        }])
+
+    def _tops(self, doc):
+        page = extract_page(doc, 0, FontResolver(doc))
+        return {line["text"]: line["bbox"][1] for line in page["lines"]}
+
+    def test_the_section_below_moves_down(self):
+        doc, group = self._setup()
+        before = self._tops(doc)["SECCION SIGUIENTE"]
+        warnings = self._grow(doc, group)
+        after = self._tops(doc)["SECCION SIGUIENTE"]
+        assert after > before + 5, "no se movió"
+        assert not [w for w in warnings if w.kind in {"paragraph-grew", "cannot-push"}]
+        doc.close()
+
+    def test_everything_below_moves_by_the_same_amount(self):
+        doc, group = self._setup()
+        before = self._tops(doc)
+        self._grow(doc, group)
+        after = self._tops(doc)
+        deltas = {
+            round(after[text] - before[text], 1)
+            for text in ("SECCION SIGUIENTE", "contenido de la seccion")
+        }
+        assert len(deltas) == 1, f"se movieron de forma desigual: {deltas}"
+        doc.close()
+
+    def test_a_rule_below_moves_with_the_text(self):
+        """Leaving the line art behind would be worse than not moving at all."""
+        doc, group = self._setup()
+        before = [round(d["rect"].y0, 1) for d in doc[0].get_drawings()]
+        shift = self._tops(doc)["SECCION SIGUIENTE"]
+        self._grow(doc, group)
+        shift = self._tops(doc)["SECCION SIGUIENTE"] - shift
+        after = [round(d["rect"].y0, 1) for d in doc[0].get_drawings()]
+        assert len(after) == len(before), f"cambió el número de trazos: {before} -> {after}"
+        assert after[0] == pytest.approx(before[0] + shift, abs=1.0)
+        doc.close()
+
+    def test_a_link_below_moves_with_the_text(self):
+        doc, group = self._setup()
+        before = doc[0].get_links()[0]["from"][1]
+        shift = self._tops(doc)["SECCION SIGUIENTE"]
+        self._grow(doc, group)
+        shift = self._tops(doc)["SECCION SIGUIENTE"] - shift
+        links = doc[0].get_links()
+        assert len(links) == 1
+        assert links[0]["from"][1] == pytest.approx(before + shift, abs=1.0)
+        doc.close()
+
+    def test_nothing_is_lost_in_the_move(self):
+        doc, group = self._setup()
+        before = {t for t in self._tops(doc) if not t.startswith("pal")}
+        self._grow(doc, group)
+        after = set(self._tops(doc))
+        assert before <= after, f"se perdió {before - after}"
+        doc.close()
+
+    def test_it_refuses_rather_than_push_content_off_the_page(self):
+        """The whole block sits at the foot of the sheet; there is nowhere to go."""
+        doc, group = self._setup(top=660)
+        warnings = self._grow(doc, group, words=80)
+        assert any(w.kind == "cannot-push" for w in warnings)
+        doc.close()
+
+    def test_overflow_mode_moves_nothing(self):
+        doc, group = self._setup()
+        before = self._tops(doc)["SECCION SIGUIENTE"]
+        self._grow(doc, group, fit="overflow")
+        assert self._tops(doc)["SECCION SIGUIENTE"] == pytest.approx(before, abs=0.2)
+        doc.close()

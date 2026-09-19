@@ -127,8 +127,19 @@ estrecha que aquella en la que está.
 
 Si al crecer no cabe en el hueco que tiene debajo —que se mide mirando qué hay
 realmente ahí, no suponiéndolo—, primero se **comprime el interlineado**, que se
-nota mucho menos que cambiar el cuerpo de letra. Sólo si aun así no cabe entra
-«Ajustar», que reduce el tamaño; y si tampoco basta, se avisa.
+nota mucho menos que cambiar el cuerpo de letra. Si aun así no cabe, el
+desplegable **«Si no cabe»** decide qué hacer:
+
+| Opción | Qué hace |
+|---|---|
+| **avisar** | Deja que el párrafo crezca y te lo dice. |
+| **reducir el tamaño** | Encoge la letra hasta que quepa, nunca por debajo de la mitad. |
+| **mover lo de abajo** | Desplaza hacia abajo el texto, los filetes y los enlaces que estorban. |
+
+Mover lo de abajo se niega, sin tocar nada, cuando no podría hacerlo con
+fidelidad: si hay una imagen o una figura que no sabe recolocar, o si algo
+acabaría fuera de la hoja. Media figura en su sitio viejo es peor que un párrafo
+que sobresale.
 
 Un párrafo se reconoce por sus propias señales: mismo tipo y tamaño de letra,
 el interlineado propio del bloque, el mismo margen izquierdo y —la más
@@ -155,10 +166,11 @@ queda nada que pulsar.
 - **El ancho de la columna se deduce del propio texto**, porque el PDF no guarda
   márgenes. Es una estimación buena en un documento corriente, pero una página
   con bloques muy dispares en el mismo margen puede confundirla.
-- **El texto girado no se reparte** entre líneas; se edita renglón a renglón.
-- **Nada se mueve para hacer sitio a un párrafo que crece.** Se aprovecha el
-  hueco libre que tenga debajo y se comprime el interlineado, pero si aun así no
-  cabe, se te avisa en lugar de desplazar el resto de la página.
+- **Mover lo de abajo sólo llega hasta el final de la hoja.** El texto no pasa a
+  la página siguiente; si no cabe, se te dice.
+- **Sólo se recolocan trazos simples** —líneas y rectángulos, que es de lo que
+  están hechos los filetes—. Ante una figura o una imagen en medio, se niega a
+  mover en lugar de dejarla descolocada.
 - **Las fuentes en subconjunto** solo contienen los glifos que el documento usaba.
   Si escribes caracteres que no están, se sustituye la fuente y se avisa. Muchos
   subconjuntos, además, vienen sin tabla de caracteres Unicode —se direccionan

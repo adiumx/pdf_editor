@@ -94,8 +94,13 @@
     <button class="btn btn--icon" data-align="center" title="Centrar">⬌</button>
     <button class="btn btn--icon" data-align="right" title="Alinear a la derecha">➡</button>
   </div>
-  <label class="check" title="Reduce el tamaño para que el texto quepa en el ancho original">
-    <input type="checkbox" id="fmt-fit"><span>Ajustar</span>
+  <label class="field" title="Qué hacer cuando el texto nuevo no cabe donde estaba">
+    <span>Si no cabe</span>
+    <select id="fmt-fit">
+      <option value="overflow">avisar</option>
+      <option value="shrink">reducir el tamaño</option>
+      <option value="push">mover lo de abajo</option>
+    </select>
   </label>
   <button class="btn" id="fmt-reflow" title="Repartir de nuevo el texto entre las líneas del párrafo">⤶ Reajustar</button>
   <span class="sep"></span>
