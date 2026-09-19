@@ -186,6 +186,43 @@ def build_pdf_with_section_below(gap: float = 20.0, top: float = 100.0) -> bytes
     return data
 
 
+def build_pdf_with_figures(top: float = 100.0) -> bytes:
+    """A paragraph with a curve, a quadrilateral and a picture under it.
+
+    Everything below is inside the paragraph's own column, so all of it is in
+    the way when the paragraph grows.
+    """
+    doc = pymupdf.open()
+    page = doc.new_page()
+    for name, path in _available.items():
+        page.insert_font(fontname=name, fontfile=path)
+    for index in range(3):
+        page.insert_text(
+            (72, top + 14 * index),
+            " ".join(f"pal{index}{n}" for n in range(10)),
+            fontname="serif",
+            fontsize=11,
+        )
+    base = top + 70
+    page.draw_bezier(
+        (72, base), (120, base - 15), (180, base + 20), (240, base),
+        color=(0.8, 0.1, 0.1), width=1.2,
+    )
+    page.draw_quad(
+        pymupdf.Quad((80, base + 30), (200, base + 28), (82, base + 50), (202, base + 48)),
+        color=(0, 0.4, 0), width=0.9,
+    )
+    picture = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 60, 40))
+    picture.set_rect(picture.irect, (30, 90, 160))
+    page.insert_image(
+        pymupdf.Rect(100, base + 60, 240, base + 120), stream=picture.tobytes("png")
+    )
+    page.insert_text((72, base + 160), "texto al final del bloque", fontname="serif", fontsize=11)
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
 def build_scanned_pdf(lines: list[str] | None = None) -> bytes:
     """A page that is a picture of text: what a scanner produces.
 

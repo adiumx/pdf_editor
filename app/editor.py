@@ -134,6 +134,13 @@ class _PageBatch:
     """Set when something has to move: line art is then erased along with the
     text and put back where it belongs, instead of being left behind."""
 
+    restored_images: list[tuple[pymupdf.Rect, bytes]] = field(default_factory=list)
+    moved_image_sources: set[tuple] = field(default_factory=set)
+    move_images: bool = False
+    """Set when a picture has to move. Erasing images is all or nothing over a
+    page's redactions, so every one they touch is put back — shifted if it is
+    in the way, where it was if it is not."""
+
 
 def _axis_extent(bbox: Sequence[float], rotation: int) -> float:
     """Length of a line's box along the direction the text runs."""
@@ -316,6 +323,17 @@ def _redraw(page: pymupdf.Page, drawing: dict[str, Any], shift: pymupdf.Point) -
             elif item[0] == "re":
                 rect = pymupdf.Rect(item[1]) + (shift.x, shift.y, shift.x, shift.y)
                 page.draw_rect(rect, color=colour, fill=fill, width=width)
+            elif item[0] == "c":
+                page.draw_bezier(
+                    item[1] + shift, item[2] + shift, item[3] + shift, item[4] + shift,
+                    color=colour, fill=fill, width=width,
+                )
+            elif item[0] == "qu":
+                quad = pymupdf.Quad(
+                    item[1].ul + shift, item[1].ur + shift,
+                    item[1].ll + shift, item[1].lr + shift,
+                )
+                page.draw_quad(quad, color=colour, fill=fill, width=width)
         except Exception:
             continue
 
@@ -667,22 +685,33 @@ class EditSession:
         except Exception:
             return floor
 
-        for block in raw.get("blocks", []):
-            for line in block.get("lines", []) if block.get("type") == 0 else []:
-                bbox = line.get("bbox", (0, 0, 0, 0))
-                start, end = across_span(rotation, bbox)
-                if start <= bottom + 0.5:
-                    continue  # level with the paragraph or before it
-                a0, a1 = along_span(rotation, bbox)
-                if a1 <= near + 1 or a0 >= far - 1:
-                    continue  # beside it, in another column
-                floor = min(floor, start)
+        obstacles = [
+            line.get("bbox", (0, 0, 0, 0))
+            for block in raw.get("blocks", [])
+            if block.get("type") == 0
+            for line in block.get("lines", [])
+        ]
+        # A figure or a picture is as much in the way as a line of text is.
+        try:
+            obstacles += [drawing["rect"] for drawing in page.get_drawings()]
+            obstacles += [info["bbox"] for info in page.get_image_info()]
+        except Exception:
+            pass
+
+        for bbox in obstacles:
+            start, _end = across_span(rotation, bbox)
+            if start <= bottom + 0.5:
+                continue  # level with the paragraph or before it
+            a0, a1 = along_span(rotation, bbox)
+            if a1 <= near + 1 or a0 >= far - 1:
+                continue  # beside it, in another column
+            floor = min(floor, start)
         return floor
 
-    # Items a moved drawing may be made of. Anything else — a curve, a clip, an
-    # image — is left alone by refusing to move the block at all, because half a
-    # figure in its old place is worse than a paragraph that overflows.
-    _MOVABLE_ITEMS = {"l", "re"}
+    # Items a moved drawing may be made of. Anything else — a clip, a shading —
+    # is left alone by refusing to move the block at all, because half a figure
+    # in its old place is worse than a paragraph that overflows.
+    _MOVABLE_ITEMS = {"l", "re", "c", "qu"}
 
     def _push_down(
         self,
@@ -715,10 +744,19 @@ class EditSession:
             a0, a1 = along_span(rotation, bbox)
             return a1 > near + 1 and a0 < far - 1
 
+        moving_images: list[tuple[pymupdf.Rect, bytes]] = []
         if page.get_images():
-            for info in page.get_image_info():
-                if below(info["bbox"]):
-                    return False
+            if was_recognised(page):
+                # The page is one big picture with text read off it. There is
+                # nothing below to move that is not the page itself.
+                return False
+            for info in page.get_image_info(xrefs=True):
+                if not below(info["bbox"]):
+                    continue
+                data = self._image_bytes(info.get("xref", 0))
+                if data is None:
+                    return False  # cannot move it faithfully
+                moving_images.append((pymupdf.Rect(info["bbox"]), data))
 
         moving_drawings = []
         for drawing in page.get_drawings():
@@ -744,13 +782,22 @@ class EditSession:
         # Would any of it fall off the sheet?
         edges = [across_span(rotation, line["bbox"])[1] for line in moving_lines]
         edges += [across_span(rotation, d["rect"])[1] for d in moving_drawings]
+        edges += [across_span(rotation, rect)[1] for rect, _data in moving_images]
         if edges and max(edges) + delta > page_limit - 4:
             return False
-        if not moving_lines and not moving_drawings:
+        if not moving_lines and not moving_drawings and not moving_images:
             return True
 
         shift = pymupdf.Point(*from_axes(rotation, 0.0, delta))
         batch.remove_line_art = True
+        if moving_images:
+            batch.move_images = True
+            for rect, data in moving_images:
+                batch.redactions.append(rect)
+                batch.moved_image_sources.add(tuple(round(v, 1) for v in rect))
+                batch.restored_images.append(
+                    (rect + (shift.x, shift.y, shift.x, shift.y), data)
+                )
 
         for line in moving_lines:
             batch.redactions.append(
@@ -782,9 +829,13 @@ class EditSession:
                 )
 
         for drawing in moving_drawings:
-            batch.redactions.append(
-                drawing["rect"] + (-_REDACT_PAD, -_REDACT_PAD, _REDACT_PAD, _REDACT_PAD)
-            )
+            # A drawing's box is its path, and a stroke straddles that path:
+            # half the pen's width spills past it on every side. A rectangle
+            # that only covers the path does not contain the drawing, and line
+            # art is only erased when it is contained — so the original would
+            # survive beside the copy.
+            pad = _REDACT_PAD + (drawing.get("width") or 0)
+            batch.redactions.append(drawing["rect"] + (-pad, -pad, pad, pad))
             batch.drawings.append((drawing, shift))
 
         for link in page.get_links():
@@ -795,6 +846,15 @@ class EditSession:
             batch.new_links.append(moved)
 
         return True
+
+    def _image_bytes(self, xref: int) -> bytes | None:
+        """The picture behind an xref, exactly as the file stores it."""
+        if not xref:
+            return None
+        try:
+            return self._doc.extract_image(xref)["image"] or None
+        except Exception:
+            return None
 
     def _reflow(
         self,
@@ -1071,6 +1131,8 @@ class EditSession:
                     # annotations go on, because their own marks would otherwise
                     # be read as drawings of the page.
                     self._preserve_untouched_drawings(page, batch)
+                if batch.move_images:
+                    self._preserve_untouched_images(page, batch)
                 for rect in batch.redactions:
                     if not rect.is_empty:
                         page.add_redact_annot(rect, cross_out=False)
@@ -1078,13 +1140,13 @@ class EditSession:
                     # On a recognised scan the old words are pixels, not text.
                     # Erasing the text layer alone would leave them showing
                     # through whatever is written in their place.
-                    images=(
-                        pymupdf.PDF_REDACT_IMAGE_PIXELS
-                        if was_recognised(page)
-                        else pymupdf.PDF_REDACT_IMAGE_NONE
-                    ),
+                    images=self._image_mode(page, batch),
                     graphics=(
-                        pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED
+                        # Only "if touched" actually erases: a rectangle that
+                        # contains a curve's box is not enough for "if covered",
+                        # which would leave the original beside its copy.
+                        # Everything it takes is put back, moved or not.
+                        pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED
                         if batch.remove_line_art
                         else pymupdf.PDF_REDACT_LINE_ART_NONE
                     ),
@@ -1120,6 +1182,12 @@ class EditSession:
                 except Exception as exc:  # pragma: no cover - defensive
                     raise EditError(f"No se pudo escribir el texto: {exc}") from exc
 
+            for rect, data in batch.restored_images:
+                try:
+                    page.insert_image(rect, stream=data)
+                except Exception:
+                    continue
+
             for drawing, shift in batch.drawings:
                 _redraw(page, drawing, shift)
 
@@ -1140,6 +1208,32 @@ class EditSession:
         return self.warnings
 
     @staticmethod
+    def _image_mode(page: pymupdf.Page, batch: _PageBatch) -> int:
+        """How redaction should treat the pictures it runs into.
+
+        Removed when one has to move, because moving means taking it out and
+        putting it back. Blanked on a recognised scan, where the old words are
+        pixels that would otherwise show through. Left alone otherwise.
+        """
+        if batch.move_images:
+            return pymupdf.PDF_REDACT_IMAGE_REMOVE
+        if was_recognised(page):
+            return pymupdf.PDF_REDACT_IMAGE_PIXELS
+        return pymupdf.PDF_REDACT_IMAGE_NONE
+
+    def _preserve_untouched_images(self, page: pymupdf.Page, batch: _PageBatch) -> None:
+        """Queue every picture a redaction would remove but nothing asked to move."""
+        for info in page.get_image_info(xrefs=True):
+            rect = pymupdf.Rect(info["bbox"])
+            if tuple(round(v, 1) for v in rect) in batch.moved_image_sources:
+                continue  # already queued, at its new place
+            if not any(r.intersects(rect) for r in batch.redactions):
+                continue
+            data = self._image_bytes(info.get("xref", 0))
+            if data is not None:
+                batch.restored_images.append((rect, data))
+
+    @staticmethod
     def _preserve_untouched_drawings(page: pymupdf.Page, batch: _PageBatch) -> None:
         """Queue every drawing a redaction would take but nothing asked to move."""
         moving = {id(drawing) for drawing, _shift in batch.drawings}
@@ -1153,7 +1247,9 @@ class EditSession:
             key = tuple(round(v, 2) for v in drawing["rect"])
             if id(drawing) in moving or key in moving_rects:
                 continue
-            if any(rect.contains(drawing["rect"]) for rect in batch.redactions):
+            # Matched to how the erasing works: anything a redaction touches
+            # goes, so anything it touches has to come back.
+            if any(rect.intersects(drawing["rect"]) for rect in batch.redactions):
                 batch.drawings.append((drawing, nothing))
 
     @staticmethod

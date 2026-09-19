@@ -754,3 +754,112 @@ class TestPushingContentOutOfTheWay:
         self._grow(doc, group, fit="overflow")
         assert self._tops(doc)["SECCION SIGUIENTE"] == pytest.approx(before, abs=0.2)
         doc.close()
+
+
+@requires_fonts
+class TestMovingFiguresOutOfTheWay:
+    """Pushing used to refuse the moment it met anything that was not a line or
+    a rectangle. Half a figure left in its old place is worse than a paragraph
+    that overflows — but moving it is better than either."""
+
+    def _setup(self, top=100.0):
+        from tests.conftest import build_pdf_with_figures
+
+        doc = pymupdf.open(stream=build_pdf_with_figures(top), filetype="pdf")
+        page = extract_page(doc, 0, FontResolver(doc))
+        group = [line for line in page["lines"] if line["text"].startswith("pal")]
+        group = [line for line in group if line["paragraph"] == group[0]["paragraph"]]
+        return doc, group
+
+    def _state(self, doc):
+        page = doc[0]
+        text = {
+            "".join(s["text"] for s in line["spans"]): round(line["bbox"][1], 1)
+            for block in page.get_text("dict")["blocks"]
+            for line in block.get("lines", [])
+        }
+        return (
+            text,
+            sorted(round(d["rect"].y0, 1) for d in page.get_drawings()),
+            sorted(round(i["bbox"][1], 1) for i in page.get_image_info()),
+        )
+
+    def _grow(self, doc, group, words=40, fit="push"):
+        payload = [dict(line) for line in group]
+        payload[0]["spans"] = [dict(s) for s in group[0]["spans"]]
+        payload[0]["spans"][0]["text"] += " " + " ".join(["anadido"] * words)
+        return apply_operations(doc, FontResolver(doc), [{
+            "op": "replace_paragraph", "page": 0, "box": group[0]["block_bbox"],
+            "measure_point": group[0]["measure_point"], "align": group[0]["align"],
+            "lines": payload, "edited": {"line": 0, "span": 0}, "fit": fit,
+        }])
+
+    def test_a_figure_is_an_obstacle_like_any_other(self):
+        """A paragraph used to grow straight over a drawing, because only text
+        was looked for below it."""
+        doc, group = self._setup()
+        warnings = self._grow(doc, group, fit="overflow")
+        assert any(w.kind == "paragraph-grew" for w in warnings)
+        doc.close()
+
+    def test_curves_quadrilaterals_and_pictures_all_move(self):
+        doc, group = self._setup()
+        before_text, before_drawings, before_images = self._state(doc)
+        self._grow(doc, group)
+        after_text, after_drawings, after_images = self._state(doc)
+
+        shift = after_text["texto al final del bloque"] - before_text["texto al final del bloque"]
+        assert shift > 5, "el texto de debajo no se movió"
+        assert after_drawings == pytest.approx([y + shift for y in before_drawings], abs=1.0)
+        assert after_images == pytest.approx([y + shift for y in before_images], abs=1.0)
+        doc.close()
+
+    def test_nothing_is_left_behind_or_duplicated(self):
+        """Erasing line art only works "if touched"; asking for "if covered"
+        leaves the original sitting beside its copy."""
+        doc, group = self._setup()
+        _text, before_drawings, before_images = self._state(doc)
+        self._grow(doc, group)
+        _text, after_drawings, after_images = self._state(doc)
+        assert len(after_drawings) == len(before_drawings)
+        assert len(after_images) == len(before_images)
+        doc.close()
+
+    def test_overflow_mode_still_moves_nothing(self):
+        doc, group = self._setup()
+        _t, before_drawings, before_images = self._state(doc)
+        self._grow(doc, group, fit="overflow")
+        _t, after_drawings, after_images = self._state(doc)
+        assert after_drawings == before_drawings
+        assert after_images == before_images
+        doc.close()
+
+    def test_it_refuses_rather_than_push_a_figure_off_the_page(self):
+        doc, group = self._setup(top=560)
+        warnings = self._grow(doc, group, words=80)
+        assert any(w.kind == "cannot-push" for w in warnings)
+        doc.close()
+
+    def test_a_picture_beside_the_column_is_left_alone(self):
+        """It is not in the way; moving it would be moving someone else's page."""
+        from tests.conftest import build_pdf
+
+        rows = [
+            ((72, 100 + 14 * i), " ".join(f"pal{i}{n}" for n in range(6)), "serif", 11)
+            for i in range(3)
+        ]
+        doc = pymupdf.open(stream=build_pdf(rows), filetype="pdf")
+        picture = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 40, 30))
+        picture.set_rect(picture.irect, (30, 90, 160))
+        doc[0].insert_image(pymupdf.Rect(430, 160, 520, 220), stream=picture.tobytes("png"))
+        doc[0].insert_text((72, 300), "final", fontname="helv", fontsize=11)
+        doc = pymupdf.open(stream=doc.tobytes(), filetype="pdf")
+
+        page = extract_page(doc, 0, FontResolver(doc))
+        group = [l for l in page["lines"] if l["text"].startswith("pal")]
+        group = [l for l in group if l["paragraph"] == group[0]["paragraph"]]
+        before = sorted(round(i["bbox"][1], 1) for i in doc[0].get_image_info())
+        self._grow(doc, group)
+        after = sorted(round(i["bbox"][1], 1) for i in doc[0].get_image_info())
+        assert after == before, "movió una imagen que estaba en otra columna"
+        doc.close()

@@ -146,8 +146,9 @@ desplegable **«Si no cabe»** decide qué hacer:
 | **reducir el tamaño** | Encoge la letra hasta que quepa, nunca por debajo de la mitad. |
 | **mover lo de abajo** | Desplaza hacia abajo el texto, los filetes y los enlaces que estorban. |
 
-Mover lo de abajo se niega, sin tocar nada, cuando no podría hacerlo con
-fidelidad: si hay una imagen o una figura que no sabe recolocar, o si algo
+Mover lo de abajo arrastra el texto, los filetes, las curvas, los cuadriláteros
+y las imágenes que estén en la misma columna. Se niega, sin tocar nada, cuando
+no podría hacerlo con fidelidad: ante un trazo que no sabe recolocar, o si algo
 acabaría fuera de la hoja. Media figura en su sitio viejo es peor que un párrafo
 que sobresale.
 
@@ -199,9 +200,8 @@ Si no está instalado, el editor te lo dice en lugar de fallar.
   con bloques muy dispares en el mismo margen puede confundirla.
 - **Mover lo de abajo sólo llega hasta el final de la hoja.** El texto no pasa a
   la página siguiente; si no cabe, se te dice.
-- **Sólo se recolocan trazos simples** —líneas y rectángulos, que es de lo que
-  están hechos los filetes—. Ante una figura o una imagen en medio, se niega a
-  mover en lugar de dejarla descolocada.
+- **Se recolocan líneas, rectángulos, curvas, cuadriláteros e imágenes.** Ante
+  un recorte o un sombreado, se niega a mover en lugar de dejarlo descolocado.
 - **Las fuentes en subconjunto** solo contienen los glifos que el documento usaba.
   Si escribes caracteres que no están, se sustituye la fuente y se avisa. Muchos
   subconjuntos, además, vienen sin tabla de caracteres Unicode —se direccionan
