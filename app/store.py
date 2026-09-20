@@ -15,6 +15,7 @@ from typing import Any
 
 import pymupdf
 
+from .extract import page_summaries
 from .fonts import FontResolver
 from .forms import signed_field_names
 
@@ -77,9 +78,36 @@ class Document:
     assets: dict[str, bytes] = field(default_factory=dict)
     touched_at: float = field(default_factory=time.time)
     lock: threading.RLock = field(default_factory=threading.RLock)
+    _summary_cache: dict[int, dict[str, Any]] = field(default_factory=dict, repr=False)
 
     def touch(self) -> None:
         self.touched_at = time.time()
+
+    def summaries(self) -> list[dict[str, Any]]:
+        """Every page's summary, kept until that page's content changes.
+
+        Reading whether a page still needs OCR means reading its pictures,
+        which is not free, and a page a batch of edits left untouched has not
+        changed: recomputing it anyway on every save, undo and redo is
+        exactly the per-request cost worth avoiding. Filled in lazily and
+        invalidated wherever the document actually changes — ``snapshot``,
+        ``_apply`` and ``_restore`` — rather than kept in step with every way
+        the document can change by construction, which would have to be
+        proven each time a new one is added instead of once here.
+        """
+        missing = [pno for pno in range(self.doc.page_count) if pno not in self._summary_cache]
+        if missing:
+            for pno, summary in zip(missing, page_summaries(self.doc, only=missing)):
+                self._summary_cache[pno] = summary
+        return [self._summary_cache[pno] for pno in range(self.doc.page_count)]
+
+    def _invalidate_summaries(self, pages: list[int] | None) -> None:
+        """Drop cached summaries for pages about to change, or all of them."""
+        if pages is None:
+            self._summary_cache.clear()
+        else:
+            for pno in pages:
+                self._summary_cache.pop(pno, None)
 
     def snapshot(self, pages: list[int] | None = None) -> None:
         """Record the current state so the next edit can be undone.
@@ -91,6 +119,7 @@ class Document:
         self.undo_stack.append(self._capture(pages))
         self._trim(self.undo_stack)
         self.redo_stack.clear()
+        self._invalidate_summaries(pages)
 
     def _capture(self, pages: list[int] | None) -> Step:
         """Save either the named pages or the whole document."""
@@ -170,11 +199,13 @@ class Document:
             self.doc.delete_page(pno + 1)
         # Font resources and calibration are tied to the pages just replaced.
         self.resolver = FontResolver(self.doc)
+        self._invalidate_summaries(list((step.pages or {}).keys()))
 
     def _restore(self, data: bytes) -> None:
         self.doc.close()
         self.doc = pymupdf.open(stream=data, filetype="pdf")
         self.resolver = FontResolver(self.doc)
+        self._invalidate_summaries(None)
 
     def undo(self) -> bool:
         if not self.undo_stack:

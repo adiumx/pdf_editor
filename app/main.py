@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .editor import EditError, apply_operations, pages_touched
-from .extract import area_contents, extract_page, page_summaries, to_page
+from .extract import area_contents, extract_page, to_page
 from .forms import page_fields
 from .ocr import OcrUnavailable, recognise, support
 from .search import find, replace_operations
@@ -57,7 +57,7 @@ async def _edit_error(_request, exc: EditError) -> JSONResponse:
 def _document_payload(document) -> dict[str, Any]:
     return {
         **document.state(),
-        "pages": page_summaries(document.doc),
+        "pages": document.summaries(),
         "ocr": support().as_dict(),
     }
 
@@ -278,7 +278,7 @@ async def undo(doc_id: str) -> dict[str, Any]:
     document = store.get(doc_id)
     with document.lock:
         changed = document.undo()
-        return {**document.state(), "changed": changed, "pages": page_summaries(document.doc)}
+        return {**document.state(), "changed": changed, "pages": document.summaries()}
 
 
 @app.post("/api/documents/{doc_id}/redo")
@@ -286,7 +286,7 @@ async def redo(doc_id: str) -> dict[str, Any]:
     document = store.get(doc_id)
     with document.lock:
         changed = document.redo()
-        return {**document.state(), "changed": changed, "pages": page_summaries(document.doc)}
+        return {**document.state(), "changed": changed, "pages": document.summaries()}
 
 
 @app.post("/api/documents/{doc_id}/assets")

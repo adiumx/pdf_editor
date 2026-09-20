@@ -573,12 +573,21 @@ def area_contents(page: pymupdf.Page, rect: pymupdf.Rect) -> dict[str, Any]:
     }
 
 
-def page_summaries(doc: pymupdf.Document) -> list[dict[str, Any]]:
-    """Per-page geometry and state, for the rail and the client's page model."""
+def page_summaries(
+    doc: pymupdf.Document, only: Iterable[int] | None = None
+) -> list[dict[str, Any]]:
+    """Per-page geometry and state, for the rail and the client's page model.
+
+    ``needs_ocr`` in particular is not cheap — it reads a page's pictures to
+    say whether it is a scan — so ``only`` lets a caller ask for a handful of
+    pages instead of paying that cost for every page on every call. Omitted,
+    every page is summarised, in order, as before.
+    """
     from .ocr import needs_ocr, was_recognised
 
+    numbers = range(doc.page_count) if only is None else only
     summaries = []
-    for pno in range(doc.page_count):
+    for pno in numbers:
         page = doc[pno]
         summaries.append(
             {

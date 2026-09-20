@@ -417,6 +417,127 @@ class TestStore:
         local.close_all()
 
 
+class TestPageSummariesAreCached:
+    """Whether a page still needs OCR means reading its pictures, which is not
+    free. Recomputing every page on every save, undo and redo was exactly the
+    per-request cost this cache exists to avoid — it used to happen even for
+    pages nothing had touched."""
+
+    def _calls(self, monkeypatch):
+        """Count real recomputations, one per page summarised."""
+        import app.store as store_module
+
+        seen: list[int] = []
+        real = store_module.page_summaries
+
+        def counting(doc, only=None):
+            numbers = range(doc.page_count) if only is None else only
+            seen.extend(numbers)
+            return real(doc, only=only)
+
+        monkeypatch.setattr(store_module, "page_summaries", counting)
+        return seen
+
+    def test_a_second_call_recomputes_nothing(self, monkeypatch):
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=4), "cuatro.pdf")
+        try:
+            seen = self._calls(monkeypatch)
+            document.summaries()
+            assert sorted(seen) == [0, 1, 2, 3]
+            seen.clear()
+            document.summaries()
+            assert seen == [], "recalculó páginas que no habían cambiado"
+        finally:
+            local.close_all()
+
+    def test_only_the_snapshotted_page_is_recomputed(self, monkeypatch):
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=4), "cuatro.pdf")
+        try:
+            document.summaries()
+            document.snapshot([2])
+            seen = self._calls(monkeypatch)
+            document.summaries()
+            assert seen == [2], f"se recalcularon de más: {seen}"
+        finally:
+            local.close_all()
+
+    def test_a_whole_document_snapshot_invalidates_every_page(self, monkeypatch):
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=4), "cuatro.pdf")
+        try:
+            document.summaries()
+            document.snapshot()  # pages=None: a structural op, say
+            seen = self._calls(monkeypatch)
+            document.summaries()
+            assert sorted(seen) == [0, 1, 2, 3]
+        finally:
+            local.close_all()
+
+    def test_undoing_a_page_step_invalidates_only_that_page(self, monkeypatch):
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=4), "cuatro.pdf")
+        try:
+            document.summaries()
+            document.snapshot([1])
+            document.doc[1].insert_text((72, 400), "cambio", fontname="helv", fontsize=11)
+            seen = self._calls(monkeypatch)
+            assert document.undo() is True
+            document.summaries()
+            assert seen == [1], f"se recalcularon de más: {seen}"
+        finally:
+            local.close_all()
+
+    def test_undoing_a_whole_document_step_invalidates_everything(self, monkeypatch):
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=4), "cuatro.pdf")
+        try:
+            document.summaries()
+            document.snapshot()
+            seen = self._calls(monkeypatch)
+            assert document.undo() is True
+            document.summaries()
+            assert sorted(seen) == [0, 1, 2, 3]
+        finally:
+            local.close_all()
+
+    def test_a_rollback_invalidates_everything(self, monkeypatch):
+        """The document object itself was replaced; nothing cached for the old
+        one means anything for the new one."""
+        local = DocumentStore()
+        document = local.open(build_pdf(pages=4), "cuatro.pdf")
+        try:
+            document.summaries()
+            before = document.doc.tobytes(garbage=0, deflate=True)
+            document.doc[0].insert_text((72, 400), "algo", fontname="helv", fontsize=11)
+            seen = self._calls(monkeypatch)
+            document.rollback(before)
+            document.summaries()
+            assert sorted(seen) == [0, 1, 2, 3]
+        finally:
+            local.close_all()
+
+    def test_the_cached_value_is_still_correct_after_an_edit(self):
+        """Not just that it recomputes — that what it recomputes is right."""
+        from tests.conftest import build_scanned_pdf
+
+        local = DocumentStore()
+        document = local.open(build_scanned_pdf(), "escaneado.pdf")
+        try:
+            before = document.summaries()[0]
+            assert before["needs_ocr"] is True
+            document.snapshot()
+            from app.ocr import recognise
+
+            recognise(document.doc, [0])
+            after = document.summaries()[0]
+            assert after["needs_ocr"] is False, "siguió pidiendo OCR tras reconocerla"
+            assert after["recognised"] is True
+        finally:
+            local.close_all()
+
+
 class TestFormsSurviveUndo:
     """A page cannot be lifted out and put back on its own when the document
     carries a form: the field list belongs to the document, so the returning
