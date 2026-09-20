@@ -401,9 +401,20 @@ body {
   transition: background .1s, box-shadow .1s;
 }
 
-.page.tool-select .span:hover {
+.page.tool-select .span:hover,
+.page.tool-select .span:active {
   background: rgba(47, 109, 246, .10);
   box-shadow: 0 0 0 1px rgba(47, 109, 246, .35);
+}
+
+/* Where there is no pointer to hover with, nothing would ever show what can
+   be touched, so what a hover would have revealed is shown from the start —
+   faintly, so a page of text does not turn into a page of boxes. */
+@media (hover: none) {
+  .page.tool-select .span,
+  .page.tool-move .span { background: rgba(47, 109, 246, .05); }
+
+  .page.tool-mark .markhit { opacity: .8; }
 }
 
 .span.is-editing {
@@ -441,6 +452,7 @@ body {
 
 .page.tool-move .span { cursor: grab; }
 .page.tool-move .span:hover { background: rgba(47, 109, 246, .12); }
+.page.tool-move .span:active { background: rgba(47, 109, 246, .2); }
 .page.tool-move.is-dragging .span { cursor: grabbing; }
 
 /* Where the block would land if it were dropped now. */
@@ -455,7 +467,24 @@ body {
 
 .page.tool-text .page__layer,
 .page.tool-erase .page__layer,
-.page.tool-image .page__layer { cursor: crosshair; }
+.page.tool-image .page__layer,
+.page.tool-mark .page__layer { cursor: crosshair; }
+
+/* Touch: a drag on the page is the tool's, not the browser's.
+   ---------------------------------------------------------------------------
+   A finger dragging over a page means one of two things, and the browser has
+   to be told which: with a tool that draws or moves, it is the gesture the
+   tool is waiting for, and letting the page scroll under it instead would
+   make those tools unusable. With the editing tool nothing is being dragged,
+   so scrolling stays where it belongs — which is also how the document is
+   moved about with a finger. */
+.page.tool-text .page__layer,
+.page.tool-erase .page__layer,
+.page.tool-image .page__layer,
+.page.tool-mark .page__layer { touch-action: none; }
+
+.page.tool-move .span,
+.page.tool-mark .markhit { touch-action: none; }
 
 .page.tool-text .span,
 .page.tool-erase .span,
@@ -644,4 +673,47 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+
+/* A narrow screen: a tablet held upright, or a window squeezed over.
+   ---------------------------------------------------------------------------
+   The page rail is the first thing to go — it is a convenience, and the
+   document itself is what the screen is for — and the toolbar is allowed to
+   wrap onto a second line rather than pushing its own buttons off the edge. */
+@media (max-width: 860px) {
+  .workspace { flex-direction: column; }
+
+  .pages {
+    flex: 0 0 auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 132px;
+  }
+
+  .pages__list { flex-direction: row; overflow-x: auto; }
+
+  .toolbar {
+    height: auto;
+    min-height: var(--toolbar-h);
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .toolbar__group--end { margin-left: 0; }
+
+  .brand { display: none; }
+
+  /* Bars stack their controls instead of running off the side. */
+  .findbar { flex-wrap: wrap; height: auto; padding: 8px 10px; }
+}
+
+/* Coarse pointers need a bigger target than a mouse does: the usual figure is
+   about 9 mm, which at 96 dpi is some 34 px. */
+@media (pointer: coarse) {
+  .btn { min-height: 38px; }
+  .btn--icon { min-width: 38px; }
+  .formfield--checkbox > *,
+  .formfield--radio > * { transform: scale(1.3); }
 }

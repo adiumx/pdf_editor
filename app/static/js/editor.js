@@ -74,6 +74,7 @@ export class Editor {
     this.zoom = 1.5;
     this.revision = 0;
     this.tool = 'select';
+    this.addToSelection = false;
     this.markKind = 'highlight';
     this.markColor = '#ffd83d';
     this.pages = new Map();
@@ -283,7 +284,10 @@ export class Editor {
 
   async setTool(tool) {
     await this.commitActive();
-    if (tool !== 'move') this.clearPick();
+    if (tool !== 'move') {
+      this.clearPick();
+      this.addToSelection = false;
+    }
     this.tool = tool;
     for (const view of this.pages.values()) view.setTool(tool);
     this._emit();
@@ -548,8 +552,9 @@ export class Editor {
     };
 
     const up = async (upEvent) => {
-      document.removeEventListener('mousemove', move);
-      document.removeEventListener('mouseup', up);
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      document.removeEventListener('pointercancel', up);
       view.clearGhost();
 
       // Whether this was a drag is decided by the hand, not by the snapping:
@@ -558,7 +563,12 @@ export class Editor {
       const at = view.toPagePoint(upEvent);
       if (Math.abs(at.x - start.x) < 1 && Math.abs(at.y - start.y) < 1) {
         // A click: pick the block so the arrow keys can move it.
-        this.pick(view, grabbed, { add: upEvent.shiftKey || upEvent.ctrlKey || upEvent.metaKey });
+        this.pick(view, grabbed, {
+          // Shift and Ctrl are not on a tablet's screen, so the toolbar
+          // carries the same choice as a switch that stays down.
+          add: this.addToSelection
+            || upEvent.shiftKey || upEvent.ctrlKey || upEvent.metaKey,
+        });
         return;
       }
 
@@ -571,8 +581,9 @@ export class Editor {
       ).catch(() => {});
     };
 
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', up);
   }
 
   /**

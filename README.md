@@ -42,6 +42,36 @@ empieza a editar.
 
 Opciones: `python run.py --port 8080 --no-browser`.
 
+### Desde una tablet, por la red local
+
+```bash
+python3 run.py --host 0.0.0.0
+```
+
+Escuchar en todas las interfaces en lugar de solo en la propia máquina. El
+arranque imprime la dirección que hay que abrir desde el otro equipo
+(`http://192.168.x.x:8000`). El PDF se queda en el ordenador: la tablet solo
+enseña la página ya dibujada y manda de vuelta lo que tocas.
+
+**No hay contraseña.** Cualquiera que alcance esa red puede abrir el editor,
+subir archivos y leer los documentos que tengas abiertos, así que úsalo solo
+en una red de confianza. Si no conectas, suele ser el cortafuegos del
+ordenador: hay que dejar pasar ese puerto.
+
+Todo funciona con el dedo. El editor escucha eventos de *puntero*, que es la
+misma lógica para ratón, dedo y lápiz, en lugar de eventos de ratón, que un
+dedo no produce. Con una herramienta que dibuja o mueve, el arrastre es suyo y
+la página no se va detrás; con la de editar no se arrastra nada, así que el
+scroll sigue siendo la forma de mover el documento. Lo que un hover habría
+revelado se enseña desde el principio, porque en una pantalla táctil no hay
+con qué pasar por encima, y en pantalla estrecha la tira de páginas se pone
+horizontal arriba y la barra se reparte en dos líneas.
+
+Dos cosas siguen pidiendo teclado: **empujar con las flechas** y **Mayús para
+sumar a la selección**. Lo segundo tiene un interruptor propio —**＋ Sumar**,
+junto a la herramienta Mover— que hace lo mismo quedándose pulsado. Lo primero
+no: para afinar una posición a dedo están la cuadrícula y el ajuste.
+
 ## Qué puedes hacer
 
 | Herramienta | Qué hace |
@@ -106,7 +136,8 @@ Con dos o más señalados aparece la barra de alineación:
 
 Arrastrar uno de los bloques señalados los mueve todos: después de alinearlos,
 separarlos sin querer sería absurdo. Las flechas también empujan la selección
-entera.
+entera. Sin teclado a mano, el botón **＋ Sumar** deja los toques sumando en
+lugar de empezar una selección nueva.
 
 ### Borrar de verdad, y saberlo antes
 

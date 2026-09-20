@@ -965,3 +965,187 @@ class TestErasingAsksFirst:
     def test_no_console_errors_while_erasing(self, page):
         self._erase(page, "Primera linea")
         assert page.console_errors == []
+
+
+@requires_fonts
+class TestUsingItWithAFinger:
+    """The editor driven by touch, as it would be on a tablet reaching the
+    machine it runs on over the network.
+
+    The touches are dispatched through the browser's own input pipeline rather
+    than synthesised in the page, so what is exercised is the real path from a
+    finger to a handler — including the translation into pointer events, which
+    is the whole point of listening for those.
+    """
+
+    @pytest.fixture
+    def touch_page(self, browser, server, tmp_path):
+        context = browser.new_context(has_touch=True, viewport={"width": 1100, "height": 900})
+        tab = context.new_page()
+        errors = []
+        tab.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        sample = tmp_path / "ejemplo.pdf"
+        sample.write_bytes(build_pdf())
+        tab.goto(server, wait_until="networkidle")
+        tab.set_input_files("#file-input", str(sample))
+        tab.wait_for_selector(".page .span", timeout=30000)
+        tab.console_errors = errors  # type: ignore[attr-defined]
+        tab.cdp = context.new_cdp_session(tab)  # type: ignore[attr-defined]
+        yield tab
+        context.close()
+
+    def _touch(self, page, kind, x=0.0, y=0.0):
+        page.cdp.send("Input.dispatchTouchEvent", {
+            "type": kind,
+            "touchPoints": [] if kind == "touchEnd" else [{"x": x, "y": y}],
+        })
+
+    def _tap(self, page, x, y):
+        self._touch(page, "touchStart", x, y)
+        self._touch(page, "touchEnd")
+
+    def _drag(self, page, x, y, dx, dy, steps=6):
+        self._touch(page, "touchStart", x, y)
+        for step in range(1, steps + 1):
+            self._touch(page, "touchMove", x + dx * step / steps, y + dy * step / steps)
+        self._touch(page, "touchEnd")
+
+    def _centre(self, page, text):
+        box = span_with(page, text).bounding_box()
+        return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+    def test_the_browser_reports_a_touchscreen(self, touch_page):
+        assert touch_page.evaluate("() => navigator.maxTouchPoints") >= 1
+
+    def test_a_finger_drags_a_block(self, touch_page):
+        """With mouse listeners this did nothing at all: a finger produces no
+        mousedown of its own to hang a drag off."""
+        touch_page.click('[data-tool="move"]')
+        before = span_with(touch_page, "Primera linea").bounding_box()
+        self._drag(touch_page, before["x"] + before["width"] / 2,
+                   before["y"] + before["height"] / 2, 72, 60)
+        touch_page.wait_for_timeout(3500)
+        after = span_with(touch_page, "Primera linea").bounding_box()
+        assert after["x"] - before["x"] > 20, f"no se movió: {before['x']} -> {after['x']}"
+        assert after["y"] - before["y"] > 20
+
+    def test_a_tap_opens_the_editor(self, touch_page):
+        self._tap(touch_page, *self._centre(touch_page, "Primera linea"))
+        touch_page.wait_for_selector(".span.is-editing .span__input", timeout=10000)
+
+    def test_a_tap_with_the_move_tool_picks_without_shifting(self, touch_page):
+        touch_page.click('[data-tool="move"]')
+        before = span_with(touch_page, "Primera linea").bounding_box()
+        self._tap(touch_page, *self._centre(touch_page, "Primera linea"))
+        touch_page.wait_for_timeout(1500)
+        assert touch_page.locator(".span.is-picked").count() >= 1, "el toque no marcó nada"
+        after = span_with(touch_page, "Primera linea").bounding_box()
+        assert abs(after["x"] - before["x"]) < 1, "el toque movió el bloque"
+
+    def test_a_finger_draws_a_marquee(self, touch_page):
+        """The text tool's rectangle, drawn with a finger."""
+        touch_page.click('[data-tool="text"]')
+        box = touch_page.locator(".page").first.bounding_box()
+        self._drag(touch_page, box["x"] + 60, box["y"] + 380, 220, 40)
+        touch_page.wait_for_timeout(1200)
+        assert touch_page.locator(".newbox").count() == 1
+
+    def test_a_finger_highlights_text(self, touch_page):
+        touch_page.keyboard.press("a")
+        touch_page.wait_for_selector("#markbar:not([hidden])", timeout=5000)
+        box = span_with(touch_page, "Primera linea").bounding_box()
+        self._drag(touch_page, box["x"] + 2, box["y"] + box["height"] / 2,
+                   box["width"] - 4, 0)
+        touch_page.wait_for_timeout(3000)
+        marks = touch_page.evaluate("() => window.__editor.pages.get(0).marks.length")
+        assert marks == 1, f"el dedo no dejó marca ({marks})"
+
+    def test_a_drag_on_the_page_does_not_scroll_it_away(self, touch_page):
+        """With a tool that draws or moves, the gesture belongs to the tool;
+        letting the browser scroll under it would make them unusable."""
+        for tool in ("move", "text", "erase", "mark"):
+            touch_page.click(f'[data-tool="{tool}"]')
+            touch_page.wait_for_timeout(150)
+            blocked = touch_page.evaluate("""() => {
+              const page = document.querySelector('.page');
+              const layer = page.querySelector('.page__layer');
+              const span = page.querySelector('.span');
+              return {
+                layer: getComputedStyle(layer).touchAction,
+                span: span ? getComputedStyle(span).touchAction : null,
+              };
+            }""")
+            assert "none" in (blocked["layer"], blocked["span"]), f"{tool}: {blocked}"
+
+    def test_the_editing_tool_leaves_scrolling_alone(self, touch_page):
+        """Nothing is dragged with it, and scrolling is how the document is
+        moved about with a finger."""
+        touch_page.click('[data-tool="select"]')
+        touch_page.wait_for_timeout(150)
+        actions = touch_page.evaluate("""() => {
+          const page = document.querySelector('.page');
+          return [getComputedStyle(page.querySelector('.page__layer')).touchAction,
+                  getComputedStyle(page.querySelector('.span')).touchAction];
+        }""")
+        assert "none" not in actions, actions
+
+    def test_what_can_be_touched_shows_without_a_hover(self, touch_page):
+        """There is no pointer to hover with, so nothing would ever reveal it."""
+        touch_page.click('[data-tool="select"]')
+        visible = touch_page.evaluate(
+            "() => getComputedStyle(document.querySelector('.span')).backgroundColor"
+        )
+        assert visible not in ("rgba(0, 0, 0, 0)", "transparent"), visible
+
+    def test_a_form_field_can_be_filled_in_with_a_finger(self, browser, server, tmp_path):
+        context = browser.new_context(has_touch=True, viewport={"width": 1100, "height": 900})
+        tab = context.new_page()
+        sample = tmp_path / "formulario.pdf"
+        sample.write_bytes(build_pdf_with_every_kind_of_field())
+        tab.goto(server, wait_until="networkidle")
+        tab.set_input_files("#file-input", str(sample))
+        tab.wait_for_selector(".page .formfield", timeout=30000)
+        try:
+            tab.tap(".formfield--checkbox input")
+            tab.wait_for_timeout(3000)
+            values = tab.evaluate(
+                "() => window.__editor.pages.get(0).fields"
+                ".filter(f => f.name === 'acepto').map(f => f.value)"
+            )
+            assert values == [True]
+        finally:
+            context.close()
+
+    def test_no_console_errors_under_touch(self, touch_page):
+        touch_page.click('[data-tool="move"]')
+        box = span_with(touch_page, "Primera linea").bounding_box()
+        self._drag(touch_page, box["x"] + 10, box["y"] + 6, 60, 40)
+        touch_page.wait_for_timeout(2500)
+        assert touch_page.console_errors == []
+
+    def test_blocks_can_be_added_to_the_selection_without_a_keyboard(self, touch_page):
+        """Shift and Ctrl are not on a tablet's screen, so the toolbar carries
+        the same choice as a switch that stays down."""
+        touch_page.click('[data-tool="move"]')
+        assert touch_page.locator("#btn-add-pick").is_visible()
+        self._tap(touch_page, *self._centre(touch_page, "Primera linea"))
+        touch_page.wait_for_timeout(1200)
+        touch_page.tap("#btn-add-pick")
+        self._tap(touch_page, *self._centre(touch_page, "Titulo en negrita"))
+        touch_page.wait_for_timeout(1200)
+        assert touch_page.evaluate("() => window.__editor.picked.blocks.length") == 2
+        assert touch_page.locator("#alignbar").is_visible()
+
+    def test_the_switch_is_only_offered_where_it_means_something(self, touch_page):
+        touch_page.click('[data-tool="select"]')
+        touch_page.wait_for_timeout(200)
+        assert touch_page.locator("#btn-add-pick").is_hidden()
+
+    def test_leaving_the_move_tool_turns_the_switch_off(self, touch_page):
+        touch_page.click('[data-tool="move"]')
+        touch_page.tap("#btn-add-pick")
+        assert touch_page.evaluate("() => window.__editor.addToSelection") is True
+        touch_page.click('[data-tool="select"]')
+        touch_page.click('[data-tool="move"]')
+        touch_page.wait_for_timeout(200)
+        assert touch_page.evaluate("() => window.__editor.addToSelection") is False

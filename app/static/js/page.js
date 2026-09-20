@@ -190,7 +190,7 @@ export class PageView {
         height: `${Math.max(mark.bbox[3] - mark.bbox[1], 6) * z}px`,
         boxShadow: `inset 0 0 0 1.5px ${mark.color}`,
       });
-      element.addEventListener('mousedown', (event) => {
+      element.addEventListener('pointerdown', (event) => {
         event.preventDefault();
         event.stopPropagation();
         this.handlers.removeMark?.(this, mark);
@@ -224,8 +224,10 @@ export class PageView {
       height: `${Math.max(y1 - y0, 1) * z}px`,
     });
 
-    element.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) return;
+    element.addEventListener('pointerdown', (event) => {
+      // A finger and a pen report button 0 like the left mouse button; a
+      // second finger is not a second drag.
+      if (event.button !== 0 || !event.isPrimary) return;
       // Once this span is open for editing, a click inside it is the caret's
       // business, not ours.
       if (event.target.closest?.('.span__input')) return;
@@ -428,8 +430,8 @@ export class PageView {
 
   /** Drag-a-rectangle support for the text, image and erase tools. */
   _bindMarquee() {
-    this.layer.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) return;
+    this.layer.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || !event.isPrimary) return;
       const tool = this.element.className.replace('page tool-', '');
       if (tool === 'select') {
         this.handlers.onBlankClick?.(this, event);
@@ -471,8 +473,9 @@ export class PageView {
         );
       };
       const up = (upEvent) => {
-        document.removeEventListener('mousemove', move);
-        document.removeEventListener('mouseup', up);
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        document.removeEventListener('pointercancel', up);
         marquee.remove();
         this.clearOverlays();
         const end = at(upEvent);
@@ -485,8 +488,12 @@ export class PageView {
         this.handlers.onMarquee?.(this, tool, rect, anchor);
       };
 
-      document.addEventListener('mousemove', move);
-      document.addEventListener('mouseup', up);
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', up);
+      // A finger can be taken off the screen in ways a mouse button cannot —
+      // the system takes the gesture over, a call comes in — and without this
+      // the drag would be left running with nothing to end it.
+      document.addEventListener('pointercancel', up);
       draw(start);
     });
   }

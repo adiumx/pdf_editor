@@ -7,8 +7,24 @@
 from __future__ import annotations
 
 import argparse
+import socket
 import threading
 import webbrowser
+
+
+def lan_address() -> str | None:
+    """This machine's address on the local network, as others would reach it.
+
+    Found by asking the routing table which interface a packet would leave by;
+    nothing is sent, and the address is not looked up anywhere. Returns None
+    when there is no route out, which is the case on a machine with no network.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))  # reserved for documentation, routed nowhere
+            return probe.getsockname()[0]
+    except OSError:
+        return None
 
 
 def main() -> None:
@@ -24,6 +40,19 @@ def main() -> None:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
     print(f"Editor de PDF disponible en {url}")
+
+    # Listening on every interface is how a tablet on the same network reaches
+    # the editor, so the address it should be opened at is worth printing —
+    # along with what else that opens, since there is no password on any of it.
+    if args.host == "0.0.0.0":
+        address = lan_address()
+        if address:
+            print(f"Desde otro equipo de tu red: http://{address}:{args.port}")
+        print(
+            "Atención: cualquiera que alcance esta red puede abrir el editor,\n"
+            "          subir archivos y leer los documentos que tengas abiertos.\n"
+            "          No hay contraseña. Úsalo solo en una red de confianza."
+        )
     import uvicorn
 
     uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload, log_level="info")

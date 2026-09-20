@@ -41,6 +41,11 @@ for (const button of $('alignbar').querySelectorAll('[data-arrange]')) {
   });
 }
 
+$('btn-add-pick').addEventListener('click', () => {
+  editor.addToSelection = !editor.addToSelection;
+  $('btn-add-pick').classList.toggle('is-active', editor.addToSelection);
+});
+
 const search = new SearchBar({
   bar: $('findbar'),
   query: $('find-query'),
@@ -387,6 +392,9 @@ editor.onChange(() => {
   $('gridbar').hidden = $('gridbar').hidden || !open;
   // The annotate bar is the tool: it is up exactly while the tool is in hand.
   $('markbar').hidden = !open || editor.tool !== 'mark';
+  // Only where it means something: adding to a selection of blocks.
+  $('btn-add-pick').hidden = !open || editor.tool !== 'move';
+  $('btn-add-pick').classList.toggle('is-active', editor.addToSelection);
 
   const picked = editor.picked?.blocks?.length || 0;
   $('alignbar').hidden = !open || picked < 2;
