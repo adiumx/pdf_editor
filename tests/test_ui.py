@@ -907,3 +907,61 @@ class TestFillingAFormIn:
         form_page.locator(".formfield--checkbox input").first.click()
         form_page.wait_for_timeout(2000)
         assert form_page.console_errors == []
+
+
+@requires_fonts
+class TestErasingAsksFirst:
+    """Erasing takes the glyphs out of the file rather than covering them, so
+    it says what it is about to take and waits for a yes."""
+
+    def _drag_over(self, page, text, margin=4):
+        box = span_with(page, text).bounding_box()
+        page.mouse.move(box["x"] - margin, box["y"] - margin)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] + margin,
+                        box["y"] + box["height"] + margin, steps=8)
+        page.mouse.up()
+
+    def _erase(self, page, text, answer=True, margin=4):
+        asked = []
+        page.once("dialog", lambda d: (asked.append(d.message), d.accept() if answer else d.dismiss()))
+        page.click('[data-tool="erase"]')
+        self._drag_over(page, text, margin)
+        page.wait_for_timeout(3500)
+        return asked
+
+    def test_it_asks_before_erasing(self, page):
+        asked = self._erase(page, "Primera linea")
+        assert asked, "borró sin preguntar"
+
+    def test_the_question_quotes_the_text_that_would_go(self, page):
+        asked = self._erase(page, "Primera linea", answer=False)
+        assert "Primera linea del documento" in asked[0], asked[0]
+
+    def test_the_question_says_it_leaves_nothing_to_recover(self, page):
+        asked = self._erase(page, "Primera linea", answer=False)
+        assert "recuperarlo" in asked[0], asked[0]
+
+    def test_saying_no_leaves_the_text_alone(self, page):
+        self._erase(page, "Primera linea", answer=False)
+        assert span_with(page, "Primera linea").count() >= 1, "borró tras decir que no"
+
+    def test_saying_yes_erases_it(self, page):
+        self._erase(page, "Primera linea", answer=True)
+        assert span_with(page, "Primera linea").count() == 0, "no llegó a borrar"
+
+    def test_an_empty_area_is_not_worth_asking_about(self, page):
+        asked = []
+        page.once("dialog", lambda d: (asked.append(d.message), d.dismiss()))
+        page.click('[data-tool="erase"]')
+        box = page.locator(".page").first.bounding_box()
+        page.mouse.move(box["x"] + box["width"] - 90, box["y"] + box["height"] - 90)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] - 20, box["y"] + box["height"] - 20, steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(2500)
+        assert asked == [], f"preguntó por un rectángulo vacío: {asked}"
+
+    def test_no_console_errors_while_erasing(self, page):
+        self._erase(page, "Primera linea")
+        assert page.console_errors == []

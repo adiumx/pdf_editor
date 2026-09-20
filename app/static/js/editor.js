@@ -13,6 +13,44 @@ import { alignmentDeltas } from './align.js';
 import { familyOf } from './fontmap.js';
 import { reportWarnings, setStatus, toast, withBusy } from './ui.js';
 
+/** How many lines of the text about to go are quoted back before eliding. */
+const ERASE_PREVIEW_LINES = 6;
+
+/** The question to put before an area is wiped, naming what it takes. */
+function eraseQuestion(inside) {
+  if (!inside) {
+    return 'Se va a borrar todo lo que haya dentro del rectángulo.\n\n'
+      + 'El contenido se quita del archivo: al guardar no queda de dónde recuperarlo.\n\n'
+      + '¿Borrar?';
+  }
+
+  const parts = [];
+  if (inside.words) {
+    const lines = inside.text.split('\n').filter(Boolean);
+    const shown = lines.slice(0, ERASE_PREVIEW_LINES).map((line) => `  ${line}`);
+    if (lines.length > ERASE_PREVIEW_LINES) {
+      shown.push(`  … y ${lines.length - ERASE_PREVIEW_LINES} líneas más`);
+    }
+    parts.push(`${inside.words} palabras:\n${shown.join('\n')}`);
+  }
+  if (inside.images) parts.push(count(inside.images, 'imagen', 'imágenes'));
+  if (inside.drawings) parts.push(count(inside.drawings, 'dibujo', 'dibujos'));
+
+  const stays = [];
+  if (inside.marks) stays.push(count(inside.marks, 'marca', 'marcas'));
+  if (inside.fields) stays.push(count(inside.fields, 'campo de formulario', 'campos de formulario'));
+
+  let question = `Se va a quitar del archivo:\n\n${parts.join('\n')}\n\n`;
+  question += 'No es taparlo: el contenido sale del archivo, y al guardar no queda '
+    + 'de dónde recuperarlo. Mientras no guardes, «Deshacer» lo devuelve.';
+  if (stays.length) {
+    question += `\n\nEsto NO se quita, porque no es contenido de la página: ${stays.join(' y ')}.`;
+  }
+  return `${question}\n\n¿Borrar?`;
+}
+
+const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
 /** A block is its paragraph, so its first line's id names it. */
 const blockKey = (block) => block[0]?.id || '';
 
@@ -641,9 +679,7 @@ export class Editor {
       this._openNewTextBox(view, box);
     } else if (tool === 'erase') {
       if (width < 2 || height < 2) return;
-      await this.applyOperations([{ op: 'erase_area', page: view.pageNumber, rect }], {
-        affected: [view.pageNumber],
-      });
+      await this.eraseArea(view, rect);
     } else if (tool === 'mark') {
       await this.addMark(view, rect, start);
     } else if (tool === 'image') {
@@ -660,6 +696,32 @@ export class Editor {
         { affected: [view.pageNumber] },
       );
     }
+  }
+
+  /**
+   * Wipe an area, once it is clear what that takes.
+   *
+   * Erasing is not a covering-up: the glyphs come out of the file, and a save
+   * leaves nothing to recover them from. That is the right behaviour — a
+   * black box drawn over a name still has the name underneath — but it is
+   * worth being sure about, so what is inside is read back and said out loud
+   * first.
+   */
+  async eraseArea(view, rect) {
+    let inside = null;
+    try {
+      inside = await api.inspect(this.doc.id, view.pageNumber, rect);
+    } catch {
+      inside = null;  // the reading failed; ask in general terms instead
+    }
+    if (inside?.empty) {
+      toast('No hay nada dentro de ese rectángulo.', 'warn');
+      return;
+    }
+    if (!confirm(eraseQuestion(inside))) return;
+    await this.applyOperations([{ op: 'erase_area', page: view.pageNumber, rect }], {
+      affected: [view.pageNumber],
+    });
   }
 
   /** Put a mark on whatever the drag crossed. */

@@ -54,6 +54,14 @@ export const api = {
     });
   },
 
+  async inspect(docId, pno, rect) {
+    return json(`/api/documents/${docId}/pages/${pno}/inspect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rect }),
+    });
+  },
+
   async ocr(docId, body = {}) {
     return json(`/api/documents/${docId}/ocr`, {
       method: 'POST',

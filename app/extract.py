@@ -510,6 +510,69 @@ def page_marks(page: pymupdf.Page) -> list[dict[str, Any]]:
     return marks
 
 
+def _inside_any(rect: pymupdf.Rect, boxes: list[pymupdf.Rect], slack: float = 1.0) -> bool:
+    """Whether a box sits within one of `boxes`, give or take a point."""
+    return any(
+        box.x0 - slack <= rect.x0 and box.y0 - slack <= rect.y0
+        and rect.x1 <= box.x1 + slack and rect.y1 <= box.y1 + slack
+        for box in boxes
+    )
+
+
+def area_contents(page: pymupdf.Page, rect: pymupdf.Rect) -> dict[str, Any]:
+    """What is inside a rectangle, so it can be said out loud before it goes.
+
+    Erasing an area is not a covering-up: the glyphs come out of the file, and
+    once the document is saved there is nothing left to recover them from.
+    That is the right behaviour — a black box drawn over a name still has the
+    name underneath it — but it is worth being sure about, and the only way to
+    be sure is to be told what is about to go.
+
+    What stays is worth saying too. A redaction takes page content; the marks
+    and the form fields over it are not page content and survive, so a
+    highlight over an erased sentence is left pointing at the gap.
+    """
+    area = pymupdf.Rect(rect)
+    text = clean(page.get_text("text", clip=area) or "").strip()
+
+    images = 0
+    try:
+        images = sum(
+            1 for info in page.get_image_info() if area.intersects(pymupdf.Rect(info["bbox"]))
+        )
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+    # An annotation paints itself, and its paint is reported among the page's
+    # drawings with nothing to tell the two apart. Counting it would promise
+    # to erase line art that is really a highlight — and that a redaction does
+    # not touch anyway. What lies inside an annotation's box is its own.
+    annot_boxes = [pymupdf.Rect(annot.rect) for annot in page.annots()]
+    drawings = sum(
+        1
+        for drawing in page.get_drawings()
+        if area.intersects(pymupdf.Rect(drawing["rect"]))
+        and not _inside_any(pymupdf.Rect(drawing["rect"]), annot_boxes)
+    )
+    marks = sum(
+        1 for annot in page.annots()
+        if annot.type[1] in MARK_TYPES and area.intersects(pymupdf.Rect(annot.rect))
+    )
+    fields = sum(
+        1 for widget in page.widgets() if area.intersects(pymupdf.Rect(widget.rect))
+    )
+
+    return {
+        "text": text,
+        "words": len(text.split()),
+        "images": images,
+        "drawings": drawings,
+        "marks": marks,
+        "fields": fields,
+        "empty": not text and not images and not drawings,
+    }
+
+
 def page_summaries(doc: pymupdf.Document) -> list[dict[str, Any]]:
     """Per-page geometry and state, for the rail and the client's page model."""
     from .ocr import needs_ocr, was_recognised

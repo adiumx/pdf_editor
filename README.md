@@ -52,7 +52,7 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | **Imagen** | Sube una imagen y colócala dibujando un rectángulo. |
 | **Formularios** | Los campos del documento se rellenan directamente: escribe, marca, elige. |
 | **Anotar** | Resalta, subraya, tacha o deja una nota. Arrastra sobre el texto; clic en una marca para quitarla. |
-| **Borrar** | Elimina todo lo que haya dentro de un rectángulo. |
+| **Borrar** | Quita del archivo todo lo que haya dentro de un rectángulo, diciendo antes qué se lleva. |
 | **Reconocer texto** | Lee el texto de las páginas escaneadas para poder editarlas. Aparece solo cuando hay alguna. |
 | **Buscar** | `Ctrl+F` abre la búsqueda: resalta todas las apariciones, salta entre ellas y reemplaza todas de una vez. |
 | **Páginas** | Reordena arrastrando las miniaturas, gira, borra o añade páginas en blanco. |
@@ -107,6 +107,28 @@ Con dos o más señalados aparece la barra de alineación:
 Arrastrar uno de los bloques señalados los mueve todos: después de alinearlos,
 separarlos sin querer sería absurdo. Las flechas también empujan la selección
 entera.
+
+### Borrar de verdad, y saberlo antes
+
+Borrar una zona no es taparla. Un recuadro negro dibujado encima de un nombre
+sigue teniendo el nombre debajo, a un copiar y pegar de distancia; aquí los
+glifos salen del archivo, y una vez guardado no queda de dónde recuperarlos.
+Es lo correcto, pero conviene estar seguro, así que antes de hacerlo se lee lo
+que hay dentro del rectángulo y se dice en voz alta:
+
+- **Cuántas palabras** y las primeras líneas, citadas literalmente, para que se
+  vea qué desaparece.
+- **Cuántas imágenes y dibujos**. La pintura de una anotación se cuela entre los
+  dibujos de la página sin nada que la distinga, así que lo que cae dentro del
+  recuadro de una anotación no se cuenta: no es línea de la página, y una
+  redacción no lo toca de todas formas.
+- **Qué NO se va**: las marcas y los campos de formulario que haya encima. No
+  son contenido de la página y sobreviven, de modo que un resaltado sobre una
+  frase borrada se queda señalando el hueco.
+
+Mientras no guardes, **Deshacer** lo devuelve; al guardar, ya no.
+
+Un rectángulo vacío no pregunta nada: avisa de que no hay nada dentro.
 
 ### Rellenar formularios
 

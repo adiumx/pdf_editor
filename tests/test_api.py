@@ -477,3 +477,27 @@ class TestFormsSurviveUndo:
             assert document.undo_stack[-1].is_whole_document is False
         finally:
             local.close_all()
+
+
+class TestInspectingAnArea:
+    def test_it_reports_what_is_inside(self, opened):
+        client, document = opened
+        response = client.post(
+            f"/api/documents/{document['id']}/pages/0/inspect",
+            json={"rect": [60, 80, 500, 200]},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["words"] > 0
+
+    def test_a_missing_rectangle_is_refused(self, opened):
+        client, document = opened
+        response = client.post(f"/api/documents/{document['id']}/pages/0/inspect", json={})
+        assert response.status_code == 400
+
+    def test_a_page_that_does_not_exist_is_refused(self, opened):
+        client, document = opened
+        response = client.post(
+            f"/api/documents/{document['id']}/pages/99/inspect",
+            json={"rect": [0, 0, 10, 10]},
+        )
+        assert response.status_code == 404

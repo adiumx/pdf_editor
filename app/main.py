@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .editor import EditError, apply_operations, pages_touched
-from .extract import extract_page, page_summaries
+from .extract import area_contents, extract_page, page_summaries, to_page
 from .forms import page_fields
 from .ocr import OcrUnavailable, recognise, support
 from .search import find, replace_operations
@@ -131,6 +131,20 @@ async def get_page_text(doc_id: str, pno: int) -> dict[str, Any]:
         page = extract_page(document.doc, pno, document.resolver)
         page["fields"] = page_fields(document.doc[pno])
         return page
+
+
+@app.post("/api/documents/{doc_id}/pages/{pno}/inspect")
+async def inspect_area(doc_id: str, pno: int, payload: dict = Body(...)) -> dict[str, Any]:
+    """What sits inside a rectangle, so the client can say what an erase takes."""
+    document = store.get(doc_id)
+    rect = payload.get("rect")
+    if not isinstance(rect, list) or len(rect) != 4:
+        raise HTTPException(400, "«rect» debe ser [x0, y0, x1, y1]")
+    with document.lock:
+        if not 0 <= pno < document.doc.page_count:
+            raise HTTPException(404, f"La página {pno + 1} no existe")
+        page = document.doc[pno]
+        return area_contents(page, to_page(page, pymupdf.Rect(*rect)))
 
 
 # -- editing ---------------------------------------------------------------

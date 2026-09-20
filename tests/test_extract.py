@@ -5,9 +5,22 @@ from __future__ import annotations
 import pymupdf
 import pytest
 
-from app.extract import color_to_hex, extract_page, hex_to_pdf, page_summaries, rotation_from_dir
+from app.extract import (
+    area_contents,
+    color_to_hex,
+    extract_page,
+    hex_to_pdf,
+    page_summaries,
+    rotation_from_dir,
+)
 from app.fonts import FontResolver
-from tests.conftest import build_pdf, requires_fonts
+from tests.conftest import (
+    build_pdf,
+    build_pdf_with_every_kind_of_field,
+    build_pdf_with_figures,
+    build_pdf_with_marks,
+    requires_fonts,
+)
 
 
 class TestConversions:
@@ -128,3 +141,71 @@ class TestColumnMeasure:
         wide = next(line for line in page["lines"] if "ancho" in line["text"])
         assert apart["measure"] < wide["measure"]
         document.close()
+
+
+class TestSayingWhatAnEraseTakes:
+    """Erasing is not a covering-up, so what it takes is read back first."""
+
+    def _page(self):
+        doc = pymupdf.open(stream=build_pdf_with_marks(), filetype="pdf")
+        return doc, doc[0]
+
+    def test_the_text_inside_comes_back(self):
+        doc, page = self._page()
+        inside = area_contents(page, pymupdf.Rect(70, 88, 400, 125))
+        assert "Primera linea del parrafo marcado" in inside["text"]
+        assert inside["words"] == 10
+        doc.close()
+
+    def test_text_outside_is_not_counted(self):
+        doc, page = self._page()
+        inside = area_contents(page, pymupdf.Rect(70, 88, 400, 125))
+        assert "sin marcar" not in inside["text"]
+        doc.close()
+
+    def test_an_empty_area_says_so(self):
+        doc, page = self._page()
+        assert area_contents(page, pymupdf.Rect(400, 600, 500, 650))["empty"] is True
+        doc.close()
+
+    def test_an_area_with_text_is_not_empty(self):
+        doc, page = self._page()
+        assert area_contents(page, pymupdf.Rect(70, 88, 400, 125))["empty"] is False
+        doc.close()
+
+    def test_the_marks_that_will_stay_are_counted(self):
+        """A redaction takes page content; a highlight over it is not page
+        content and survives, left pointing at the gap."""
+        doc, page = self._page()
+        assert area_contents(page, pymupdf.Rect(70, 88, 400, 125))["marks"] == 3
+        doc.close()
+
+    def test_an_annotations_own_paint_is_not_counted_as_line_art(self):
+        """It is reported among the page's drawings with nothing to tell the
+        two apart, and a redaction does not touch it anyway."""
+        doc, page = self._page()
+        assert area_contents(page, pymupdf.Rect(70, 88, 400, 125))["drawings"] == 0
+        doc.close()
+
+    def test_real_line_art_is_counted(self):
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "Una linea", fontname="helv", fontsize=11)
+        page.draw_rect(pymupdf.Rect(80, 150, 200, 190))
+        page.add_highlight_annot(pymupdf.Rect(70, 90, 200, 105))
+        inside = area_contents(page, pymupdf.Rect(60, 80, 300, 250))
+        assert inside["drawings"] == 1, "no distinguió el recuadro del resaltado"
+        assert inside["marks"] == 1
+        doc.close()
+
+    def test_a_form_field_over_the_area_is_counted_as_staying(self):
+        doc = pymupdf.open(stream=build_pdf_with_every_kind_of_field(), filetype="pdf")
+        inside = area_contents(doc[0], pymupdf.Rect(60, 90, 320, 200))
+        assert inside["fields"] >= 3
+        doc.close()
+
+    def test_an_image_inside_is_counted(self):
+        doc = pymupdf.open(stream=build_pdf_with_figures(), filetype="pdf")
+        whole = area_contents(doc[0], doc[0].rect)
+        assert whole["images"] >= 1
+        doc.close()
