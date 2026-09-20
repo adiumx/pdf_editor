@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from tests.conftest import build_pdf, requires_fonts
+from tests.conftest import build_pdf, build_pdf_with_every_kind_of_field, requires_fonts
 
 playwright_api = pytest.importorskip("playwright.sync_api", reason="playwright no instalado")
 
@@ -796,3 +796,114 @@ class TestAlignment:
         page.click('[data-arrange="left"]')
         page.wait_for_timeout(3000)
         assert page.console_errors == []
+
+
+@requires_fonts
+class TestFillingAFormIn:
+    """The document's own form fields, filled in with the mouse and keyboard."""
+
+    @pytest.fixture
+    def form_page(self, browser, server, tmp_path):
+        tab = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors = []
+        tab.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        sample = tmp_path / "formulario.pdf"
+        sample.write_bytes(build_pdf_with_every_kind_of_field())
+        tab.goto(server, wait_until="networkidle")
+        tab.set_input_files("#file-input", str(sample))
+        tab.wait_for_selector(".page .formfield", timeout=30000)
+        tab.console_errors = errors  # type: ignore[attr-defined]
+        yield tab
+        tab.close()
+
+    def _field(self, page, name):
+        return page.evaluate(
+            "(name) => (window.__editor.pages.get(0).fields || [])"
+            ".filter(f => f.name === name).map(f => f.value)", name,
+        )
+
+    def test_every_field_gets_a_control(self, form_page):
+        kinds = form_page.evaluate(
+            "() => [...document.querySelectorAll('.page .formfield')]"
+            ".map(e => e.className.split(' ')[1])"
+        )
+        assert "formfield--text" in kinds
+        assert "formfield--checkbox" in kinds
+        assert "formfield--combo" in kinds
+        assert kinds.count("formfield--radio") == 3
+
+    def test_a_signature_gets_no_control(self, form_page):
+        """Nothing here can sign, so it is shown as the document draws it."""
+        assert form_page.locator(".formfield--signature").count() == 0
+
+    def test_typing_into_a_field_reaches_the_document(self, form_page):
+        box = form_page.locator(".formfield--text input").first
+        box.click()
+        form_page.keyboard.press("Control+a")
+        form_page.keyboard.type("Beatriz Lopez")
+        form_page.keyboard.press("Enter")
+        form_page.wait_for_timeout(3000)
+        assert self._field(form_page, "nombre") == ["Beatriz Lopez"]
+
+    def test_a_letter_typed_into_a_field_is_not_a_tool_shortcut(self, form_page):
+        """"m" in a name used to switch to the move tool."""
+        box = form_page.locator(".formfield--text input").first
+        box.click()
+        form_page.keyboard.press("Control+a")
+        form_page.keyboard.type("Guillermo")
+        form_page.wait_for_timeout(400)
+        assert form_page.evaluate("() => window.__editor.tool") == "select"
+        assert box.input_value() == "Guillermo"
+
+    def test_ticking_a_box_reaches_the_document(self, form_page):
+        assert self._field(form_page, "acepto") == [False]
+        form_page.locator(".formfield--checkbox input").first.click()
+        form_page.wait_for_timeout(3000)
+        assert self._field(form_page, "acepto") == [True]
+
+    def test_choosing_from_a_list_reaches_the_document(self, form_page):
+        form_page.locator(".formfield--list select").first.select_option("Pro")
+        form_page.wait_for_timeout(3000)
+        assert self._field(form_page, "plan") == ["Pro"]
+
+    def test_a_locked_field_cannot_be_typed_into(self, form_page):
+        locked = form_page.locator(".formfield.is-locked input").first
+        assert locked.is_disabled()
+
+    def test_ticking_one_radio_unticks_its_siblings(self, form_page):
+        form_page.locator(".formfield--radio input").nth(2).click()
+        form_page.wait_for_timeout(3000)
+        assert self._field(form_page, "respuesta") == [False, False, True]
+        form_page.locator(".formfield--radio input").nth(0).click()
+        form_page.wait_for_timeout(3000)
+        assert self._field(form_page, "respuesta") == [True, False, False]
+
+    def test_filling_a_field_can_be_undone(self, form_page):
+        form_page.locator(".formfield--checkbox input").first.click()
+        form_page.wait_for_timeout(3000)
+        assert self._field(form_page, "acepto") == [True]
+        form_page.keyboard.press("Control+z")
+        form_page.wait_for_timeout(3000)
+        assert self._field(form_page, "acepto") == [False]
+
+    def test_clearing_a_field_sticks(self, form_page):
+        box = form_page.locator(".formfield--text input").first
+        box.click()
+        form_page.keyboard.press("Control+a")
+        form_page.keyboard.press("Delete")
+        form_page.keyboard.press("Enter")
+        form_page.wait_for_timeout(3000)
+        assert self._field(form_page, "nombre") == [""]
+
+    def test_the_bars_own_labels_still_work(self, form_page):
+        """The form fields and the bars' labels were both called "field", so
+        styling the one laid the other over the bar and swallowed its clicks."""
+        form_page.locator(".span").first.click()
+        form_page.wait_for_selector(".span.is-editing .span__input", timeout=10000)
+        form_page.locator("#fmt-size").click()
+        assert form_page.evaluate("() => document.activeElement.id") == "fmt-size"
+
+    def test_no_console_errors_while_filling_it_in(self, form_page):
+        form_page.locator(".formfield--checkbox input").first.click()
+        form_page.wait_for_timeout(2000)
+        assert form_page.console_errors == []

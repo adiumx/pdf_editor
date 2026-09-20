@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .editor import EditError, apply_operations, pages_touched
 from .extract import extract_page, page_summaries
+from .forms import page_fields
 from .ocr import OcrUnavailable, recognise, support
 from .search import find, replace_operations
 from .store import DocumentError, DocumentStore
@@ -117,12 +118,19 @@ async def render_page(
 
 @app.get("/api/documents/{doc_id}/pages/{pno}/text")
 async def get_page_text(doc_id: str, pno: int) -> dict[str, Any]:
-    """The editable lines of one page, with the font data behind each span."""
+    """The editable lines of one page, with the font data behind each span.
+
+    The form fields are added here rather than in the extraction itself: a
+    field is not page content, and the text reader has no business knowing
+    about the document's form.
+    """
     document = store.get(doc_id)
     with document.lock:
         if not 0 <= pno < document.doc.page_count:
             raise HTTPException(404, f"La página {pno + 1} no existe")
-        return extract_page(document.doc, pno, document.resolver)
+        page = extract_page(document.doc, pno, document.resolver)
+        page["fields"] = page_fields(document.doc[pno])
+        return page
 
 
 # -- editing ---------------------------------------------------------------

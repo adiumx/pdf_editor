@@ -8,6 +8,15 @@
 
 import { applyTypography } from './fontmap.js';
 
+/** What the tooltip on a field should say. */
+function fieldHint(field) {
+  const name = field.label || field.name || 'campo sin nombre';
+  if (field.kind === 'signature') return `${name} — firma digital, no se rellena aquí`;
+  if (field.readonly) return `${name} — de solo lectura`;
+  if (field.required) return `${name} — obligatorio`;
+  return name;
+}
+
 export class PageView {
   constructor(pageNumber, geometry, handlers) {
     this.pageNumber = pageNumber;
@@ -15,6 +24,7 @@ export class PageView {
     this.handlers = handlers;
     this.lines = [];
     this.marks = [];
+    this.fields = [];
     this.zoom = 1.5;
     this._sampler = null;
 
@@ -58,6 +68,7 @@ export class PageView {
       });
     }
     this._renderMarks();
+    this._renderFields();
   }
 
   /** The marks already on the page, as targets to click rather than as paint.
@@ -69,6 +80,97 @@ export class PageView {
   setMarks(marks) {
     this.marks = marks || [];
     this._renderMarks();
+  }
+
+  /** The document's form fields, as controls to fill in.
+   *
+   * A field is not page content: what the rendered image shows is the box the
+   * document draws, and these sit on top of it so the value can be typed. They
+   * are always live, whatever tool is in hand, because filling a form in is
+   * not an edit to the page and never competes with one.
+   */
+  setFields(fields) {
+    this.fields = fields || [];
+    this._renderFields();
+  }
+
+  _renderFields() {
+    for (const stale of this.layer.querySelectorAll('.formfield')) stale.remove();
+    const z = this.zoom;
+    for (const field of this.fields) {
+      const control = this._fieldControl(field);
+      if (!control) continue;
+      const host = document.createElement('div');
+      host.className = `formfield formfield--${field.kind}`;
+      if (field.readonly) host.classList.add('is-locked');
+      if (field.required) host.classList.add('is-required');
+      host.dataset.xref = String(field.xref);
+      host.title = fieldHint(field);
+      Object.assign(host.style, {
+        left: `${field.bbox[0] * z}px`,
+        top: `${field.bbox[1] * z}px`,
+        width: `${(field.bbox[2] - field.bbox[0]) * z}px`,
+        height: `${(field.bbox[3] - field.bbox[1]) * z}px`,
+      });
+      host.append(control);
+      this.layer.append(host);
+    }
+  }
+
+  _fieldControl(field) {
+    const commit = (value) => this.handlers.fillField?.(this, field, value);
+
+    if (field.kind === 'checkbox' || field.kind === 'radio') {
+      const box = document.createElement('input');
+      box.type = field.kind === 'radio' ? 'radio' : 'checkbox';
+      box.checked = Boolean(field.value);
+      box.disabled = field.readonly;
+      // A radio button's siblings share its name, so the browser unticks them
+      // for us while the document catches up.
+      if (field.kind === 'radio') box.name = `radio-${this.pageNumber}-${field.name}`;
+      box.addEventListener('change', () => commit(box.checked));
+      return box;
+    }
+
+    if (field.kind === 'combo' || field.kind === 'list') {
+      const select = document.createElement('select');
+      select.disabled = field.readonly;
+      const options = field.options.length ? field.options : [field.value];
+      // A value the document already holds but the options do not offer stays
+      // selectable, rather than being silently swapped for the first option.
+      if (!options.includes(field.value)) options.unshift(field.value);
+      for (const option of options) {
+        const item = document.createElement('option');
+        item.value = option;
+        item.textContent = option || '—';
+        item.selected = option === field.value;
+        select.append(item);
+      }
+      select.addEventListener('change', () => commit(select.value));
+      return select;
+    }
+
+    if (field.kind === 'text') {
+      const input = document.createElement(field.multiline ? 'textarea' : 'input');
+      if (!field.multiline) input.type = field.password ? 'password' : 'text';
+      input.value = field.value;
+      input.disabled = field.readonly;
+      input.spellcheck = true;
+      if (field.maxlen) input.maxLength = field.maxlen;
+      if (field.fontsize) input.style.fontSize = `${field.fontsize * this.zoom}px`;
+      // Sent when the field is left, not on every keystroke: each one is an
+      // undo step, and a step per letter would bury everything else.
+      input.addEventListener('change', () => commit(input.value));
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !field.multiline) input.blur();
+        if (event.key === 'Escape') { input.value = field.value; input.blur(); }
+        event.stopPropagation();  // so a letter is not read as a tool shortcut
+      });
+      return input;
+    }
+
+    // A signature or a push button: shown as the document draws it, not filled.
+    return null;
   }
 
   _renderMarks() {

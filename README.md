@@ -50,6 +50,7 @@ Opciones: `python run.py --port 8080 --no-browser`.
 | **Mover** | Arrastra un párrafo a otro sitio de la página. Sus enlaces y sus marcas viajan con él. Señala varios con Mayús y alinéalos o repártelos. |
 | **Texto** | Dibuja un rectángulo e inserta texto nuevo con la fuente que elijas. |
 | **Imagen** | Sube una imagen y colócala dibujando un rectángulo. |
+| **Formularios** | Los campos del documento se rellenan directamente: escribe, marca, elige. |
 | **Anotar** | Resalta, subraya, tacha o deja una nota. Arrastra sobre el texto; clic en una marca para quitarla. |
 | **Borrar** | Elimina todo lo que haya dentro de un rectángulo. |
 | **Reconocer texto** | Lee el texto de las páginas escaneadas para poder editarlas. Aparece solo cuando hay alguna. |
@@ -106,6 +107,35 @@ Con dos o más señalados aparece la barra de alineación:
 Arrastrar uno de los bloques señalados los mueve todos: después de alinearlos,
 separarlos sin querer sería absurdo. Las flechas también empujan la selección
 entera.
+
+### Rellenar formularios
+
+Si el PDF trae un formulario, sus campos aparecen sobre la página como lo que
+son: una caja de texto donde escribir, una casilla que marcar, un desplegable
+donde elegir. Están siempre activos, con cualquier herramienta en la mano,
+porque rellenar un formulario no es una edición de la página y no compite con
+ninguna.
+
+- El valor se guarda al **salir del campo** o con `Enter`, no en cada tecla:
+  cada guardado es un paso de deshacer, y uno por letra enterraría todo lo
+  demás. `Esc` descarta lo escrito.
+- Marcar un **botón de opción** desmarca a sus hermanos: comparten un valor,
+  guardado una sola vez en el campo del que todos cuelgan.
+- Un campo **de solo lectura** se dibuja con el borde a rayas y no deja
+  escribir; uno **obligatorio**, con el borde rojo.
+- Un campo con **límite de longitud** rechaza lo que no cabe en lugar de
+  recortarlo en silencio, y uno de **lista cerrada** rechaza un valor que no
+  esté entre sus opciones.
+- Una **firma digital** se muestra como la dibuja el documento pero no se
+  rellena: haría falta un certificado y una clave privada, que este editor no
+  tiene.
+
+El historial trata aparte las páginas con campos. Un campo no vive en la
+página que lo enseña sino en la lista del documento, así que esa página no se
+puede sacar y devolver por su cuenta —la copia vuelve mientras la original
+sigue listada y el lector la renombra—, y un paso que la toque guarda el
+documento entero. Se pregunta a la página y no al documento: así, en un
+formulario largo, las páginas sin campos conservan su paso barato.
 
 ### Anotar
 
@@ -321,6 +351,7 @@ app/
   search.py    Búsqueda en el documento y reemplazo
   fonts.py     Localización, validación y reutilización de las fuentes embebidas
   editor.py    Aplicación de las operaciones sobre el PDF
+  forms.py     Lectura y relleno del formulario del documento
   ocr.py       Reconocimiento del texto de páginas escaneadas
   static/      Interfaz (JavaScript sin dependencias ni compilación)
                js/grid.js:  cuadrícula, ajuste y guías (sólo en el navegador)

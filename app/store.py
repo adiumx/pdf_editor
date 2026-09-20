@@ -93,28 +93,43 @@ class Document:
 
     def _capture(self, pages: list[int] | None) -> Step:
         """Save either the named pages or the whole document."""
-        if pages is None or self._has_form_fields():
+        if pages is None:
             return Step(document=self._serialize(), page_count=self.doc.page_count)
         wanted = sorted({p for p in pages if 0 <= p < self.doc.page_count})
         if not wanted:
             return Step(pages={}, page_count=self.doc.page_count)
+        if self._carries_fields(wanted):
+            return Step(document=self._serialize(), page_count=self.doc.page_count)
         return Step(
             pages={pno: self._serialize_page(pno) for pno in wanted},
             page_count=self.doc.page_count,
         )
 
-    def _has_form_fields(self) -> bool:
-        """Whether the document carries an interactive form.
+    def _carries_fields(self, pages: list[int]) -> bool:
+        """Whether any of these pages shows a form field.
 
         Form fields are listed once in the document, not on the page that
-        shows them, so a page cannot be lifted out and put back on its own:
-        the copy arrives while the original is still listed, the reader
+        shows them, so such a page cannot be lifted out and put back on its
+        own: the copy arrives while the original is still listed, the reader
         renames it to keep the two apart (``firma`` becomes ``firma [26]``),
         and the entry left behind is never collected. A few rounds of undo
         and the form no longer answers to any of its names. Pruning the list
-        by hand corrupts it, so a document with a form is recorded whole.
+        by hand corrupts it, so a step covering such a page records the whole
+        document instead.
+
+        Asked of the pages being recorded rather than of the document, for
+        two reasons. It is the page's own fields that its returning copy
+        would collide with, so this is the question that actually decides
+        whether the cheap step is safe — and in a long form, the pages
+        without fields keep their cheap steps. It is also the sturdier
+        question: ``is_form_pdf`` reads the document's field list, and a
+        document whose list is malformed answers no while its pages carry
+        fields all the same.
         """
-        return bool(self.doc.is_form_pdf)
+        return any(
+            0 <= pno < self.doc.page_count and self.doc[pno].first_widget is not None
+            for pno in pages
+        )
 
     @staticmethod
     def _trim(stack: list[Step]) -> None:

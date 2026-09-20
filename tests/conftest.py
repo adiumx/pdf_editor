@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 import sys
 
 import pymupdf
@@ -398,3 +399,94 @@ def mark_quads(document: pymupdf.Document, pno: int = 0, index: int = 0) -> list
         if position == index:
             return list(annot.vertices or [])
     return []
+
+
+def _append_to_array(doc, xref, key, refs):
+    """Add object references to an array inside an object, by rewriting it.
+
+    ``xref_set_key`` will not write an array into the catalogue — it stores a
+    placeholder string instead — and the document's field list lives there,
+    inline, with no xref of its own. So the whole object is read out and put
+    back with the array extended.
+    """
+    raw = doc.xref_object(xref)
+    added = " ".join(f"{ref} 0 R" for ref in refs)
+    pattern = re.compile(rf"/{key}\s*\[")
+    match = pattern.search(raw)
+    assert match, f"no encontré /{key} en el objeto {xref}: {raw}"
+    doc.update_object(xref, raw[: match.end()] + f" {added} " + raw[match.end():])
+
+
+def build_pdf_with_every_kind_of_field() -> bytes:
+    """A form carrying one of each field type this editor can meet.
+
+    PyMuPDF will not build a radio group — its buttons hang off a parent field
+    it has no interface for — so that part is written by hand, which is also
+    the only way to get one with real appearance streams.
+    """
+    doc = pymupdf.open()
+    page = doc.new_page()
+    # A real form has labels beside its boxes, and the page has to carry text
+    # for anything that edits text to have something to work on.
+    for label, top in (("Nombre y apellidos", 96), ("Codigo corto", 126),
+                       ("Referencia fija", 156), ("Acepto las condiciones", 196)):
+        page.insert_text((320, top + 14), label, fontname="helv", fontsize=10)
+
+    def widget(kind, name, rect, **rest):
+        field = pymupdf.Widget()
+        field.field_name = name
+        field.field_type = kind
+        field.rect = pymupdf.Rect(*rect)
+        for key, value in rest.items():
+            setattr(field, key, value)
+        page.add_widget(field)
+
+    widget(pymupdf.PDF_WIDGET_TYPE_TEXT, "nombre", (72, 100, 300, 120),
+           field_value="Ana")
+    widget(pymupdf.PDF_WIDGET_TYPE_TEXT, "corto", (72, 130, 300, 150),
+           field_value="ab", text_maxlen=4)
+    widget(pymupdf.PDF_WIDGET_TYPE_TEXT, "fijo", (72, 160, 300, 180),
+           field_value="no tocar", field_flags=1)
+    widget(pymupdf.PDF_WIDGET_TYPE_CHECKBOX, "acepto", (72, 200, 90, 218),
+           field_value=False)
+    widget(pymupdf.PDF_WIDGET_TYPE_COMBOBOX, "pais", (72, 240, 250, 260),
+           choice_values=["España", "Francia", "Portugal"], field_value="España")
+    widget(pymupdf.PDF_WIDGET_TYPE_LISTBOX, "plan", (72, 280, 250, 320),
+           choice_values=["Basico", "Pro"], field_value="Basico")
+    widget(pymupdf.PDF_WIDGET_TYPE_SIGNATURE, "firma", (72, 340, 250, 380))
+
+    doc = pymupdf.open(stream=doc.tobytes(), filetype="pdf")
+    page = doc[0]
+
+    def appearance(marked):
+        xref = doc.get_new_xref()
+        doc.update_object(xref, "<< /Type /XObject /Subtype /Form /BBox [0 0 18 18] >>")
+        doc.update_stream(xref, b"q 0 0 1 rg 4 4 10 10 re f Q" if marked else b" ", new=True)
+        return xref
+
+    parent = doc.get_new_xref()
+    kids = []
+    for state, top in (("Si", 420), ("No", 450), ("NS", 480)):
+        kid = doc.get_new_xref()
+        doc.update_object(kid, f"""<< /Type /Annot /Subtype /Widget
+            /Rect [72 {top} 90 {top + 18}] /FT /Btn /Ff 32768 /Parent {parent} 0 R
+            /AS /Off /AP << /N << /{state} {appearance(True)} 0 R
+            /Off {appearance(False)} 0 R >> >> >>""")
+        kids.append(kid)
+    doc.update_object(parent, f"""<< /FT /Btn /Ff 32768 /T (respuesta) /V /Off
+        /Kids [{" ".join(f"{kid} 0 R" for kid in kids)}] >>""")
+
+    _append_to_array(doc, page.xref, "Annots", kids)
+    _append_to_array(doc, doc.pdf_catalog(), "Fields", [parent])
+
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def field_named(document: pymupdf.Document, name: str, pno: int = 0, which: int = 0) -> dict:
+    """One field of a page, by name; `which` picks among a radio group."""
+    from app.forms import page_fields
+
+    matches = [f for f in page_fields(document[pno]) if f["name"] == name]
+    return matches[which] if len(matches) > which else None

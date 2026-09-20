@@ -112,6 +112,7 @@ export class Editor {
         onBlankClick: () => this.commitActive(),
         onMarquee: (...args) => this.handleMarquee(...args),
         removeMark: (...args) => this.removeMark(...args),
+        fillField: (...args) => this.fillField(...args),
       });
       view.setTool(this.tool);
       this.pages.set(geometry.page, view);
@@ -133,6 +134,7 @@ export class Editor {
         const page = await api.pageText(this.doc.id, pno);
         view.setLines(page.lines);
         view.setMarks(page.marks);
+        view.setFields(page.fields);
         this.grid?.paint(view);
         if (this.picked?.view === view) this.clearPick();
       }),
@@ -682,6 +684,19 @@ export class Editor {
         op: 'add_mark', page: view.pageNumber, kind, rect: box,
         color: this.markColor || '#ffd83d', note,
       }],
+      { affected: [view.pageNumber] },
+    );
+  }
+
+  /**
+   * Put a value into one of the document's form fields.
+   *
+   * Filling a form in is not an edit to the page, so it works whatever tool is
+   * in hand and does not disturb whatever else is being done.
+   */
+  async fillField(view, field, value) {
+    await this.applyOperations(
+      [{ op: 'fill_field', page: view.pageNumber, xref: field.xref, value }],
       { affected: [view.pageNumber] },
     );
   }

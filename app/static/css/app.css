@@ -461,6 +461,53 @@ body {
 .page.tool-erase .span,
 .page.tool-image .span { pointer-events: none; }
 
+/* A form field, drawn over the box the document already shows. Always live:
+   filling a form in is not an edit to the page. */
+.formfield {
+  position: absolute;
+  z-index: 13;
+  display: flex;
+  align-items: stretch;
+}
+
+.formfield > * {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px solid rgba(47, 109, 246, .45);
+  border-radius: 2px;
+  background: rgba(47, 109, 246, .06);
+  font: inherit;
+  padding: 0 3px;
+}
+
+.formfield > *:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(47, 109, 246, .25);
+}
+
+.formfield--checkbox > *,
+.formfield--radio > * {
+  padding: 0;
+  background: none;
+  border: none;
+  accent-color: var(--accent);
+}
+
+.formfield textarea { resize: none; padding: 2px 3px; }
+
+.formfield.is-required > *:not(:focus) { border-color: rgba(220, 38, 38, .55); }
+
+.formfield.is-locked > * {
+  border-style: dashed;
+  border-color: rgba(100, 116, 139, .5);
+  background: rgba(100, 116, 139, .08);
+  cursor: not-allowed;
+}
+
 /* A mark already on the page: invisible until the annotate tool is in hand,
    because the mark itself is drawn in the rendered image. */
 .markhit {

@@ -27,6 +27,7 @@ from .extract import (
     to_page,
 )
 from .fonts import FLAG_BOLD, FLAG_ITALIC, FontResolver, ResolvedFont
+from .forms import FormError, set_field
 from .ocr import was_recognised
 
 # Redaction rectangles are grown by this much so no anti-aliased sliver of the
@@ -1472,6 +1473,20 @@ class EditSession:
             mark["quads"] = self._text_quads(pno, rect)
         batch.new_marks.append(mark)
 
+    def fill_field(self, op: dict[str, Any]) -> None:
+        """Put a value into one of the document's form fields.
+
+        Nothing is batched: a field is not page content, so it is neither
+        erased by the page's redactions nor redrawn after them, and holding it
+        back until commit would only risk writing it onto a stale handle.
+        """
+        pno = int(op["page"])
+        self._batch(pno)  # so the page counts as touched for the undo step
+        try:
+            set_field(self._doc[pno], int(op["xref"]), op.get("value"))
+        except FormError as exc:
+            raise EditError(str(exc)) from exc
+
     def delete_mark(self, op: dict[str, Any]) -> None:
         """Take a mark off the page."""
         pno = int(op["page"])
@@ -1776,6 +1791,8 @@ def apply_operations(
             session.add_mark(op)
         elif kind == "delete_mark":
             session.delete_mark(op)
+        elif kind == "fill_field":
+            session.fill_field(op)
         elif kind == "insert_image":
             asset_id = op.get("asset")
             if asset_id not in assets:
