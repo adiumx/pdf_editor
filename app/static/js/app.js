@@ -381,6 +381,15 @@ editor.onChange(() => {
   $('btn-undo').disabled = !editor.doc?.can_undo;
   $('btn-redo').disabled = !editor.doc?.can_redo;
 
+  // A signed field's signature does not become valid again by waiting, so
+  // this is a standing fact about the document, not a toast that clears
+  // itself. Stays up for as long as the document does, editable or not.
+  const signed = editor.doc?.signed_fields || [];
+  $('signed-banner').hidden = !open || signed.length === 0;
+  if (signed.length) {
+    $('signed-names').textContent = signed.filter(Boolean).join(', ') || 'sin nombre';
+  }
+
   for (const button of document.querySelectorAll('[data-tool]')) {
     button.classList.toggle('is-active', button.dataset.tool === editor.tool);
   }

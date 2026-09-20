@@ -282,6 +282,72 @@ class TestPageOperations:
         doc.close()
 
 
+class TestTheIndexSurvivesDeletingAPage:
+    """A bookmark that named the deleted page used to be left pointing at -1
+    instead of being taken out, so the table of contents kept offering a
+    chapter that went nowhere."""
+
+    def _doc_with_toc(self, pages=5, extra=()):
+        doc = pymupdf.open(stream=build_pdf(pages=pages), filetype="pdf")
+        toc = [[1, f"Capitulo {i + 1}", i + 1] for i in range(pages)]
+        toc[1:1] = list(extra)  # a divider or two, already pointing nowhere
+        doc.set_toc(toc)
+        return pymupdf.open(stream=doc.tobytes(), filetype="pdf")
+
+    def test_the_entry_for_the_deleted_page_is_gone(self):
+        doc = self._doc_with_toc()
+        apply_operations(doc, FontResolver(doc), [{"op": "delete_page", "page": 1}])
+        titles = [entry[1] for entry in doc.get_toc()]
+        assert "Capitulo 2" not in titles
+        doc.close()
+
+    def test_no_entry_is_left_pointing_at_nothing(self):
+        doc = self._doc_with_toc()
+        apply_operations(doc, FontResolver(doc), [{"op": "delete_page", "page": 1}])
+        assert all(entry[2] != -1 for entry in doc.get_toc())
+        doc.close()
+
+    def test_the_surviving_entries_still_point_at_the_right_page(self):
+        doc = self._doc_with_toc()
+        apply_operations(doc, FontResolver(doc), [{"op": "delete_page", "page": 1}])
+        toc = {entry[1]: entry[2] for entry in doc.get_toc()}
+        assert toc["Capitulo 1"] == 1
+        assert toc["Capitulo 3"] == 2, "no se remapeó tras el hueco"
+        assert toc["Capitulo 4"] == 3
+        doc.close()
+
+    def test_a_divider_that_never_had_a_page_is_left_alone(self):
+        """A section divider with no destination reads exactly like the entry
+        this deletes would, once broken — both are page -1. Only the one this
+        delete actually orphaned should go."""
+        doc = self._doc_with_toc(extra=[[1, "— separador —", -1]])
+        before = [entry[1] for entry in doc.get_toc()]
+        assert "— separador —" in before
+        apply_operations(doc, FontResolver(doc), [{"op": "delete_page", "page": 1}])
+        after = [entry[1] for entry in doc.get_toc()]
+        assert "— separador —" in after, "se llevó por delante un divisor legítimo"
+        assert "Capitulo 2" not in after
+        doc.close()
+
+    def test_a_document_with_no_index_is_untouched(self):
+        doc = pymupdf.open(stream=build_pdf(pages=3), filetype="pdf")
+        apply_operations(doc, FontResolver(doc), [{"op": "delete_page", "page": 1}])
+        assert doc.get_toc() == []
+        doc.close()
+
+    def test_deleting_two_pages_in_one_batch_removes_both_entries(self):
+        doc = self._doc_with_toc(pages=6)
+        apply_operations(doc, FontResolver(doc), [
+            {"op": "delete_page", "page": 1},
+            {"op": "delete_page", "page": 1},  # the client's second click re-reads first
+        ])
+        titles = [entry[1] for entry in doc.get_toc()]
+        assert "Capitulo 2" not in titles
+        assert "Capitulo 3" not in titles
+        assert all(entry[2] != -1 for entry in doc.get_toc())
+        doc.close()
+
+
 @requires_fonts
 class TestLinksSurviveEditing:
     """Redaction takes a page's links with it. A CV edited here used to come

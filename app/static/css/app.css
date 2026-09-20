@@ -159,6 +159,21 @@ body {
 
 .status { color: var(--text-muted); font-size: 13px; }
 
+/* A fact about the document that stays true until it is closed, not a toast
+   that fades: a signature does not become valid again just by waiting. */
+.banner {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.banner--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-bottom: 1px solid var(--warn);
+}
+
 /* ---------- grid, guides and readout ---------- */
 
 /* A line on the page that something has just lined up with. */

@@ -1809,6 +1809,37 @@ def apply_operations(
     return warnings
 
 
+def _delete_page_and_its_bookmarks(doc: pymupdf.Document, pno: int) -> None:
+    """Delete a page, and with it any table-of-contents entry that named it.
+
+    ``delete_page`` remaps every surviving entry's target on its own — an
+    entry two chapters later correctly points one page earlier afterwards —
+    but an entry that pointed *into* the page being deleted has nowhere left
+    to point, and is left aimed at page -1 instead of being removed. Left
+    that way, the table of contents keeps offering a chapter that goes
+    nowhere.
+
+    What is doomed is decided before the delete, from the *detailed* outline:
+    a plain ``get_toc()`` cannot tell an entry that never had a page (a
+    section divider, say, already at -1 on purpose) from one about to become
+    orphaned by this very delete — both read the same afterwards. The
+    detailed form's ``kind`` says which is which. ``delete_page`` neither
+    reorders the outline nor changes how many entries it has, only which of
+    them still point somewhere, so the two readings line up entry for entry.
+    """
+    before = doc.get_toc(simple=False)
+    doomed = {
+        index
+        for index, entry in enumerate(before)
+        if entry[3].get("kind") == 1 and entry[3].get("page") == pno
+    }
+    doc.delete_page(pno)
+    if not doomed:
+        return
+    after = doc.get_toc()
+    doc.set_toc([entry for index, entry in enumerate(after) if index not in doomed])
+
+
 def _apply_structural(doc: pymupdf.Document, op: dict[str, Any]) -> None:
     """Delete, move, rotate or add a page."""
     kind = op["op"]
@@ -1818,7 +1849,7 @@ def _apply_structural(doc: pymupdf.Document, op: dict[str, Any]) -> None:
             raise EditError("No se puede borrar la única página del documento.")
         if not 0 <= pno < doc.page_count:
             raise EditError(f"La página {pno + 1} no existe")
-        doc.delete_page(pno)
+        _delete_page_and_its_bookmarks(doc, pno)
     elif kind == "move_page":
         pno = int(op["page"])
         count = doc.page_count

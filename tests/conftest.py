@@ -490,3 +490,20 @@ def field_named(document: pymupdf.Document, name: str, pno: int = 0, which: int 
 
     matches = [f for f in page_fields(document[pno]) if f["name"] == name]
     return matches[which] if len(matches) > which else None
+
+
+def sign_field(doc: pymupdf.Document, xref: int, name: str | None = "Cesar Ruiz") -> None:
+    """Make a signature field read as signed, without a real certificate.
+
+    ``is_signed`` reads whether the field's ``/V`` looks like a completed
+    signature dictionary — filter, byte range, contents — not whether it
+    cryptographically checks out, so a plausible-looking one is enough to
+    exercise the warning this editor gives. ``name=None`` signs it without
+    recording who by, the way a signature that carries no ``/Name`` would.
+    """
+    who = f" /Name ({name})" if name else ""
+    doc.xref_set_key(
+        xref, "V",
+        "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached "
+        "/ByteRange [0 10 20 30] /Contents <" + "00" * 32 + f">{who} >>",
+    )

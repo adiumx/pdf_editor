@@ -7,12 +7,13 @@ import pytest
 
 from app.editor import EditError, apply_operations
 from app.fonts import FontResolver
-from app.forms import FormError, page_fields, set_field
+from app.forms import FormError, page_fields, set_field, signed_field_names
 from app.store import DocumentStore
 from tests.conftest import (
     build_pdf,
     build_pdf_with_every_kind_of_field,
     field_named,
+    sign_field,
 )
 
 
@@ -256,3 +257,73 @@ class TestHowTheHistoryTreatsAForm:
             assert document.undo_stack[-1].is_whole_document is True
         finally:
             local.close_all()
+
+
+class TestWarningAboutASignature:
+    """A signature field is only worth warning about once it actually holds a
+    signature — a place for one is not one."""
+
+    def _signed_doc(self):
+        data = build_pdf_with_every_kind_of_field()
+        doc = pymupdf.open(stream=data, filetype="pdf")
+        xref = field_named(doc, "firma")["xref"]
+        sign_field(doc, xref)
+        reopened = pymupdf.open(stream=doc.tobytes(), filetype="pdf")
+        doc.close()
+        return reopened
+
+    def test_an_unsigned_field_is_not_reported(self):
+        doc = pymupdf.open(stream=build_pdf_with_every_kind_of_field(), filetype="pdf")
+        assert signed_field_names(doc) == []
+        doc.close()
+
+    def test_a_signed_field_is_named(self):
+        doc = self._signed_doc()
+        assert signed_field_names(doc) == ["Cesar Ruiz"]
+        doc.close()
+
+    def test_a_document_with_no_form_reports_nothing(self):
+        doc = pymupdf.open(stream=build_pdf(), filetype="pdf")
+        assert signed_field_names(doc) == []
+        doc.close()
+
+    def test_it_is_carried_in_the_document_state(self):
+        local = DocumentStore()
+        document = local.open(self._signed_doc().tobytes(), "firmado.pdf")
+        try:
+            assert document.state()["signed_fields"] == ["Cesar Ruiz"]
+        finally:
+            local.close_all()
+
+    def test_an_unsigned_document_reports_no_warning(self):
+        local = DocumentStore()
+        document = local.open(build_pdf_with_every_kind_of_field(), "formulario.pdf")
+        try:
+            assert document.state()["signed_fields"] == []
+        finally:
+            local.close_all()
+
+    def test_the_warning_survives_an_unrelated_edit(self):
+        """The signature is invalid the moment anything changes, not just at
+        the instant it is edited — the banner has to keep saying so."""
+        local = DocumentStore()
+        document = local.open(self._signed_doc().tobytes(), "firmado.pdf")
+        try:
+            document.snapshot([0])
+            apply_operations(document.doc, document.resolver, [{
+                "op": "add_text", "page": 0, "rect": [72, 600, 300, 630],
+                "text": "texto nuevo", "size": 11, "font": "helv",
+            }])
+            assert document.state()["signed_fields"] == ["Cesar Ruiz"]
+        finally:
+            local.close_all()
+
+    def test_it_falls_back_to_the_fields_own_name(self):
+        """A signature that carries no signer name is not silently dropped."""
+        doc = pymupdf.open(stream=build_pdf_with_every_kind_of_field(), filetype="pdf")
+        xref = field_named(doc, "firma")["xref"]
+        sign_field(doc, xref, name=None)
+        reopened = pymupdf.open(stream=doc.tobytes(), filetype="pdf")
+        doc.close()
+        assert signed_field_names(reopened) == ["firma"]
+        reopened.close()

@@ -1149,3 +1149,45 @@ class TestUsingItWithAFinger:
         touch_page.click('[data-tool="move"]')
         touch_page.wait_for_timeout(200)
         assert touch_page.evaluate("() => window.__editor.addToSelection") is False
+
+
+@requires_fonts
+class TestWarningAboutASignedDocument:
+    """A standing banner, not a toast that clears itself: a signature does not
+    become valid again by waiting."""
+
+    def _signed_pdf(self):
+        import pymupdf as _pymupdf
+
+        from tests.conftest import build_pdf_with_every_kind_of_field, field_named, sign_field
+
+        doc = _pymupdf.open(stream=build_pdf_with_every_kind_of_field(), filetype="pdf")
+        xref = field_named(doc, "firma")["xref"]
+        sign_field(doc, xref)
+        data = doc.tobytes()
+        doc.close()
+        return data
+
+    def _open(self, page, tmp_path, data, name="firmado.pdf"):
+        sample = tmp_path / name
+        sample.write_bytes(data)
+        page.set_input_files("#file-input", str(sample))
+        page.wait_for_selector(".page .formfield", timeout=30000)
+
+    def test_a_signed_document_shows_the_banner(self, page, tmp_path):
+        self._open(page, tmp_path, self._signed_pdf())
+        assert page.locator("#signed-banner").is_visible()
+        assert "Cesar Ruiz" in page.locator("#signed-names").inner_text()
+
+    def test_an_unsigned_document_shows_nothing(self, page):
+        assert page.locator("#signed-banner").is_hidden()
+
+    def test_the_banner_stays_up_after_an_edit(self, page, tmp_path):
+        self._open(page, tmp_path, self._signed_pdf())
+        page.locator(".formfield--checkbox input").first.click()
+        page.wait_for_timeout(3000)
+        assert page.locator("#signed-banner").is_visible()
+
+    def test_no_console_errors(self, page, tmp_path):
+        self._open(page, tmp_path, self._signed_pdf())
+        assert page.console_errors == []

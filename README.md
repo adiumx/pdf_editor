@@ -190,6 +190,15 @@ sigue listada y el lector la renombra—, y un paso que la toque guarda el
 documento entero. Se pregunta a la página y no al documento: así, en un
 formulario largo, las páginas sin campos conservan su paso barato.
 
+### Firmas digitales
+
+Si el documento lleva una firma digital de verdad puesta —no sólo el hueco
+para una— se avisa con una franja fija bajo la barra, con el nombre de quien
+firmó: **editar el documento invalida la firma**. No es un aviso que
+desaparezca solo; sigue ahí mientras el documento esté abierto, porque una
+firma no vuelve a ser válida por esperar. Firmar de verdad, con un
+certificado, queda fuera de este editor.
+
 ### Anotar
 
 `A` abre la herramienta. Eliges el tipo de marca —resaltado, subrayado,
@@ -404,7 +413,7 @@ app/
   search.py    Búsqueda en el documento y reemplazo
   fonts.py     Localización, validación y reutilización de las fuentes embebidas
   editor.py    Aplicación de las operaciones sobre el PDF
-  forms.py     Lectura y relleno del formulario del documento
+  forms.py     Lectura y relleno del formulario del documento; quién firmó
   ocr.py       Reconocimiento del texto de páginas escaneadas
   static/      Interfaz (JavaScript sin dependencias ni compilación)
                js/grid.js:  cuadrícula, ajuste y guías (sólo en el navegador)

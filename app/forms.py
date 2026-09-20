@@ -161,3 +161,31 @@ def _empty_text_field(page: pymupdf.Page, xref: int) -> None:
 def has_form(doc: pymupdf.Document) -> bool:
     """Whether the document carries an interactive form at all."""
     return bool(doc.is_form_pdf)
+
+
+def signed_field_names(doc: pymupdf.Document) -> list[str]:
+    """Who signed the document, for every signature that actually went in.
+
+    A signature *field* just means the form has a place for one; ``is_signed``
+    is what says whether it is filled. Only a signed one is worth warning
+    about — an edit does not invalidate a signature nobody has put there yet.
+
+    The name shown is the signer's, from the signature itself (``/V/Name``,
+    the way a signing tool records who signed), not the field's own name —
+    ``firma`` tells the person editing nothing that "you are about to
+    invalidate a signature" doesn't already say, while a name does. It falls
+    back to the field's name only when the signature carries none.
+
+    Read fresh rather than cached: it has to reflect whatever the document was
+    opened with or has since become, and a form is rare enough that scanning
+    every page for it costs no more than the page summary already does.
+    """
+    names: list[str] = []
+    for page in doc:
+        for widget in page.widgets():
+            if widget.field_type != pymupdf.PDF_WIDGET_TYPE_SIGNATURE or not widget.is_signed:
+                continue
+            ok, raw = doc.xref_get_key(widget.xref, "V/Name")
+            signer = raw if ok == "string" else ""
+            names.append(signer or widget.field_name or "")
+    return names

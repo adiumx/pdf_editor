@@ -16,6 +16,7 @@ from typing import Any
 import pymupdf
 
 from .fonts import FontResolver
+from .forms import signed_field_names
 
 # How many steps of undo to keep. Each step is a serialized copy of the
 # document, so this trades memory for history depth.
@@ -227,6 +228,7 @@ class Document:
             "page_count": self.doc.page_count,
             "can_undo": self.can_undo,
             "can_redo": self.can_redo,
+            "signed_fields": signed_field_names(self.doc),
         }
 
     def close(self) -> None:
