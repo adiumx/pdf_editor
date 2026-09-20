@@ -46,6 +46,8 @@ $('btn-add-pick').addEventListener('click', () => {
   $('btn-add-pick').classList.toggle('is-active', editor.addToSelection);
 });
 
+$('btn-duplicate').addEventListener('click', () => editor.duplicate().catch(reportError));
+
 const search = new SearchBar({
   bar: $('findbar'),
   query: $('find-query'),
@@ -334,6 +336,11 @@ document.addEventListener('keydown', (event) => {
     editor.download();
     return;
   }
+  if (meta && event.key.toLowerCase() === 'd' && editor.picked && !typing) {
+    event.preventDefault();
+    editor.duplicate().catch(reportError);
+    return;
+  }
   if (meta && event.key === 'Enter' && typing) {
     event.preventDefault();
     editor.commitActive().catch(reportError);
@@ -406,6 +413,9 @@ editor.onChange(() => {
   $('btn-add-pick').classList.toggle('is-active', editor.addToSelection);
 
   const picked = editor.picked?.blocks?.length || 0;
+  // Duplicating needs something picked, but not two of them: one is the
+  // ordinary case.
+  $('btn-duplicate').hidden = !open || editor.tool !== 'move' || picked === 0;
   $('alignbar').hidden = !open || picked < 2;
   if (picked >= 2) {
     $('align-count').textContent = `${picked} bloques seleccionados`;

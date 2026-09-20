@@ -78,6 +78,7 @@ no: para afinar una posición a dedo están la cuadrícula y el ajuste.
 |---|---|
 | **Editar** | Haz clic en cualquier texto y escribe encima. Conserva fuente, tamaño y color. |
 | **Mover** | Arrastra un párrafo a otro sitio de la página. Sus enlaces y sus marcas viajan con él. Señala varios con Mayús y alinéalos o repártelos. |
+| **Duplicar** | Copia lo señalado, un poco desplazado, dejando el original donde estaba. `Ctrl+D`. |
 | **Texto** | Dibuja un rectángulo e inserta texto nuevo con la fuente que elijas. |
 | **Imagen** | Sube una imagen y colócala dibujando un rectángulo. |
 | **Formularios** | Los campos del documento se rellenan directamente: escribe, marca, elige. |
@@ -113,6 +114,15 @@ La búsqueda ignora mayúsculas y acentos por defecto: escribir «computacion»
 encuentra «Computación». Los botones `Aa` y `|ab|` exigen coincidencia exacta o
 palabra completa. Reemplazar todo es **un solo paso de deshacer**, y el texto
 reemplazado se reajusta como cualquier otra edición.
+
+### Duplicar un bloque
+
+Con un párrafo señalado —o varios—, `Ctrl+D` o el botón **⧉ Duplicar** ponen
+una copia justo al lado, un paso de la cuadrícula desplazada para que no caiga
+encima del original. Se copian las palabras, cada una en su propia fuente; un
+enlace o una marca que hubiera encima se quedan en el original, porque dos
+enlaces abriendo la misma página desde dos frases —o dos resaltados sobre lo
+que, duplicado, ya no es la misma idea— dirían algo que no es cierto.
 
 ### Seleccionar varios, alinear y repartir
 

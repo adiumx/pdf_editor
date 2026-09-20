@@ -1191,3 +1191,73 @@ class TestWarningAboutASignedDocument:
     def test_no_console_errors(self, page, tmp_path):
         self._open(page, tmp_path, self._signed_pdf())
         assert page.console_errors == []
+
+
+@requires_fonts
+class TestDuplicatingABlock:
+    """Ctrl+D, or the toolbar button, copies whatever is picked."""
+
+    def _pick(self, page, text="Primera linea"):
+        page.click('[data-tool="move"]')
+        span_with(page, text).click()
+        page.wait_for_timeout(600)
+
+    def test_the_button_is_hidden_with_nothing_picked(self, page):
+        page.click('[data-tool="move"]')
+        assert page.locator("#btn-duplicate").is_hidden()
+
+    def test_picking_a_block_shows_the_button(self, page):
+        self._pick(page)
+        assert page.locator("#btn-duplicate").is_visible()
+
+    def test_the_button_duplicates_it(self, page):
+        self._pick(page)
+        before = page.locator('.span[data-text*="Primera linea"]').count()
+        page.click("#btn-duplicate")
+        page.wait_for_timeout(3500)
+        after = page.locator('.span[data-text*="Primera linea"]').count()
+        assert after == before + 1
+
+    def test_ctrl_d_duplicates_it(self, page):
+        self._pick(page)
+        before = page.locator('.span[data-text*="Primera linea"]').count()
+        page.keyboard.press("Control+d")
+        page.wait_for_timeout(3500)
+        after = page.locator('.span[data-text*="Primera linea"]').count()
+        assert after == before + 1
+
+    def test_the_copy_is_offset_from_the_original(self, page):
+        self._pick(page)
+        before = span_with(page, "Primera linea").bounding_box()
+        page.click("#btn-duplicate")
+        page.wait_for_timeout(3500)
+        boxes = page.locator('.span[data-text*="Primera linea"]').all()
+        positions = [b.bounding_box() for b in boxes]
+        assert len(positions) == 2
+        assert any(
+            abs(p["y"] - before["y"]) > 5 or abs(p["x"] - before["x"]) > 5
+            for p in positions
+        ), "la copia quedó encima del original"
+
+    def test_ctrl_d_does_nothing_with_no_selection(self, page):
+        page.click('[data-tool="move"]')
+        before = page.locator('.span[data-text*="Primera linea"]').count()
+        page.keyboard.press("Control+d")
+        page.wait_for_timeout(1500)
+        assert page.locator('.span[data-text*="Primera linea"]').count() == before
+
+    def test_ctrl_d_in_a_text_field_is_not_hijacked(self, page):
+        """Typing into a field should never trigger a page shortcut."""
+        page.keyboard.press("Control+f")
+        page.wait_for_selector("#findbar:not([hidden])", timeout=5000)
+        page.locator("#find-query").click()
+        page.keyboard.type("algo")
+        page.keyboard.press("Control+d")
+        page.wait_for_timeout(400)
+        assert page.locator("#find-query").input_value() == "algo"
+
+    def test_no_console_errors_while_duplicating(self, page):
+        self._pick(page)
+        page.click("#btn-duplicate")
+        page.wait_for_timeout(2500)
+        assert page.console_errors == []

@@ -1123,6 +1123,122 @@ class TestMovingABlock:
         document.close()
 
 
+class TestDuplicatingABlock:
+    """A copy set down elsewhere on the page, the original left standing."""
+
+    def _doc(self):
+        document = pymupdf.open(stream=build_pdf([
+            ((72, 100), "Primera linea del bloque", "serif", 12),
+            ((72, 116), "Segunda linea del bloque", "serif", 12),
+            ((72, 220), "Texto que no se mueve", "serif", 12),
+        ]), filetype="pdf")
+        document[0].insert_link({
+            "kind": pymupdf.LINK_URI,
+            "from": pymupdf.Rect(72, 90, 200, 104),
+            "uri": "https://ejemplo.com",
+        })
+        return pymupdf.open(stream=document.tobytes(), filetype="pdf")
+
+    def _block(self, document, needle="bloque"):
+        page = extract_page(document, 0, FontResolver(document))
+        return [line for line in page["lines"] if needle in line["text"]], page
+
+    def _duplicate(self, document, lines, dx, dy):
+        return apply_operations(document, FontResolver(document), [{
+            "op": "duplicate_block", "page": 0, "lines": [dict(line) for line in lines],
+            "dx": dx, "dy": dy,
+        }])
+
+    def test_a_copy_appears_where_asked(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        highest_before = max(line["bbox"][1] for line in lines)
+        self._duplicate(document, lines, 0, 300)
+        after, _page = self._block(document)
+        highest_after = max(line["bbox"][1] for line in after)
+        assert highest_after == pytest.approx(highest_before + 300, abs=1.5)
+        document.close()
+
+    def test_the_original_is_still_there(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        before = sorted((tuple(line["bbox"]) for line in lines))
+        self._duplicate(document, lines, 0, 300)
+        after, _page = self._block(document)
+        top_two = sorted((tuple(line["bbox"]) for line in after))[:2]
+        for original, kept in zip(before, top_two):
+            assert kept == pytest.approx(original, abs=1.5)
+        document.close()
+
+    def test_the_text_now_appears_twice(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        self._duplicate(document, lines, 0, 300)
+        after, _page = self._block(document)
+        assert len(after) == len(lines) * 2
+        document.close()
+
+    def test_the_copy_has_its_own_words(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        self._duplicate(document, lines, 0, 300)
+        assert document[0].get_text().count("Primera linea del bloque") == 2
+        document.close()
+
+    def test_the_rest_of_the_page_stays_put(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        untouched = self._block(document, "no se mueve")[0][0]["bbox"]
+        self._duplicate(document, lines, 200, 0)
+        still = self._block(document, "no se mueve")[0][0]["bbox"]
+        assert list(still) == pytest.approx(list(untouched), abs=0.5)
+        document.close()
+
+    def test_the_link_is_not_copied(self):
+        """Two links opening the same page from two different sentences would
+        no longer say the same thing as either."""
+        document = self._doc()
+        lines, _page = self._block(document)
+        before_links = len(document[0].get_links())
+        self._duplicate(document, lines, 0, 300)
+        assert len(document[0].get_links()) == before_links
+        document.close()
+
+    def test_a_copy_that_would_not_fit_is_refused(self):
+        document = self._doc()
+        lines, _page = self._block(document)
+        with pytest.raises(EditError):
+            self._duplicate(document, lines, 0, 5000)
+        document.close()
+
+    def test_nothing_to_duplicate_is_refused(self):
+        document = self._doc()
+        with pytest.raises(EditError):
+            apply_operations(document, FontResolver(document), [{
+                "op": "duplicate_block", "page": 0, "lines": [], "dx": 0, "dy": 0,
+            }])
+        document.close()
+
+    def test_duplicating_is_undoable(self):
+        from app.store import DocumentStore
+
+        local = DocumentStore()
+        document = local.open(self._doc().tobytes(), "uno.pdf")
+        try:
+            lines, _page = self._block(document.doc)
+            before = document.doc[0].get_text()
+            document.snapshot([0])
+            apply_operations(document.doc, document.resolver, [{
+                "op": "duplicate_block", "page": 0,
+                "lines": [dict(line) for line in lines], "dx": 0, "dy": 300,
+            }])
+            assert document.doc[0].get_text() != before
+            assert document.undo() is True
+            assert document.doc[0].get_text() == before
+        finally:
+            local.close_all()
+
+
 class TestMarksFollowTheTextTheyMark:
     """A highlight is anchored to the words it covers. Moving the words used to
     leave it behind, pointing at the gap they came out of."""

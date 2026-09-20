@@ -677,6 +677,26 @@ export class Editor {
     await this.applyOperations(operations, { affected: [view.pageNumber] });
   }
 
+  /**
+   * Copy the picked blocks to a spot nearby, leaving the originals in place.
+   *
+   * Only the words are copied, each in its own font. A link or a mark stays
+   * on the original: two links opening the same page from two sentences, or
+   * two highlights over what reads as one thought once duplicated, would
+   * claim something that isn't true. The offset is one grid step (or a
+   * plain fallback distance) so the copy does not land exactly on top of
+   * what it came from and disappear into it.
+   */
+  async duplicate() {
+    if (!this.picked) return;
+    const { view, blocks } = this.picked;
+    const step = this.grid?.spacing || 18;
+    const operations = blocks.map((lines) => ({
+      op: 'duplicate_block', page: view.pageNumber, lines, dx: step, dy: step,
+    }));
+    await this.applyOperations(operations, { affected: [view.pageNumber] }).catch(() => {});
+  }
+
   /* ---------- new content ---------- */
 
   async handleMarquee(view, tool, rect, start) {
