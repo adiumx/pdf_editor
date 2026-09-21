@@ -299,6 +299,26 @@ export class Editor {
     await this.refreshPages();
   }
 
+  /**
+   * Zoom so the widest page just fits what is visible, instead of a fixed
+   * percentage.
+   *
+   * The default zoom is tuned for a desktop window; held up to a phone at
+   * that zoom a page runs wider than the screen, and the very first thing
+   * shown is a slice out of the middle of a line rather than the page. This
+   * is what a narrow screen needs from the start, and again whenever it
+   * rotates: the margin subtracted is a guess at the container's own
+   * padding, close enough that the fitted page does not itself force back
+   * the horizontal scroll it exists to avoid.
+   */
+  fitWidth() {
+    if (!this.doc?.pages?.length) return;
+    const widest = Math.max(...this.doc.pages.map((page) => page.width));
+    const available = this.root.clientWidth - 8;
+    if (widest <= 0 || available <= 0) return;
+    return this.setZoom(Math.max(0.3, Math.min(3, available / widest)));
+  }
+
   /* ---------- editing an existing span ---------- */
 
   async activateSpan(view, line, spanIndex, host, event) {

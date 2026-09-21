@@ -1261,3 +1261,61 @@ class TestDuplicatingABlock:
         page.click("#btn-duplicate")
         page.wait_for_timeout(2500)
         assert page.console_errors == []
+
+
+@requires_fonts
+class TestFittingAPhoneScreen:
+    """The desktop default zoom runs a page wider than a phone screen. What a
+    narrow screen sees from the very first frame is what was reported broken:
+    a slice out of the middle of a line instead of the page."""
+
+    @pytest.fixture
+    def phone_page(self, browser, server, tmp_path):
+        tab = browser.new_page(viewport={"width": 412, "height": 915}, has_touch=True)
+        errors = []
+        tab.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        sample = tmp_path / "ejemplo.pdf"
+        sample.write_bytes(build_pdf())
+        tab.goto(server, wait_until="networkidle")
+        tab.set_input_files("#file-input", str(sample))
+        tab.wait_for_selector(".page .span", timeout=30000)
+        tab.console_errors = errors  # type: ignore[attr-defined]
+        yield tab
+        tab.close()
+
+    def test_the_page_fits_inside_the_screen(self, phone_page):
+        page_box = phone_page.locator(".page").first.bounding_box()
+        viewport = phone_page.viewport_size
+        assert page_box["width"] <= viewport["width"], (
+            f"la página mide {page_box['width']} px en una pantalla de {viewport['width']} px"
+        )
+
+    def test_the_zoom_field_shows_ajustar(self, phone_page):
+        assert phone_page.locator("#zoom").input_value() == "fit"
+
+    def test_a_wide_screen_keeps_the_usual_default(self, page):
+        """The desktop default is untouched: only a narrow screen changes."""
+        assert page.locator("#zoom").input_value() == "1.5"
+        page_box = page.locator(".page").first.bounding_box()
+        assert page_box["width"] > 700, "el ancho por defecto cambió también en escritorio"
+
+    def test_rotating_the_phone_refits(self, phone_page):
+        phone_page.set_viewport_size({"width": 915, "height": 412})
+        phone_page.wait_for_timeout(600)
+        phone_page.evaluate("window.dispatchEvent(new Event('resize'))")
+        phone_page.wait_for_timeout(3000)
+        page_box = phone_page.locator(".page").first.bounding_box()
+        assert page_box["width"] <= 915
+
+    def test_picking_a_zoom_by_hand_is_not_overridden_by_a_resize(self, phone_page):
+        phone_page.locator("#zoom").select_option("1")
+        phone_page.wait_for_timeout(1500)
+        width_before = phone_page.locator(".page").first.bounding_box()["width"]
+        phone_page.set_viewport_size({"width": 500, "height": 915})
+        phone_page.evaluate("window.dispatchEvent(new Event('resize'))")
+        phone_page.wait_for_timeout(600)
+        width_after = phone_page.locator(".page").first.bounding_box()["width"]
+        assert width_after == pytest.approx(width_before, abs=1), "un zoom elegido a mano se pisó solo"
+
+    def test_no_console_errors_on_a_phone(self, phone_page):
+        assert phone_page.console_errors == []

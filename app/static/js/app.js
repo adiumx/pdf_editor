@@ -82,6 +82,13 @@ async function openFile(file) {
     await editor.open(file);
     dropzone.classList.add('is-hidden');
     $('doc-name').textContent = file.name;
+    // The desktop default would run a page wider than a phone screen, so a
+    // narrow one starts fitted instead — the zoom a document opens at is
+    // never seen wider than the screen that opened it.
+    if (NARROW_SCREEN.matches) {
+      $('zoom').value = 'fit';
+      await editor.fitWidth();
+    }
   } catch (error) {
     toast(String(error.message || error), 'error');
   }
@@ -172,8 +179,24 @@ $('btn-save').addEventListener('click', () => editor.download());
 $('btn-add-page').addEventListener('click', () =>
   editor.pageOperation({ op: 'insert_page', at: editor.doc.page_count }).catch(reportError),
 );
+// A screen narrow enough that the desktop default zoom would run a page
+// wider than the screen — a phone held upright, mainly.
+const NARROW_SCREEN = window.matchMedia('(max-width: 860px)');
+
 $('zoom').addEventListener('change', (event) => {
-  editor.setZoom(Number(event.target.value)).catch(reportError);
+  const value = event.target.value;
+  if (value === 'fit') {
+    editor.fitWidth()?.catch(reportError);
+  } else {
+    editor.setZoom(Number(value)).catch(reportError);
+  }
+});
+
+// Rotating the phone, or resizing a narrow window, leaves the fit stale
+// until something recomputes it — only worth doing while "Ajustar" is what
+// is showing, so a zoom the person chose on purpose is never overridden.
+window.addEventListener('resize', () => {
+  if (editor.isOpen && $('zoom').value === 'fit') editor.fitWidth()?.catch(reportError);
 });
 
 function reportError(error) {

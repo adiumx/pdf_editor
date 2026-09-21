@@ -67,6 +67,14 @@ revelado se enseña desde el principio, porque en una pantalla táctil no hay
 con qué pasar por encima, y en pantalla estrecha la tira de páginas se pone
 horizontal arriba y la barra se reparte en dos líneas.
 
+En un teléfono, el zoom por defecto —pensado para una ventana de escritorio—
+dejaba la página más ancha que la pantalla: lo primero que se veía era un
+trozo del medio de una línea, no la página, y había que desplazarse en
+horizontal para todo. Un documento abierto en una pantalla estrecha arranca
+en **«Ajustar al ancho»** en vez de al 150 % fijo, y gira con el teléfono: al
+cambiar de vertical a horizontal se reajusta solo, salvo que hayas elegido un
+zoom a mano, que entonces se respeta.
+
 Dos cosas siguen pidiendo teclado: **empujar con las flechas** y **Mayús para
 sumar a la selección**. Lo segundo tiene un interruptor propio —**＋ Sumar**,
 junto a la herramienta Mover— que hace lo mismo quedándose pulsado. Lo primero
