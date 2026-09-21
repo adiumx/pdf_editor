@@ -156,6 +156,7 @@ export class Editor {
         onMarquee: (...args) => this.handleMarquee(...args),
         removeMark: (...args) => this.removeMark(...args),
         fillField: (...args) => this.fillField(...args),
+        onCaretTap: (...args) => this.onCaretTap(...args),
         onCaretDragStart: (...args) => this.onCaretDragStart(...args),
         onCaretDragMove: (...args) => this.onCaretDragMove(...args),
         onCaretDragEnd: (...args) => this.onCaretDragEnd(...args),
@@ -376,6 +377,18 @@ export class Editor {
    */
   onCaretDragStart(view, clientX, clientY) {
     this.onCaretDragMove(view, clientX, clientY);
+  }
+
+  /**
+   * A finger touched down inside a box that is already open.
+   *
+   * Only the caret moves: a tap is not a request to magnify anything, and a
+   * bubble flashing up on every one of them would be worse than the problem
+   * it solves.
+   */
+  onCaretTap(_view, clientX, clientY) {
+    const input = this.active?.input;
+    if (input) this._placeCaret(input, { x: clientX, y: clientY });
   }
 
   onCaretDragMove(_view, clientX, clientY) {

@@ -1483,3 +1483,56 @@ class TestPlacingTheCaretWithAFinger:
         phone.wait_for_timeout(200)
         self._touch(phone, "touchEnd")
         assert phone.console_errors == []
+
+    def _tap(self, page, x, y, hold=80):
+        """A quick tap, the length a real one lasts — not a deliberate hold."""
+        self._touch(page, "touchStart", x, y)
+        page.wait_for_timeout(hold)
+        self._touch(page, "touchEnd")
+        page.wait_for_timeout(400)
+
+    def test_a_quick_tap_inside_an_open_box_moves_the_caret(self, phone):
+        """Taking the gesture over means the browser stops placing a caret of
+        its own, so a tap that places none leaves it wherever it was — and
+        whatever is typed next lands in the wrong place."""
+        box = span_with(phone, "Primera linea").bounding_box()
+        middle = box["y"] + box["height"] / 2
+        self._tap(phone, box["x"] + 4, middle)
+        near_start = self._caret(phone)
+        self._tap(phone, box["x"] + box["width"] - 6, middle)
+        near_end = self._caret(phone)
+        assert near_start is not None and near_end is not None
+        assert near_end > near_start + 5, f"el toque no movió el cursor: {near_start} -> {near_end}"
+
+    def test_what_is_typed_lands_where_the_tap_was(self, phone):
+        box = span_with(phone, "Primera linea").bounding_box()
+        middle = box["y"] + box["height"] / 2
+        self._tap(phone, box["x"] + 4, middle)
+        self._tap(phone, box["x"] + box["width"] / 2, middle)
+        phone.keyboard.type("XY")
+        phone.wait_for_timeout(300)
+        written = phone.evaluate("() => document.querySelector('.span__input').textContent")
+        assert not written.startswith("XY"), f"escribió al principio: {written!r}"
+        assert "XY" in written and written.index("XY") > 4, written
+
+    def test_a_quick_tap_does_not_flash_the_magnifier(self, phone):
+        box = span_with(phone, "Primera linea").bounding_box()
+        middle = box["y"] + box["height"] / 2
+        self._tap(phone, box["x"] + 4, middle)
+        seen = []
+        self._touch(phone, "touchStart", box["x"] + 30, middle)
+        phone.wait_for_timeout(120)
+        seen.append(phone.locator(".loupe").count())
+        self._touch(phone, "touchEnd")
+        assert seen == [0], "la lupa salió en un toque normal"
+
+    def test_tapping_another_line_moves_the_editing_there(self, phone):
+        box = span_with(phone, "Primera linea").bounding_box()
+        self._tap(phone, box["x"] + 20, box["y"] + box["height"] / 2)
+        other = span_with(phone, "Segunda linea").bounding_box()
+        self._tap(phone, other["x"] + 20, other["y"] + other["height"] / 2)
+        phone.wait_for_timeout(600)
+        editing = phone.evaluate(
+            "() => document.querySelector('.span.is-editing')?.dataset.text"
+        )
+        assert editing is not None and "Segunda linea" in editing, editing

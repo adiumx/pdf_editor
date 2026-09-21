@@ -269,14 +269,23 @@ export class PageView {
     const anchorY = event.clientY;
     let dragging = false;
 
+    // The tap itself puts the caret down, before any of the dragging below.
+    // Taking the gesture over means the browser no longer places one, and a
+    // quick tap inside a box already open — the ordinary way of moving the
+    // caret along a line — would otherwise leave it wherever it was and drop
+    // what came next in the wrong place. A no-op when the box is still
+    // opening: the tap that opens one places its own caret.
+    this.handlers.onCaretTap?.(this, event.clientX, anchorY);
+
     const begin = () => {
       if (dragging) return;
       dragging = true;
       this.handlers.onCaretDragStart?.(this, event.clientX, anchorY);
     };
     // A finger resting still is asking for the magnifier as plainly as one
-    // that has started to slide.
-    const dwell = setTimeout(begin, 250);
+    // that has started to slide — but only once it has rested longer than a
+    // tap lasts, or every tap would flash it up on the way past.
+    const dwell = setTimeout(begin, 400);
 
     const move = (moving) => {
       if (moving.pointerId !== pointerId) return;
