@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 
+import pymupdf
 import pytest
 
 from tests.conftest import build_pdf, build_pdf_with_every_kind_of_field, requires_fonts
@@ -1320,6 +1321,39 @@ class TestFittingAPhoneScreen:
     def test_no_console_errors_on_a_phone(self, phone_page):
         assert phone_page.console_errors == []
 
+    def test_one_outlier_page_does_not_shrink_the_rest(self, browser, server, tmp_path):
+        """A single foldout or landscape scan among ordinary pages used to be
+        taken as *the* width to fit, crushing every ordinary page down to a
+        zoom too small to touch. It should still fit the pages that are
+        actually typical of the document."""
+        doc = pymupdf.open()
+        for _ in range(6):
+            doc.new_page(width=612, height=792)  # US Letter
+        doc.new_page(width=3000, height=792)  # one very wide outlier
+        wide = tmp_path / "con_pagina_ancha.pdf"
+        wide.write_bytes(doc.tobytes())
+        doc.close()
+
+        tab = browser.new_page(viewport={"width": 412, "height": 915}, has_touch=True)
+        try:
+            tab.goto(server, wait_until="networkidle")
+            tab.set_input_files("#file-input", str(wide))
+            tab.wait_for_selector(".page", timeout=30000)
+            tab.wait_for_function(
+                "() => document.getElementById('zoom').value === 'fit'", timeout=15000
+            )
+            tab.wait_for_timeout(600)
+            first_page_width = tab.locator(".page").first.bounding_box()["width"]
+            # A Letter page fit to a 412px phone should land near the phone's
+            # own width, not near zero: the bug produced a zoom around 0.22,
+            # a page some 130px wide instead of one filling the screen.
+            assert first_page_width > 300, (
+                f"la página normal quedó en {first_page_width:.0f}px: "
+                "la página ancha se llevó el ajuste por delante"
+            )
+        finally:
+            tab.close()
+
 
 @requires_fonts
 class TestPlacingTheCaretWithAFinger:
@@ -1536,3 +1570,49 @@ class TestPlacingTheCaretWithAFinger:
             "() => document.querySelector('.span.is-editing')?.dataset.text"
         )
         assert editing is not None and "Segunda linea" in editing, editing
+
+
+@requires_fonts
+class TestNoNativeContextMenu:
+    """A finger held on text past a certain length is the platform's own
+    gesture as much as this editor's — Android's copy/paste popup, iOS's
+    callout — surfacing right on top of a box that is mid-edit."""
+
+    def test_a_span_refuses_the_native_menu(self, page):
+        prevented = page.eval_on_selector(
+            ".span",
+            "el => { const e = new MouseEvent('contextmenu', {bubbles: true, cancelable: true}); "
+            "el.dispatchEvent(e); return e.defaultPrevented; }",
+        )
+        assert prevented is True, "el menú nativo del sistema seguiría saliendo"
+
+    def test_a_mark_refuses_it_too(self, page):
+        page.click('[data-tool="mark"]')
+        page.wait_for_selector("#markbar:not([hidden])", timeout=5000)
+        box = span_with(page, "Primera linea").bounding_box()
+        page.mouse.move(box["x"] + 1, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] - 1, box["y"] + box["height"] / 2, steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(2000)
+        prevented = page.eval_on_selector(
+            ".markhit",
+            "el => { const e = new MouseEvent('contextmenu', {bubbles: true, cancelable: true}); "
+            "el.dispatchEvent(e); return e.defaultPrevented; }",
+        )
+        assert prevented is True
+
+    def test_a_form_field_keeps_the_native_menu(self, page, tmp_path):
+        """Copy and paste stay useful in an ordinary text field."""
+        from tests.conftest import build_pdf_with_every_kind_of_field
+
+        sample = tmp_path / "formulario.pdf"
+        sample.write_bytes(build_pdf_with_every_kind_of_field())
+        page.set_input_files("#file-input", str(sample))
+        page.wait_for_selector(".page .formfield", timeout=30000)
+        prevented = page.eval_on_selector(
+            ".formfield--text input",
+            "el => { const e = new MouseEvent('contextmenu', {bubbles: true, cancelable: true}); "
+            "el.dispatchEvent(e); return e.defaultPrevented; }",
+        )
+        assert prevented is False, "el campo de formulario perdió copiar/pegar"

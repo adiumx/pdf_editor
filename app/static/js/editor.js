@@ -321,10 +321,17 @@ export class Editor {
    */
   fitWidth() {
     if (!this.doc?.pages?.length) return;
-    const widest = Math.max(...this.doc.pages.map((page) => page.width));
+    // The median width, not the widest page in the document: one outlier —
+    // a landscape foldout, a scanned page a different size from the rest —
+    // must not shrink every ordinary page down with it. A page wider than
+    // the fit still shows; it just needs a scroll, which is what one
+    // uncommon page deserves, not dozens of ordinary ones read too small to
+    // touch.
+    const widths = this.doc.pages.map((page) => page.width).sort((a, b) => a - b);
+    const typical = widths[Math.floor(widths.length / 2)];
     const available = this.root.clientWidth - 8;
-    if (widest <= 0 || available <= 0) return;
-    return this.setZoom(Math.max(0.3, Math.min(3, available / widest)));
+    if (typical <= 0 || available <= 0) return;
+    return this.setZoom(Math.max(0.3, Math.min(3, available / typical)));
   }
 
   /* ---------- editing an existing span ---------- */

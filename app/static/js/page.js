@@ -42,6 +42,17 @@ export class PageView {
 
     this.element.append(this.image, this.layer);
     this._bindMarquee();
+
+    // A finger left down on text past a certain length is not a gesture this
+    // editor invented — it is the platform's own "hold to get a menu",
+    // Android's copy/paste popup or iOS's callout, and it fires under the
+    // custom drag this editor gives that same hold, showing a native menu on
+    // top of an editing box that is mid-edit. Suppressed only where the
+    // finger already has a job — a span being placed into or a mark being
+    // taken off — never on a form field, where copy and paste stay useful.
+    this.layer.addEventListener('contextmenu', (event) => {
+      if (event.target.closest?.('.span, .markhit')) event.preventDefault();
+    });
   }
 
   /** Size the page box and (re)load its rendered image. */

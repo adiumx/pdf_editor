@@ -73,7 +73,18 @@ trozo del medio de una línea, no la página, y había que desplazarse en
 horizontal para todo. Un documento abierto en una pantalla estrecha arranca
 en **«Ajustar al ancho»** en vez de al 150 % fijo, y gira con el teléfono: al
 cambiar de vertical a horizontal se reajusta solo, salvo que hayas elegido un
-zoom a mano, que entonces se respeta.
+zoom a mano, que entonces se respeta. El ajuste se calcula sobre la **mediana**
+del ancho de las páginas, no la más ancha: un documento con una sola página
+fuera de lo normal —un desplegable apaisado, un escaneo suelto de otro
+tamaño— no debe encoger todas las páginas corrientes a un zoom demasiado
+pequeño para tocar. Esa página se queda simplemente más ancha que la
+pantalla, y pide un desplazamiento que las demás no piden.
+
+Un toque largo sobre el texto es también el gesto propio del sistema — el
+menú de copiar/pegar de Android, el "callout" de iOS — y competía con el
+propio del editor, apareciendo encima de un cuadro a medio editar. Se
+suprime donde el dedo ya tiene trabajo (una línea de texto, una marca), no
+en los campos de un formulario, donde copiar y pegar siguen siendo útiles.
 
 Poner el cursor **entre dos letras concretas** es lo que peor se le da a un
 dedo: la yema tapa justo lo que intenta apuntar, y un PDF compone su texto en
