@@ -75,6 +75,19 @@ en **«Ajustar al ancho»** en vez de al 150 % fijo, y gira con el teléfono: al
 cambiar de vertical a horizontal se reajusta solo, salvo que hayas elegido un
 zoom a mano, que entonces se respeta.
 
+Poner el cursor **entre dos letras concretas** es lo que peor se le da a un
+dedo: la yema tapa justo lo que intenta apuntar, y un PDF compone su texto en
+unos pocos píxeles de alto. Así que el toque no termina al tocar — mientras el
+dedo siga abajo, deslizarlo **a los lados** recorre el cursor letra a letra, y
+cuenta donde lo levantes. Encima del dedo aparece una **lupa** con el texto
+aumentado y el cursor marcado en su centro, que es lo que permite ver entre qué
+dos letras vas a escribir sin que la mano estorbe. Un ratón no la saca: apunta
+con precisión y no tapa nada.
+
+De ese gesto se reclama sólo el eje horizontal. El vertical sigue siendo del
+navegador, así que la página se sigue desplazando con el dedo sobre el texto —
+que en una página de texto es casi toda la página.
+
 Dos cosas siguen pidiendo teclado: **empujar con las flechas** y **Mayús para
 sumar a la selección**. Lo segundo tiene un interruptor propio —**＋ Sumar**,
 junto a la herramienta Mover— que hace lo mismo quedándose pulsado. Lo primero
@@ -437,6 +450,7 @@ app/
   static/      Interfaz (JavaScript sin dependencias ni compilación)
                js/grid.js:  cuadrícula, ajuste y guías (sólo en el navegador)
                js/align.js: alinear y repartir — geometría pura, sin tocar la página
+               js/loupe.js: la lupa que enseña dónde cae el cursor bajo el dedo
 ```
 
 El navegador no sabe nada de PDF: muestra la página renderizada por el servidor,

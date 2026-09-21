@@ -501,6 +501,14 @@ body {
 .page.tool-move .span,
 .page.tool-mark .markhit { touch-action: none; }
 
+/* Editing: the sideways part of a drag is the caret's, the up-and-down part
+   is still the browser's. Left to itself the browser reads the whole gesture
+   as a scroll and cancels the pointer two moves in, which took the magnifier
+   down with it; claiming the lot instead would cost scrolling over text, and
+   on a page of text that is most of the page. */
+.page.tool-select .span,
+.page.tool-select .span__input { touch-action: pan-y; }
+
 .page.tool-text .span,
 .page.tool-erase .span,
 .page.tool-image .span { pointer-events: none; }
@@ -625,6 +633,34 @@ body {
 .formatbar[hidden] { display: none; }
 .formatbar .field span { font-size: 12px; }
 .formatbar select { max-width: 190px; }
+
+/* The magnified view of the text a finger is putting a caret into. Floats
+   above the hand, so the letters being aimed between are not under it. */
+.loupe {
+  position: fixed;
+  z-index: 90;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
+.loupe__text {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: pre;
+  line-height: 1;
+}
+
+.loupe__caret {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--accent);
+}
 
 /* ---------- toasts ---------- */
 

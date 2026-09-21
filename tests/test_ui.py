@@ -1319,3 +1319,167 @@ class TestFittingAPhoneScreen:
 
     def test_no_console_errors_on_a_phone(self, phone_page):
         assert phone_page.console_errors == []
+
+
+@requires_fonts
+class TestPlacingTheCaretWithAFinger:
+    """Which two letters the caret goes between is the one thing a finger is
+    worst at: the fingertip covers exactly what it is aiming at, and a PDF's
+    body text on a phone is a few pixels tall."""
+
+    @pytest.fixture
+    def phone(self, browser, server, tmp_path):
+        context = browser.new_context(viewport={"width": 412, "height": 915}, has_touch=True)
+        tab = context.new_page()
+        errors = []
+        tab.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        sample = tmp_path / "ejemplo.pdf"
+        sample.write_bytes(build_pdf(pages=3))
+        tab.goto(server, wait_until="networkidle")
+        tab.set_input_files("#file-input", str(sample))
+        tab.wait_for_selector(".page .span", timeout=30000)
+        # Fitting the width re-renders every page, which takes the spans down
+        # and puts fresh ones up: measuring one before that has settled gets a
+        # box that belongs to nothing.
+        tab.wait_for_function(
+            "() => document.getElementById('zoom').value === 'fit'", timeout=15000
+        )
+        tab.wait_for_timeout(800)
+        tab.wait_for_selector(".page .span", timeout=30000)
+        tab.console_errors = errors  # type: ignore[attr-defined]
+        tab.cdp = context.new_cdp_session(tab)  # type: ignore[attr-defined]
+        yield tab
+        context.close()
+
+    def _touch(self, page, kind, x=0.0, y=0.0):
+        page.cdp.send("Input.dispatchTouchEvent", {
+            "type": kind,
+            "touchPoints": [] if kind == "touchEnd" else [{"x": x, "y": y}],
+        })
+
+    def _caret(self, page):
+        return page.evaluate("""() => {
+            const selection = getSelection();
+            const input = document.querySelector('.span__input');
+            if (!input || !selection.rangeCount) return null;
+            if (!input.contains(selection.anchorNode)) return null;
+            return selection.getRangeAt(0).startOffset;
+        }""")
+
+    def _open_and_hold(self, page, text="Primera linea", from_left=4):
+        """Touch a span and wait for the box and the dwell timer."""
+        box = span_with(page, text).bounding_box()
+        start = (box["x"] + from_left, box["y"] + box["height"] / 2)
+        self._touch(page, "touchStart", *start)
+        page.wait_for_timeout(900)
+        return start
+
+    def test_dragging_sideways_walks_the_caret(self, phone):
+        start = self._open_and_hold(phone)
+        before = self._caret(phone)
+        for step in range(1, 9):
+            self._touch(phone, "touchMove", start[0] + step * 8, start[1])
+            phone.wait_for_timeout(50)
+        after = self._caret(phone)
+        self._touch(phone, "touchEnd")
+        assert before is not None and after is not None
+        assert after > before, f"el cursor no avanzó: {before} -> {after}"
+
+    def test_dragging_back_walks_it_back(self, phone):
+        start = self._open_and_hold(phone)
+        for step in range(1, 9):
+            self._touch(phone, "touchMove", start[0] + step * 8, start[1])
+            phone.wait_for_timeout(40)
+        far = self._caret(phone)
+        for step in range(8, 0, -1):
+            self._touch(phone, "touchMove", start[0] + step * 4, start[1])
+            phone.wait_for_timeout(40)
+        back = self._caret(phone)
+        self._touch(phone, "touchEnd")
+        assert back < far, f"no volvió: {far} -> {back}"
+
+    def test_the_caret_stays_where_the_finger_lifted(self, phone):
+        start = self._open_and_hold(phone)
+        for step in range(1, 7):
+            self._touch(phone, "touchMove", start[0] + step * 7, start[1])
+            phone.wait_for_timeout(40)
+        at_lift = self._caret(phone)
+        self._touch(phone, "touchEnd")
+        phone.wait_for_timeout(300)
+        assert self._caret(phone) == at_lift
+
+    def test_the_magnifier_shows_what_is_being_edited(self, phone):
+        start = self._open_and_hold(phone)
+        self._touch(phone, "touchMove", start[0] + 30, start[1])
+        phone.wait_for_timeout(200)
+        assert phone.locator(".loupe").count() == 1
+        shown = phone.locator(".loupe__text").inner_text()
+        self._touch(phone, "touchEnd")
+        assert "Primera linea" in shown
+
+    def test_the_magnifier_floats_above_the_finger(self, phone):
+        """Under it, it would be hidden by the hand it exists to see past."""
+        start = self._open_and_hold(phone)
+        self._touch(phone, "touchMove", start[0] + 30, start[1])
+        phone.wait_for_timeout(200)
+        loupe = phone.locator(".loupe").bounding_box()
+        self._touch(phone, "touchEnd")
+        assert loupe["y"] + loupe["height"] < start[1], "la lupa tapa el dedo"
+
+    def test_the_magnifier_keeps_the_caret_in_its_middle(self, phone):
+        start = self._open_and_hold(phone)
+        offsets = []
+        for step in range(1, 7):
+            self._touch(phone, "touchMove", start[0] + step * 9, start[1])
+            phone.wait_for_timeout(60)
+            offsets.append(phone.eval_on_selector(".loupe__text", "e => parseFloat(e.style.left)"))
+        self._touch(phone, "touchEnd")
+        assert offsets[-1] < offsets[0], f"el texto no se desplazó bajo la marca: {offsets}"
+
+    def test_the_magnifier_goes_away_when_the_finger_lifts(self, phone):
+        start = self._open_and_hold(phone)
+        self._touch(phone, "touchMove", start[0] + 30, start[1])
+        phone.wait_for_timeout(200)
+        assert phone.locator(".loupe").count() == 1
+        self._touch(phone, "touchEnd")
+        phone.wait_for_timeout(300)
+        assert phone.locator(".loupe").count() == 0
+
+    def test_resting_a_finger_still_brings_it_up(self, phone):
+        """A finger held still is asking as plainly as one already sliding."""
+        self._open_and_hold(phone)
+        assert phone.locator(".loupe").count() == 1
+        self._touch(phone, "touchEnd")
+
+    def test_the_page_still_scrolls_under_a_finger_on_text(self, phone):
+        """The sideways part of the gesture was claimed, not the whole of it:
+        a page of text is mostly text, and scrolling it has to keep working."""
+        box = span_with(phone, "Primera linea").bounding_box()
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        before = phone.evaluate("() => document.getElementById('canvas-area').scrollTop")
+        self._touch(phone, "touchStart", x, y)
+        for step in range(1, 10):
+            self._touch(phone, "touchMove", x, y - step * 25)
+            phone.wait_for_timeout(25)
+        self._touch(phone, "touchEnd")
+        phone.wait_for_timeout(400)
+        after = phone.evaluate("() => document.getElementById('canvas-area').scrollTop")
+        assert after > before, f"la página dejó de desplazarse: {before} -> {after}"
+
+    def test_a_mouse_never_summons_it(self, page):
+        """A pointer is precise and is not hiding anything behind a hand."""
+        open_editor(page, "Primera linea")
+        box = span_with(page, "Primera linea").bounding_box()
+        page.mouse.move(box["x"] + 4, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + 60, box["y"] + box["height"] / 2, steps=6)
+        page.wait_for_timeout(400)
+        assert page.locator(".loupe").count() == 0
+        page.mouse.up()
+
+    def test_no_console_errors(self, phone):
+        start = self._open_and_hold(phone)
+        self._touch(phone, "touchMove", start[0] + 40, start[1])
+        phone.wait_for_timeout(200)
+        self._touch(phone, "touchEnd")
+        assert phone.console_errors == []

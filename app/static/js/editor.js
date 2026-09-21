@@ -9,6 +9,7 @@
 
 import { api } from './api.js';
 import { PageView } from './page.js';
+import { Loupe } from './loupe.js';
 import { alignmentDeltas } from './align.js';
 import { familyOf } from './fontmap.js';
 import { reportWarnings, setStatus, toast, withBusy } from './ui.js';
@@ -83,6 +84,9 @@ export class Editor {
     this.families = [];
     this.listeners = new Set();
     this.grid = null;
+    // Shown only while a finger is placing a caret, which is the only time
+    // anything is hidden behind a hand.
+    this.loupe = new Loupe();
     // The block the arrow keys would move: picked by clicking it with the move
     // tool, without dragging.
     this.picked = null;
@@ -152,6 +156,9 @@ export class Editor {
         onMarquee: (...args) => this.handleMarquee(...args),
         removeMark: (...args) => this.removeMark(...args),
         fillField: (...args) => this.fillField(...args),
+        onCaretDragStart: (...args) => this.onCaretDragStart(...args),
+        onCaretDragMove: (...args) => this.onCaretDragMove(...args),
+        onCaretDragEnd: (...args) => this.onCaretDragEnd(...args),
       });
       view.setTool(this.tool);
       this.pages.set(geometry.page, view);
@@ -327,6 +334,8 @@ export class Editor {
     // Read the click position now: the edit below is asynchronous and the event
     // is stale by the time the caret needs placing.
     const clickedAt = event ? { x: event.clientX, y: event.clientY } : null;
+    const fromTouch = event?.pointerType === 'touch' || event?.pointerType === 'pen';
+    const pointerId = event?.pointerId;
     await this.commitActive();
 
     const input = view.openEditor(line, spanIndex);
@@ -355,6 +364,29 @@ export class Editor {
     this._placeCaret(input, clickedAt);
     input.addEventListener('keydown', (event) => this._onEditorKey(event));
     this._emit();
+  }
+
+  /**
+   * The finger that opened a box is still down and has started to slide.
+   *
+   * The box may not be open yet — opening it waits on the previous edit being
+   * committed — so a move that arrives early is simply dropped. The finger
+   * goes on producing them, and the next one lands once there is somewhere to
+   * put a caret.
+   */
+  onCaretDragStart(view, clientX, clientY) {
+    this.onCaretDragMove(view, clientX, clientY);
+  }
+
+  onCaretDragMove(_view, clientX, clientY) {
+    const input = this.active?.input;
+    if (!input) return;
+    this._placeCaret(input, { x: clientX, y: clientY });
+    this.loupe.show(input, clientX, clientY);
+  }
+
+  onCaretDragEnd() {
+    this.loupe.hide();
   }
 
   /** Put the caret where the user clicked, or at the end if that is unknown. */

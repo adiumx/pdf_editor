@@ -228,9 +228,12 @@ export class PageView {
       // A finger and a pen report button 0 like the left mouse button; a
       // second finger is not a second drag.
       if (event.button !== 0 || !event.isPrimary) return;
+      const byHand = event.pointerType === 'touch' || event.pointerType === 'pen';
+      const inside = Boolean(event.target.closest?.('.span__input'));
       // Once this span is open for editing, a click inside it is the caret's
-      // business, not ours.
-      if (event.target.closest?.('.span__input')) return;
+      // business, not ours — unless it is a finger, which needs help putting
+      // the caret down and gets it from the drag below.
+      if (inside && !byHand) return;
       event.stopPropagation();
       // Without this the browser moves focus to the body right after the
       // handler, undoing the focus() that puts the caret in the editable — the
@@ -240,9 +243,60 @@ export class PageView {
         this.handlers.onMoveStart?.(this, line, event);
         return;
       }
-      this.handlers.onSpanActivate?.(this, line, index, element, event);
+      if (!inside) this.handlers.onSpanActivate?.(this, line, index, element, event);
+      if (byHand) this._followCaret(event);
     });
     return element;
+  }
+
+  /**
+   * Let the finger that just landed go on placing the caret as it slides.
+   *
+   * A tap is a guess — the fingertip is wider than several letters at the size
+   * a PDF sets its body text — so the gesture does not end at the tap: while
+   * the finger stays down, sliding it sideways walks the caret letter by
+   * letter, and it is where the finger lifts that counts.
+   *
+   * Set up here rather than once the box is open, because opening it is
+   * asynchronous: by the time it finishes the finger may have moved or gone,
+   * and listeners bound then would either miss this gesture or catch the next
+   * one.
+   */
+  _followCaret(event) {
+    const pointerId = event.pointerId;
+    // Vertical drift is ignored on purpose: the caret stays in the line that
+    // was tapped, and only the sideways part of the gesture means anything.
+    const anchorY = event.clientY;
+    let dragging = false;
+
+    const begin = () => {
+      if (dragging) return;
+      dragging = true;
+      this.handlers.onCaretDragStart?.(this, event.clientX, anchorY);
+    };
+    // A finger resting still is asking for the magnifier as plainly as one
+    // that has started to slide.
+    const dwell = setTimeout(begin, 250);
+
+    const move = (moving) => {
+      if (moving.pointerId !== pointerId) return;
+      if (!dragging && Math.abs(moving.clientX - event.clientX) < 3) return;
+      begin();
+      this.handlers.onCaretDragMove?.(this, moving.clientX, anchorY);
+    };
+
+    const end = (ending) => {
+      if (ending.pointerId !== pointerId) return;
+      clearTimeout(dwell);
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', end);
+      document.removeEventListener('pointercancel', end);
+      if (dragging) this.handlers.onCaretDragEnd?.(this);
+    };
+
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', end);
+    document.addEventListener('pointercancel', end);
   }
 
   /** Draw the search hits that fall on this page. */
