@@ -34,13 +34,20 @@ body {
 
 /* ---------- toolbar ---------- */
 
+/* The toolbar wraps onto a second line whenever it does not fit, at any
+   width: a row that runs past the screen does not just hide its last buttons,
+   on a phone or tablet it makes the browser widen the whole page to hold it,
+   and then a sideways swipe pans the entire app off the document. */
 .toolbar {
-  height: var(--toolbar-h);
+  min-height: var(--toolbar-h);
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
-  padding: 0 14px;
+  gap: 6px 16px;
+  padding: 6px 14px;
+  box-sizing: border-box;
+  max-width: 100vw;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   z-index: 40;
@@ -48,6 +55,7 @@ body {
 
 .toolbar__group {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -414,8 +422,9 @@ body {
   border-radius: 2px;
   cursor: text;
   transition: background .1s, box-shadow .1s;
-  /* Safari's own long-press callout (Copy / Look Up / Share) does not always
-     go through a `contextmenu` event the way Android's does. */
+  /* Safari's own long-press callout (Copy / Look Up / Share), on iPhone and
+     iPad only: Chrome and Samsung Internet on Android ignore this property,
+     and their long press is refused in script instead (see _followCaret). */
   -webkit-touch-callout: none;
 }
 
@@ -749,9 +758,6 @@ body {
   .pages__list { flex-direction: row; overflow-x: auto; }
 
   .toolbar {
-    height: auto;
-    min-height: var(--toolbar-h);
-    flex-wrap: wrap;
     gap: 8px;
     padding: 8px 10px;
   }
@@ -762,6 +768,30 @@ body {
 
   /* Bars stack their controls instead of running off the side. */
   .findbar { flex-wrap: wrap; height: auto; padding: 8px 10px; }
+}
+
+/* Unless the screen is wide enough for everything on one line, opening and
+   saving get the first row and the tools one row of their own that scrolls
+   sideways inside itself. Plain wrapping would stack two to four rows of
+   buttons on a phone or tablet, over a screen that is mostly for the page and
+   half of which goes to the keyboard the moment a line is being edited — and
+   on a desktop it made the toolbar grow a row, and the page jump, whenever a
+   pick brought up the extra buttons. */
+@media (max-width: 1700px) {
+  /* Opening and saving share the first row; the tools get the second. */
+  .toolbar > .toolbar__group:first-child { flex: 1 1 0; flex-wrap: nowrap; }
+  .toolbar .doc-name { min-width: 0; }
+  #save-group { margin-left: auto; flex-wrap: nowrap; }
+  #tools {
+    order: 1;
+    flex: 1 1 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  #tools::-webkit-scrollbar { display: none; }
+  #tools > * { flex: 0 0 auto; }
 }
 
 /* Coarse pointers need a bigger target than a mouse does: the usual figure is

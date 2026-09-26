@@ -990,6 +990,14 @@ class TestUsingItWithAFinger:
         tab.goto(server, wait_until="networkidle")
         tab.set_input_files("#file-input", str(sample))
         tab.wait_for_selector(".page .span", timeout=30000)
+        # At 150 % the page is wider than what the rail leaves of 1100 px, so
+        # it opens fitted to the width: the first spans are taken down by that
+        # re-render, and one measured in between belongs to nothing.
+        tab.wait_for_function(
+            "() => document.getElementById('zoom').value === 'fit'", timeout=15000
+        )
+        tab.wait_for_timeout(800)
+        tab.wait_for_selector(".page .span", timeout=30000)
         tab.console_errors = errors  # type: ignore[attr-defined]
         tab.cdp = context.new_cdp_session(tab)  # type: ignore[attr-defined]
         yield tab
@@ -1616,3 +1624,214 @@ class TestNoNativeContextMenu:
             "el.dispatchEvent(e); return e.defaultPrevented; }",
         )
         assert prevented is False, "el campo de formulario perdió copiar/pegar"
+
+
+# CSS viewports, portrait: Tab S7 FE and Tab S9 share 800 x 1280; the S9+/S10+
+# run 876 x 1400 and the S10 Ultra 924 x 1480 (all at a device pixel ratio of 2).
+GALAXY_TABS = {
+    "tab_s7_fe_s9": (800, 1280),
+    "tab_s10_plus": (876, 1400),
+    "tab_s10_ultra": (924, 1480),
+}
+
+
+@requires_fonts
+class TestEditingOnAGalaxyTab:
+    """What was reported from a real tablet: the keyboard coming up ended the
+    edit, the larger tabs opened with the page cut off at the side, and a
+    finger left on the text brought up the system's own selection and menu."""
+
+    @pytest.fixture(params=list(GALAXY_TABS), ids=list(GALAXY_TABS))
+    def tablet(self, request, browser, server, tmp_path):
+        width, height = GALAXY_TABS[request.param]
+        context = browser.new_context(
+            viewport={"width": width, "height": height},
+            device_scale_factor=2, is_mobile=True, has_touch=True,
+        )
+        tab = context.new_page()
+        errors = []
+        tab.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        sample = tmp_path / "ejemplo.pdf"
+        sample.write_bytes(build_pdf(pages=3))
+        tab.goto(server, wait_until="networkidle")
+        tab.set_input_files("#file-input", str(sample))
+        tab.wait_for_selector(".page .span", timeout=30000)
+        tab.wait_for_function(
+            "() => document.getElementById('zoom').value === 'fit'", timeout=15000
+        )
+        tab.wait_for_timeout(800)
+        tab.wait_for_selector(".page .span", timeout=30000)
+        tab.console_errors = errors  # type: ignore[attr-defined]
+        tab.cdp = context.new_cdp_session(tab)  # type: ignore[attr-defined]
+        yield tab
+        context.close()
+
+    def _touch(self, page, kind, x=0.0, y=0.0):
+        page.cdp.send("Input.dispatchTouchEvent", {
+            "type": kind,
+            "touchPoints": [] if kind == "touchEnd" else [{"x": x, "y": y}],
+        })
+
+    def _tap_open(self, page, text="Primera linea"):
+        box = span_with(page, text).bounding_box()
+        point = (box["x"] + 4, box["y"] + box["height"] / 2)
+        self._touch(page, "touchStart", *point)
+        page.wait_for_timeout(80)
+        self._touch(page, "touchEnd")
+        page.wait_for_selector(".span.is-editing .span__input", timeout=10000)
+        page.wait_for_timeout(300)
+        return box
+
+    def _editing(self, page):
+        return page.locator(".span.is-editing .span__input").count() == 1
+
+    def test_the_page_is_not_cut_off_at_the_side(self, tablet):
+        """The S10+ and S10 Ultra are wider than the old fixed breakpoint, so
+        they got the desktop zoom and a page 70 to 90 px wider than the screen."""
+        overflow = tablet.evaluate(
+            "() => document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth"
+        )
+        page_box = tablet.locator(".page").first.bounding_box()
+        assert page_box["x"] >= 0
+        assert page_box["x"] + page_box["width"] <= tablet.viewport_size["width"], (
+            f"la página se sale {page_box['x'] + page_box['width'] - tablet.viewport_size['width']:.0f} px"
+        )
+        assert overflow <= 1, f"sobra {overflow} px de desplazamiento horizontal"
+
+    def test_the_keyboard_coming_up_keeps_the_edit_open(self, tablet):
+        """Chrome on Android resizes the window when the keyboard opens. That
+        resize used to refit the zoom, which re-rendered the page and took the
+        box being edited down with it."""
+        self._tap_open(tablet)
+        width, height = tablet.viewport_size["width"], tablet.viewport_size["height"]
+        tablet.set_viewport_size({"width": width, "height": height // 2})
+        tablet.evaluate("window.dispatchEvent(new Event('resize'))")
+        tablet.wait_for_timeout(1500)
+        assert self._editing(tablet), "el teclado cerró la edición"
+        tablet.keyboard.type("ZZ")
+        text = tablet.eval_on_selector(".span.is-editing .span__input", "e => e.textContent")
+        assert "ZZ" in text
+
+    def test_the_keyboard_going_away_keeps_it_open_too(self, tablet):
+        self._tap_open(tablet)
+        width, height = tablet.viewport_size["width"], tablet.viewport_size["height"]
+        for new_height in (height // 2, height):
+            tablet.set_viewport_size({"width": width, "height": new_height})
+            tablet.evaluate("window.dispatchEvent(new Event('resize'))")
+            tablet.wait_for_timeout(800)
+        assert self._editing(tablet)
+
+    def test_turning_the_tablet_still_refits(self, tablet):
+        """Only a change of width is a reason to refit: rotating is one."""
+        width, height = tablet.viewport_size["width"], tablet.viewport_size["height"]
+        tablet.set_viewport_size({"width": height, "height": width})
+        tablet.evaluate("window.dispatchEvent(new Event('resize'))")
+        tablet.wait_for_timeout(3000)
+        page_box = tablet.locator(".page").first.bounding_box()
+        assert page_box["width"] > width, "al girar la tablet la página no se agrandó"
+        assert page_box["x"] + page_box["width"] <= height
+
+    def test_a_finger_held_on_the_text_gets_no_native_selection(self, tablet):
+        """Chromium's long press picks the nearest word through the same code
+        as a double click, and gives up when `selectstart` is cancelled. A
+        double click made while the finger is down stands in for it here."""
+        box = self._tap_open(tablet)
+        y = box["y"] + box["height"] / 2
+        word_x = box["x"] + box["width"] * 0.62
+        self._touch(tablet, "touchStart", box["x"] + 6, y)
+        tablet.wait_for_timeout(150)
+        tablet.mouse.dblclick(word_x, y)
+        tablet.wait_for_timeout(300)
+        during = tablet.evaluate("() => getSelection().type")
+        menu_refused = tablet.evaluate(
+            "() => { const e = new MouseEvent('contextmenu', {bubbles: true, cancelable: true}); "
+            "document.body.dispatchEvent(e); return e.defaultPrevented; }"
+        )
+        self._touch(tablet, "touchEnd")
+        assert during != "Range", "con el dedo puesto el sistema seleccionó una palabra"
+        assert menu_refused, "con el dedo puesto salió el menú del sistema"
+
+    def test_lifting_the_finger_gives_selection_back(self, tablet):
+        """The guard lasts one gesture: left on, it would break selecting text
+        anywhere else on the page, forms included."""
+        box = self._tap_open(tablet)
+        tablet.wait_for_timeout(600)
+        y = box["y"] + box["height"] / 2
+        tablet.mouse.dblclick(box["x"] + box["width"] * 0.62, y)
+        tablet.wait_for_timeout(300)
+        assert tablet.evaluate("() => getSelection().type") == "Range"
+        menu_refused = tablet.evaluate(
+            "() => { const e = new MouseEvent('contextmenu', {bubbles: true, cancelable: true}); "
+            "document.body.dispatchEvent(e); return e.defaultPrevented; }"
+        )
+        assert menu_refused is False, "la guarda se quedó puesta después de soltar"
+
+    def test_the_app_is_no_wider_than_the_screen(self, tablet):
+        """A toolbar wider than the screen made mobile Chrome widen the whole
+        layout to hold it, so a sideways swipe slid the app off the page."""
+        widths = tablet.evaluate("() => [innerWidth, visualViewport.width]")
+        assert widths[0] == pytest.approx(widths[1], abs=1), (
+            f"la página se ensanchó a {widths[0]} px en una pantalla de {widths[1]} px"
+        )
+
+    def test_save_is_on_screen(self, tablet):
+        box = tablet.locator("#btn-save").bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= tablet.viewport_size["width"]
+
+    def test_the_toolbar_leaves_room_for_the_page(self, tablet):
+        height = tablet.locator(".toolbar").bounding_box()["height"]
+        assert height <= 110, f"la barra ocupa {height:.0f} px"
+
+    def test_the_tools_row_scrolls_under_a_finger(self, tablet):
+        tools = tablet.locator("#tools").bounding_box()
+        y = tools["y"] + tools["height"] / 2
+        x = tools["x"] + tools["width"] - 20
+        self._touch(tablet, "touchStart", x, y)
+        for step in range(1, 11):
+            self._touch(tablet, "touchMove", x - step * 30, y)
+            tablet.wait_for_timeout(16)
+        self._touch(tablet, "touchEnd")
+        tablet.wait_for_timeout(400)
+        scrolled = tablet.evaluate("() => document.getElementById('tools').scrollLeft")
+        assert scrolled > 0, "la fila de herramientas no se desliza con el dedo"
+        assert tablet.evaluate("() => document.scrollingElement.scrollLeft") == 0
+
+    def test_no_console_errors(self, tablet):
+        self._tap_open(tablet)
+        assert tablet.console_errors == []
+
+
+@requires_fonts
+class TestClickingInsideTheOpenBox:
+    """A click inside the box being edited went on to the page underneath,
+    which took it for a click on blank paper and closed the box."""
+
+    def test_a_click_inside_keeps_the_box_open(self, page):
+        open_editor(page)
+        box = page.locator(".span.is-editing .span__input").bounding_box()
+        page.mouse.click(box["x"] + box["width"] * 0.6, box["y"] + box["height"] / 2)
+        page.wait_for_timeout(300)
+        assert page.locator(".span.is-editing .span__input").count() == 1
+
+    def test_a_click_inside_moves_the_caret_there(self, page):
+        open_editor(page)
+        box = page.locator(".span.is-editing .span__input").bounding_box()
+        page.mouse.click(box["x"] + box["width"] * 0.6, box["y"] + box["height"] / 2)
+        page.wait_for_timeout(200)
+        offset = page.evaluate("() => getSelection().getRangeAt(0).startOffset")
+        assert offset > 3, f"el cursor se quedó en {offset}"
+
+    def test_a_double_click_selects_a_word(self, page):
+        open_editor(page)
+        box = page.locator(".span.is-editing .span__input").bounding_box()
+        page.mouse.dblclick(box["x"] + box["width"] * 0.62, box["y"] + box["height"] / 2)
+        page.wait_for_timeout(200)
+        chosen = page.evaluate("() => getSelection().toString()")
+        assert chosen.strip() and " " not in chosen.strip(), f"seleccionó {chosen!r}"
+
+    def test_a_click_on_blank_paper_still_closes_it(self, page):
+        open_editor(page)
+        page_box = page.locator(".page").first.bounding_box()
+        page.mouse.click(page_box["x"] + page_box["width"] - 20, page_box["y"] + 20)
+        page.wait_for_timeout(300)
+        assert page.locator(".span.is-editing").count() == 0

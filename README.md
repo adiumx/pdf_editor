@@ -65,26 +65,57 @@ la página no se va detrás; con la de editar no se arrastra nada, así que el
 scroll sigue siendo la forma de mover el documento. Lo que un hover habría
 revelado se enseña desde el principio, porque en una pantalla táctil no hay
 con qué pasar por encima, y en pantalla estrecha la tira de páginas se pone
-horizontal arriba y la barra se reparte en dos líneas.
+horizontal arriba.
 
-En un teléfono, el zoom por defecto —pensado para una ventana de escritorio—
-dejaba la página más ancha que la pantalla: lo primero que se veía era un
-trozo del medio de una línea, no la página, y había que desplazarse en
-horizontal para todo. Un documento abierto en una pantalla estrecha arranca
-en **«Ajustar al ancho»** en vez de al 150 % fijo, y gira con el teléfono: al
-cambiar de vertical a horizontal se reajusta solo, salvo que hayas elegido un
-zoom a mano, que entonces se respeta. El ajuste se calcula sobre la **mediana**
+La barra ocupa **dos filas fijas**: abrir y guardar arriba, y las herramientas
+en una fila propia que se desliza de lado con el dedo si no caben. Antes era
+una sola línea más ancha que cualquier tablet (unos 1060 px), y en Chrome para
+Android eso no solo escondía botones: el navegador ensanchaba toda la página
+para que cupiera, y un deslizamiento a los lados arrastraba la aplicación
+entera fuera del documento. Solo en pantallas de más de 1700 px va todo en una
+línea.
+
+Con el zoom por defecto —pensado para una ventana de escritorio— la página
+quedaba más ancha que la pantalla: lo primero que se veía era un trozo del
+medio de una línea, no la página, y había que desplazarse en horizontal para
+todo. Un documento que al 150 % **no cabe** arranca en **«Ajustar al ancho»**.
+El criterio es ese, que no quepa, y no un ancho de pantalla fijo: con un corte
+en 860 px, las Galaxy Tab S10+ (876 px) y S10 Ultra (924 px) se quedaban con
+la página cortada por el lado. Gira con el aparato: al cambiar de vertical a
+horizontal se reajusta solo, salvo que hayas elegido un zoom a mano, que
+entonces se respeta.
+
+Sólo un cambio de **ancho** reajusta. Chrome para Android redimensiona la
+ventana al sacar el teclado; antes ese cambio de alto volvía a ajustar el zoom,
+eso redibujaba la página y se llevaba por delante el cuadro que estabas
+editando — tocabas una línea, salía el teclado y la edición se cerraba. El ajuste se calcula sobre la **mediana**
 del ancho de las páginas, no la más ancha: un documento con una sola página
 fuera de lo normal —un desplegable apaisado, un escaneo suelto de otro
 tamaño— no debe encoger todas las páginas corrientes a un zoom demasiado
 pequeño para tocar. Esa página se queda simplemente más ancha que la
 pantalla, y pide un desplazamiento que las demás no piden.
 
-Un toque largo sobre el texto es también el gesto propio del sistema — el
-menú de copiar/pegar de Android, el "callout" de iOS — y competía con el
-propio del editor, apareciendo encima de un cuadro a medio editar. Se
-suprime donde el dedo ya tiene trabajo (una línea de texto, una marca), no
-en los campos de un formulario, donde copiar y pegar siguen siendo útiles.
+Un toque largo sobre el texto es también el gesto propio del sistema — la
+selección de palabra y el menú de copiar/pegar de Android, el "callout" de
+iOS — y competía con el propio del editor, apareciendo encima de un cuadro a
+medio editar (el "clic derecho" al dejar el dedo quieto). En Android no basta
+con `-webkit-touch-callout`, que sólo respeta Safari; lo que se hace es lo
+mismo que [React Aria](https://github.com/adobe/react-spectrum) (Adobe): mientras
+el dedo del editor está abajo, se cancelan `selectstart` y `contextmenu` en
+todo el documento, y al levantarlo se sueltan. En Chromium la pulsación larga
+elige la palabra más cercana con la misma función que un doble clic
+(`SelectionController::SelectClosestWordFromHitTestResult`) y se rinde si
+`selectstart` se cancela, antes de enviar el menú contextual; las pruebas usan
+ese doble clic con un dedo puesto como sustituto, porque un Chromium de
+escritorio no reproduce la pulsación larga de Android. No se cancela el
+`touchstart`, que es lo que suele recomendarse en foros: eso también impide
+que salga el teclado y que la página se desplace. Los campos de un formulario
+conservan copiar y pegar.
+
+Un clic de ratón **dentro** del cuadro que se está editando seguía de largo
+hasta la página, que lo tomaba por un clic en papel en blanco y cerraba el
+cuadro: no se podía mover el cursor con un clic ni elegir una palabra con doble
+clic. Ahora se queda en el cuadro.
 
 Poner el cursor **entre dos letras concretas** es lo que peor se le da a un
 dedo: la yema tapa justo lo que intenta apuntar, y un PDF compone su texto en

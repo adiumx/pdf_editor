@@ -82,10 +82,12 @@ async function openFile(file) {
     await editor.open(file);
     dropzone.classList.add('is-hidden');
     $('doc-name').textContent = file.name;
-    // The desktop default would run a page wider than a phone screen, so a
-    // narrow one starts fitted instead — the zoom a document opens at is
-    // never seen wider than the screen that opened it.
-    if (NARROW_SCREEN.matches) {
+    // The desktop default would run a page wider than a phone or a tablet
+    // held upright, so a document that would overflow starts fitted instead.
+    // Asked of the page and the view, not of a fixed screen width: tablets
+    // come 800, 876 and 924 pixels wide upright, and a cut-off at any one
+    // number leaves the next size up with a page hanging off the side.
+    if (editor.overflows()) {
       $('zoom').value = 'fit';
       await editor.fitWidth();
     }
@@ -179,24 +181,27 @@ $('btn-save').addEventListener('click', () => editor.download());
 $('btn-add-page').addEventListener('click', () =>
   editor.pageOperation({ op: 'insert_page', at: editor.doc.page_count }).catch(reportError),
 );
-// A screen narrow enough that the desktop default zoom would run a page
-// wider than the screen — a phone held upright, mainly.
-const NARROW_SCREEN = window.matchMedia('(max-width: 860px)');
-
 $('zoom').addEventListener('change', (event) => {
   const value = event.target.value;
   if (value === 'fit') {
-    editor.fitWidth()?.catch(reportError);
+    editor.fitWidth().catch(reportError);
   } else {
     editor.setZoom(Number(value)).catch(reportError);
   }
 });
 
-// Rotating the phone, or resizing a narrow window, leaves the fit stale
-// until something recomputes it — only worth doing while "Ajustar" is what
-// is showing, so a zoom the person chose on purpose is never overridden.
+// Rotating the device leaves the fit stale until something recomputes it —
+// only worth doing while "Ajustar" is what is showing, so a zoom the person
+// chose on purpose is never overridden.
+//
+// And only when the width changed. Android fires `resize` when the on-screen
+// keyboard slides up, often with nothing about the width different, and
+// refitting then committed the very edit the keyboard had come up for.
+let fittedWidth = window.innerWidth;
 window.addEventListener('resize', () => {
-  if (editor.isOpen && $('zoom').value === 'fit') editor.fitWidth()?.catch(reportError);
+  if (window.innerWidth === fittedWidth) return;
+  fittedWidth = window.innerWidth;
+  if (editor.isOpen && $('zoom').value === 'fit') editor.fitWidth().catch(reportError);
 });
 
 function reportError(error) {

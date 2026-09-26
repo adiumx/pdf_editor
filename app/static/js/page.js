@@ -298,6 +298,28 @@ export class PageView {
     // tap lasts, or every tap would flash it up on the way past.
     const dwell = setTimeout(begin, 400);
 
+    // Held long enough, the same finger is also the platform's long press,
+    // and Blink answers a long press in two steps: it selects the word under
+    // the finger, then sends `contextmenu` — which on Android is the
+    // selection bar (Copy, Paste, Select all) appearing over a box that is
+    // mid-edit. The word selection goes through the same function a double
+    // click does, and that function gives up if `selectstart` is cancelled;
+    // the bar needs the `contextmenu` not to be. Both are refused for as long
+    // as this finger is down and briefly after, since some platforms send
+    // the menu on release — never otherwise, so a mouse still selects by
+    // double click and a form field still offers Paste.
+    //
+    // The usual advice, cancelling `touchstart`, is not followed on purpose:
+    // it also keeps Android from raising the keyboard, and stops the page
+    // scrolling from a finger that lands on text.
+    const refuse = (native) => native.preventDefault();
+    document.addEventListener('selectstart', refuse, true);
+    document.addEventListener('contextmenu', refuse, true);
+    const release = () => {
+      document.removeEventListener('selectstart', refuse, true);
+      document.removeEventListener('contextmenu', refuse, true);
+    };
+
     const move = (moving) => {
       if (moving.pointerId !== pointerId) return;
       if (!dragging && Math.abs(moving.clientX - event.clientX) < 3) return;
@@ -311,6 +333,7 @@ export class PageView {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', end);
       document.removeEventListener('pointercancel', end);
+      setTimeout(release, 400);
       if (dragging) this.handlers.onCaretDragEnd?.(this);
     };
 
@@ -508,6 +531,13 @@ export class PageView {
       if (event.button !== 0 || !event.isPrimary) return;
       const tool = this.element.className.replace('page tool-', '');
       if (tool === 'select') {
+        // A click inside the box being edited is the caret's, not a click on
+        // the blank page — it only arrives here because the span lets it
+        // bubble on to the browser. Taken as a blank click it committed and
+        // closed the box on the spot: clicking to move the caret ended the
+        // edit, and a double click to select a word never saw its second
+        // click land on the same box.
+        if (event.target.closest?.('.span__input')) return;
         this.handlers.onBlankClick?.(this, event);
         return;
       }

@@ -319,19 +319,44 @@ export class Editor {
    * padding, close enough that the fitted page does not itself force back
    * the horizontal scroll it exists to avoid.
    */
-  fitWidth() {
-    if (!this.doc?.pages?.length) return;
-    // The median width, not the widest page in the document: one outlier —
-    // a landscape foldout, a scanned page a different size from the rest —
-    // must not shrink every ordinary page down with it. A page wider than
-    // the fit still shows; it just needs a scroll, which is what one
-    // uncommon page deserves, not dozens of ordinary ones read too small to
-    // touch.
+  /**
+   * The zoom at which the document's typical page just fits what is visible.
+   *
+   * The median width, not the widest page in the document: one outlier — a
+   * landscape foldout, a scanned page a different size from the rest — must
+   * not shrink every ordinary page down with it. A page wider than the fit
+   * still shows; it just needs a scroll, which is what one uncommon page
+   * deserves, not dozens of ordinary ones read too small to touch.
+   */
+  fitZoom() {
+    if (!this.doc?.pages?.length) return null;
     const widths = this.doc.pages.map((page) => page.width).sort((a, b) => a - b);
     const typical = widths[Math.floor(widths.length / 2)];
     const available = this.root.clientWidth - 8;
-    if (typical <= 0 || available <= 0) return;
-    return this.setZoom(Math.max(0.3, Math.min(3, available / typical)));
+    if (typical <= 0 || available <= 0) return null;
+    return Math.max(0.3, Math.min(3, available / typical));
+  }
+
+  /** Whether the typical page, at the zoom in force, is wider than the view. */
+  overflows() {
+    const fit = this.fitZoom();
+    return fit !== null && this.zoom > fit + 0.001;
+  }
+
+  /**
+   * Zoom so the typical page just fits what is visible.
+   *
+   * Nothing happens when the fit has not changed. That matters more than it
+   * looks: changing the zoom commits whatever is being edited and redraws
+   * every page, and Android fires `resize` for reasons that leave the width
+   * alone — the on-screen keyboard sliding up is one — so an unconditional
+   * refit closed the editing box the moment the keyboard it had asked for
+   * appeared.
+   */
+  fitWidth() {
+    const zoom = this.fitZoom();
+    if (zoom === null || Math.abs(zoom - this.zoom) < 0.001) return Promise.resolve();
+    return this.setZoom(zoom);
   }
 
   /* ---------- editing an existing span ---------- */
