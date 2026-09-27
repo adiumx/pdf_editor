@@ -8,7 +8,9 @@ back operations describing what changed.
 
 from __future__ import annotations
 
+import hashlib
 import io
+import re
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -333,9 +335,46 @@ async def download(doc_id: str) -> Response:
 # -- static ----------------------------------------------------------------
 
 
+# Without a Cache-Control header a browser decides for itself how long its copy
+# stays good — for a file last changed days ago, hours on end without asking.
+# After an update, a phone went on running the old scripts. "no-cache" makes it
+# ask every time; the ETag keeps the answer to a short "not modified".
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+_BUILD_PREFIX = re.compile(r"^b-[0-9a-f]{12}[\\/]")
+
+
+def frontend_build(directory: Path = STATIC_DIR) -> str:
+    """A fingerprint of every file the browser loads.
+
+    Put into the script and stylesheet URLs, so that any change to the frontend
+    means addresses no browser has a copy of: even a copy it took before
+    Cache-Control was sent, and still believes is fresh, is never looked up.
+    The modules import each other by relative path, so the prefix on the entry
+    point carries through to all of them.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(directory.rglob("*")):
+        if path.is_file() and "__pycache__" not in path.parts:
+            digest.update(path.relative_to(directory).as_posix().encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
+
+
 @app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+async def index() -> Response:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace('"/static/', f'"/static/b-{frontend_build()}/')
+    return Response(html, media_type="text/html; charset=utf-8", headers=NO_CACHE)
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class Frontend(StaticFiles):
+    """The static files, reachable with or without the build prefix."""
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        response = await super().get_response(_BUILD_PREFIX.sub("", path, count=1), scope)
+        response.headers.update(NO_CACHE)
+        return response
+
+
+app.mount("/static", Frontend(directory=STATIC_DIR), name="static")

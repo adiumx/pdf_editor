@@ -90,7 +90,21 @@ tres píxeles físicos en cada píxel CSS; con la imagen hecha a un píxel por
 píxel CSS, el navegador la estiraba al triple y el documento se veía borroso —
 y la línea que editabas, que es texto real y no imagen, era lo único nítido.
 Ahora la imagen se pide a `zoom × devicePixelRatio` (hasta el máximo de 4× que
-acepta el servidor) y se muestra al mismo tamaño de antes.
+acepta el servidor) y se muestra al mismo tamaño de antes. Es la misma imagen
+para todo lo que dibuja el servidor —el texto que no estás editando y
+cualquier figura del PDF—, así que el arreglo alcanza a la página entera, no
+solo a la línea abierta.
+
+Ese arreglo, sin embargo, vive en los ficheros de la interfaz (`app.js`,
+`api.js`...), y el navegador decide por su cuenta cuánto tiempo confiar en una
+copia que ya tiene si nadie le dice lo contrario — a veces horas, sin volver a
+preguntar. Un celular que ya había cargado el editor podía seguir corriendo el
+script antiguo después de actualizar el servidor, con la página entera
+borrosa de nuevo aunque el arreglo estuviera puesto. Ahora cada fichero de la
+interfaz se pide con una versión en la URL que cambia sola en cuanto cambia su
+contenido, así que una actualización es siempre una dirección que ningún
+navegador tiene guardada — recarga la página (no hace falta borrar datos) y
+coge la versión nueva.
 
 Sólo un cambio de **ancho** reajusta. Chrome para Android redimensiona la
 ventana al sacar el teclado; antes ese cambio de alto volvía a ajustar el zoom,

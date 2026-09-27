@@ -622,3 +622,57 @@ class TestInspectingAnArea:
             json={"rect": [0, 0, 10, 10]},
         )
         assert response.status_code == 404
+
+
+class TestFrontendNeverGoesStale:
+    """A browser decides for itself how long to trust a file with no
+    Cache-Control header — for one that has not changed in days, hours on end
+    without asking again. A phone kept running yesterday's script after an
+    update because of exactly that. The build id in the URL means an update
+    is a URL no browser has a cached answer for, even one it took before this
+    fix shipped and still considers fresh; the header on top means even a
+    request for an old URL is answered fresh rather than from a stale cache."""
+
+    def test_the_page_has_no_cache_header(self, client):
+        response = client.get("/")
+        assert response.headers.get("cache-control") == "no-cache"
+
+    def test_script_and_style_urls_carry_a_build_id(self, client):
+        html = client.get("/").text
+        assert "/static/b-" in html, "las URLs de los ficheros estáticos no llevan versión"
+
+    def test_a_prefixed_asset_serves_current_content(self, client):
+        from app.main import frontend_build
+
+        build = frontend_build()
+        assert f'/static/b-{build}/js/app.js"' in client.get("/").text
+        response = client.get(f"/static/b-{build}/js/app.js")
+        assert response.status_code == 200
+        assert response.headers.get("cache-control") == "no-cache"
+
+    def test_an_old_or_made_up_build_id_still_serves_the_file(self, client):
+        """A phone that cached index.html itself before this shipped is left
+        holding URLs with no build id at all — a plain /static/js/app.js — and
+        those must still resolve, not 404 the whole app for it."""
+        for url in ("/static/b-000000000000/js/app.js", "/static/js/app.js"):
+            response = client.get(url)
+            assert response.status_code == 200
+            assert b"class Editor" not in response.content  # not the html by mistake
+
+    def test_an_unknown_asset_still_404s(self, client):
+        response = client.get("/static/b-000000000000/js/does-not-exist.js")
+        assert response.status_code == 404
+
+    def test_a_content_change_changes_the_build_id(self, tmp_path):
+        import importlib
+
+        from app import main as main_module
+
+        before = main_module.frontend_build()
+        extra = main_module.STATIC_DIR / "js" / "__test_marker.js"
+        try:
+            extra.write_text("// marker\n")
+            after = main_module.frontend_build()
+            assert after != before
+        finally:
+            extra.unlink(missing_ok=True)
