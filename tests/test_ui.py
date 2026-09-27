@@ -1835,3 +1835,92 @@ class TestClickingInsideTheOpenBox:
         page.mouse.click(page_box["x"] + page_box["width"] - 20, page_box["y"] + 20)
         page.wait_for_timeout(300)
         assert page.locator(".span.is-editing").count() == 0
+
+
+class TestSharpOnAHighDensityScreen:
+    """On a phone the page read as a blur and only the line being edited — live
+    text, not the image — was sharp: the image was drawn at one pixel per CSS
+    pixel on a screen with about three physical pixels to each."""
+
+    def _density_of_page_image(self, tab):
+        tab.wait_for_function(
+            "() => { const i = document.querySelector('.page__image'); "
+            "return i && i.complete && i.naturalWidth > 0; }", timeout=15000
+        )
+        tab.wait_for_timeout(800)
+        tab.wait_for_function(
+            "() => [...document.querySelectorAll('.page__image')].every(i => i.complete && i.naturalWidth)",
+            timeout=15000,
+        )
+        return tab.evaluate(
+            "() => { const i = document.querySelector('.page__image'); "
+            "return i.naturalWidth / i.getBoundingClientRect().width; }"
+        )
+
+    def _open(self, browser, server, tmp_path, **context):
+        ctx = browser.new_context(**context)
+        tab = ctx.new_page()
+        sample = tmp_path / "ejemplo.pdf"
+        sample.write_bytes(build_pdf())
+        tab.goto(server, wait_until="networkidle")
+        tab.set_input_files("#file-input", str(sample))
+        tab.wait_for_selector(".page .span", timeout=30000)
+        return ctx, tab
+
+    def test_a_phone_gets_an_image_at_its_own_density(self, browser, server, tmp_path):
+        ctx, tab = self._open(
+            browser, server, tmp_path,
+            viewport={"width": 412, "height": 915}, device_scale_factor=3,
+            is_mobile=True, has_touch=True,
+        )
+        try:
+            tab.wait_for_function("() => document.getElementById('zoom').value === 'fit'", timeout=15000)
+            density = self._density_of_page_image(tab)
+            assert density == pytest.approx(3, abs=0.1), (
+                f"la imagen lleva {density:.2f} píxeles por píxel de pantalla, no 3: se ve borrosa"
+            )
+        finally:
+            ctx.close()
+
+    def test_the_page_box_keeps_its_size(self, browser, server, tmp_path):
+        """More pixels in the image, not a bigger page: the overlays are laid
+        out in CSS pixels and must still sit on their glyphs."""
+        ctx, tab = self._open(
+            browser, server, tmp_path,
+            viewport={"width": 412, "height": 915}, device_scale_factor=3,
+            is_mobile=True, has_touch=True,
+        )
+        try:
+            tab.wait_for_function("() => document.getElementById('zoom').value === 'fit'", timeout=15000)
+            self._density_of_page_image(tab)
+            sizes = tab.evaluate(
+                "() => { const p = document.querySelector('.page').getBoundingClientRect(); "
+                "const i = document.querySelector('.page__image').getBoundingClientRect(); "
+                "return [p.width, i.width, p.height, i.height]; }"
+            )
+            assert sizes[1] == pytest.approx(sizes[0], abs=1)
+            assert sizes[3] == pytest.approx(sizes[2], abs=1)
+            assert sizes[0] <= 412
+        finally:
+            ctx.close()
+
+    def test_an_ordinary_screen_is_unchanged(self, page):
+        assert self._density_of_page_image(page) == pytest.approx(1, abs=0.02)
+
+    def test_a_very_dense_screen_stays_within_the_server_limit(self, browser, server, tmp_path):
+        """150 % on a 4x screen would ask for 6x, which the server refuses."""
+        ctx, tab = self._open(
+            browser, server, tmp_path,
+            viewport={"width": 1400, "height": 900}, device_scale_factor=4,
+        )
+        try:
+            errors = []
+            tab.on("response", lambda r: errors.append(r.status) if "/render" in r.url and r.status >= 400 else None)
+            tab.locator("#zoom").select_option("1.5")
+            tab.wait_for_timeout(1500)
+            density = self._density_of_page_image(tab)
+            assert errors == []
+            # Rendered at the cap, 4x, and shown at 1.5x: as sharp as allowed.
+            assert density == pytest.approx(4 / 1.5, abs=0.05)
+        finally:
+            ctx.close()

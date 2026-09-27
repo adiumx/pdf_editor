@@ -1,5 +1,8 @@
 /** Thin wrapper over the editor's HTTP API. */
 
+/** Mirrors MAX_RENDER_ZOOM in app/main.py: the most the server will render. */
+const MAX_RENDER_ZOOM = 4;
+
 async function request(url, options = {}) {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -42,8 +45,20 @@ export const api = {
     return json(`/api/documents/${docId}/fonts`);
   },
 
+  /**
+   * The page image for a page shown at `zoom` CSS pixels per point.
+   *
+   * Drawn at the screen's own density rather than one image pixel per CSS
+   * pixel: a phone packs about three physical pixels into each CSS pixel, so
+   * an image at CSS size was stretched threefold and the page read as a blur —
+   * while the line being edited, which is live text, stayed sharp. The image
+   * is still laid out at CSS size; only its resolution goes up. Capped where
+   * the server caps it.
+   */
   renderUrl(docId, pno, zoom, revision) {
-    return `/api/documents/${docId}/pages/${pno}/render?zoom=${zoom}&revision=${revision}`;
+    const density = Math.max(1, window.devicePixelRatio || 1);
+    const scale = Math.min(MAX_RENDER_ZOOM, Math.round(zoom * density * 100) / 100);
+    return `/api/documents/${docId}/pages/${pno}/render?zoom=${scale}&revision=${revision}`;
   },
 
   async operations(docId, operations) {

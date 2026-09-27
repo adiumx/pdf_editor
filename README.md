@@ -85,6 +85,13 @@ la página cortada por el lado. Gira con el aparato: al cambiar de vertical a
 horizontal se reajusta solo, salvo que hayas elegido un zoom a mano, que
 entonces se respeta.
 
+La página se dibuja a la **densidad de la pantalla**. Un celular mete unos
+tres píxeles físicos en cada píxel CSS; con la imagen hecha a un píxel por
+píxel CSS, el navegador la estiraba al triple y el documento se veía borroso —
+y la línea que editabas, que es texto real y no imagen, era lo único nítido.
+Ahora la imagen se pide a `zoom × devicePixelRatio` (hasta el máximo de 4× que
+acepta el servidor) y se muestra al mismo tamaño de antes.
+
 Sólo un cambio de **ancho** reajusta. Chrome para Android redimensiona la
 ventana al sacar el teclado; antes ese cambio de alto volvía a ajustar el zoom,
 eso redibujaba la página y se llevaba por delante el cuadro que estabas
