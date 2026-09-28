@@ -579,6 +579,65 @@ class TestGridAndSnapping:
 
 
 @requires_fonts
+class TestSnappingStaysOffUntilAskedFor:
+    """Both checkboxes come checked from the HTML, and the handlers that
+    apply them do not otherwise ask whether the bar is even open: someone who
+    has never pressed G, and has no idea the grid exists, could still have
+    every new text box and every dragged block pulled onto the nearest grid
+    line or line of text. A click should land exactly where it fell until the
+    person has opened the grid bar themselves."""
+
+    def test_placing_text_near_a_line_lands_on_the_click_not_the_line(self, page):
+        assert page.locator("#gridbar").is_hidden()
+        span = span_with(page, "Primera linea").bounding_box()
+        # Just below-left of an existing line's own edge: squarely inside the
+        # old default pull radius for "snap to margins and text".
+        click_x, click_y = span["x"] + 3, span["y"] + span["height"] + 4
+        page.click('[data-tool="text"]')
+        page.mouse.click(click_x, click_y)
+        page.wait_for_selector(".newbox", timeout=5000)
+        box = page.locator(".newbox").bounding_box()
+        assert box["x"] == pytest.approx(click_x, abs=0.5)
+        assert box["y"] == pytest.approx(click_y, abs=0.5)
+
+    def test_dragging_a_block_near_a_line_is_not_pulled_onto_it(self, page):
+        assert page.locator("#gridbar").is_hidden()
+        page.click('[data-tool="move"]')
+        other = span_with(page, "Segunda linea").bounding_box()
+        before = span_with(page, "Primera linea").bounding_box()
+        start = (before["x"] + before["width"] / 2, before["y"] + before["height"] / 2)
+        # Dragged to just beside another line's own left edge, which "ajustar
+        # a márgenes y texto" would ordinarily pull it onto.
+        target = (other["x"] + 2, before["y"] + before["height"] / 2)
+        page.mouse.move(*start)
+        page.mouse.down()
+        page.mouse.move(*target, steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(300)
+        after = span_with(page, "Primera linea").bounding_box()
+        moved = after["x"] - before["x"]
+        expected = target[0] - start[0]
+        assert moved == pytest.approx(expected, abs=1), (
+            f"se movió {moved:.1f}px en vez de los {expected:.1f}px arrastrados: algo lo ajustó"
+        )
+
+    def test_opening_the_bar_still_snaps_as_before(self, page):
+        """The checkboxes are not the switch; the bar itself is. Once it is
+        open, the two boxes checked by default behave exactly as documented."""
+        page.keyboard.press("g")
+        page.wait_for_selector("#gridbar:not([hidden])", timeout=5000)
+        span = span_with(page, "Primera linea").bounding_box()
+        click_x, click_y = span["x"] + 3, span["y"] + span["height"] + 4
+        page.click('[data-tool="text"]')
+        page.mouse.click(click_x, click_y)
+        page.wait_for_selector(".newbox", timeout=5000)
+        box = page.locator(".newbox").bounding_box()
+        assert abs(box["x"] - click_x) > 0.5 or abs(box["y"] - click_y) > 0.5, (
+            "con la barra abierta debería seguir ajustando"
+        )
+
+
+@requires_fonts
 class TestAnnotating:
     """Marks put on the page with the mouse, and taken off with it."""
 

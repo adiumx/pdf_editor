@@ -315,6 +315,14 @@ estorban al texto de debajo. Todo ello se deshace como cualquier otra edición.
 
 ### Cuadrícula, ajuste y guías
 
+Nada de esto ajusta nada hasta que abres la barra con `G`: las dos casillas de
+abajo llegan marcadas, pero solo cuentan una vez que la barra está abierta. Sin
+eso, un texto nuevo, una marca o un bloque arrastrado con **Mover** caían
+exactamente donde los soltabas — un clic cerca de una línea ya escrita se
+llevaba de encuentro el ajuste a márgenes y texto sin que hubieras tocado la
+cuadrícula en tu vida, y colocar algo con precisión se volvía cuestión de
+suerte.
+
 `G` abre la barra de la cuadrícula. **Mostrar cuadrícula** raya la página con el
 **paso** que elijas —de 1 mm a un cuarto de pulgada, en milímetros, puntos o
 pulgadas, con la línea marcada más fuerte cada cinco— sin tocar el documento:

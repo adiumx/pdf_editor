@@ -150,7 +150,13 @@ export class Editor {
       const view = new PageView(geometry.page, geometry, {
         onSpanActivate: (...args) => this.activateSpan(...args),
         onMoveStart: (...args) => this.startMove(...args),
-        snapPoint: (view, x, y) => this.grid?.snapPoint(view, x, y) || { x, y, marks: [] },
+        // Snapping is what the grid bar is for opening (G): a click made
+        // before the user has ever touched it must land exactly where it
+        // fell, not be pulled to the nearest grid line or line of text
+        // without their knowing that feature exists.
+        snapPoint: (view, x, y) => (
+          this.grid?.isOpen ? this.grid.snapPoint(view, x, y) : { x, y, marks: [] }
+        ),
         measure: (dx, dy) => this.grid?.format(dx, dy) || '',
         onBlankClick: () => this.commitActive(),
         onMarquee: (...args) => this.handleMarquee(...args),
@@ -631,7 +637,7 @@ export class Editor {
     const settle = (someEvent) => {
       const at = view.toPagePoint(someEvent);
       const raw = { dx: at.x - start.x, dy: at.y - start.y };
-      if (!this.grid) return { ...raw, marks: [], at };
+      if (!this.grid?.isOpen) return { ...raw, marks: [], at };
       return {
         ...this.grid.snapDelta(view, box, raw.dx, raw.dy, {
           constrain: someEvent.shiftKey,
