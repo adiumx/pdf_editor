@@ -157,4 +157,96 @@ page.insert_text((72, 200), "Poliza numero 12345", fontname="S0", fontsize=11)
 page.insert_text((72, 230), "Segunda linea", fontname="S0", fontsize=11)
 doc.subset_fonts()
 doc.save(OUT / "simple_subset.pdf", garbage=3, deflate=True)
+# 12. A harder form: the field kinds and options real forms use that the basic one
+#     does not (comb cells, auto-sized multiline text, right alignment, list
+#     boxes, checkboxes and radios without any appearance).
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+
+
+def widget(kind, name, rect, **kw):
+    w = pymupdf.Widget()
+    w.field_type, w.field_name, w.rect = kind, name, pymupdf.Rect(*rect)
+    for key, value in kw.items():
+        setattr(w, key, value)
+    page.add_widget(w)
+    return w
+
+
+T, C, L, B, R = (pymupdf.PDF_WIDGET_TYPE_TEXT, pymupdf.PDF_WIDGET_TYPE_COMBOBOX, pymupdf.PDF_WIDGET_TYPE_LISTBOX,
+                 pymupdf.PDF_WIDGET_TYPE_CHECKBOX, pymupdf.PDF_WIDGET_TYPE_RADIOBUTTON)
+widget(T, "rfc", (72, 100, 272, 124), text_maxlen=13, field_flags=pymupdf.PDF_TX_FIELD_IS_COMB, text_fontsize=12)
+widget(T, "notas", (72, 140, 322, 240), field_flags=pymupdf.PDF_TX_FIELD_IS_MULTILINE, text_fontsize=0)
+widget(T, "importe", (72, 260, 222, 284), text_fontsize=11, text_format=0)
+page.widgets()  # make sure they exist
+widget(C, "estado", (72, 300, 222, 324), choice_values=["Jalisco", "Nuevo León", "Yucatán"], text_fontsize=11)
+widget(L, "ramos", (72, 340, 222, 420), choice_values=["Vida", "Gastos médicos", "Auto", "Hogar"],
+       field_flags=pymupdf.PDF_CH_FIELD_IS_MULTI_SELECT, text_fontsize=11)
+widget(B, "acepto", (72, 440, 90, 458))
+widget(R, "sexo_m", (72, 470, 90, 488), field_value="Off")
+widget(R, "sexo_f", (110, 470, 128, 488), field_value="Off")
+for w in page.widgets():
+    if w.field_name == "importe":
+        w.text_format = 0
+        w.update()
+page.insert_text((72, 96), "RFC", fontname="helv", fontsize=9)
+doc.save(OUT / "form_hard.pdf", garbage=0, deflate=False)
+# ... and the same with every checkbox/radio appearance removed.
+doc = pymupdf.open(OUT / "form_hard.pdf")
+for w in doc[0].widgets():
+    if w.field_type in (B, R):
+        doc.xref_set_key(w.xref, "AP", "null")
+doc.save(OUT / "form_hard_no_ap.pdf", garbage=0, deflate=False)
+
+# 11. Encrypted copies of the simple text page. Most producers write /Encrypt as
+#     an indirect object, which MuPDF does not; `indirect_encrypt` rewrites it
+#     that way with an incremental update. One file keeps MuPDF's inline form.
+import re
+
+
+def indirect_encrypt(data):
+    m = list(re.finditer(rb"trailer\s*<<(.*)>>\s*startxref\s*(\d+)\s*%%EOF", data, re.S))[-1]
+    body, prev = m.group(1), int(m.group(2))
+    start = body.index(b"/Encrypt") + len(b"/Encrypt")
+    while body[start:start + 1] in b" \n\r":
+        start += 1
+    depth, at = 0, start
+    while True:
+        if body[at:at + 2] == b"<<":
+            depth += 1
+            at += 2
+        elif body[at:at + 1] == b"<":  # a hex string
+            at = body.index(b">", at) + 1
+        elif body[at:at + 2] == b">>":
+            depth -= 1
+            at += 2
+            if depth == 0:
+                break
+        else:
+            at += 1
+    encrypt = body[start:at]
+    size = int(re.search(rb"/Size (\d+)", body).group(1))
+    root = re.search(rb"/Root \d+ \d+ R", body).group(0)
+    ident = re.search(rb"/ID\s*\[.*?\]", body, re.S).group(0)
+    out = data + b"\n"
+    offset = len(out)
+    out += b"%d 0 obj\n" % size + encrypt + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n%d 1\n%010d 00000 n \n" % (size, offset)
+    out += b"trailer\n<</Size %d%s%s/Encrypt %d 0 R/Prev %d>>\nstartxref\n%d\n%%%%EOF\n" % (
+        size + 1, root, ident, size, prev, xref)
+    return out
+
+
+for name, user, algo in [
+    ("encrypted_owner", "", pymupdf.PDF_ENCRYPT_AES_256),
+    ("encrypted_rc4", "", pymupdf.PDF_ENCRYPT_RC4_128),
+    ("encrypted_user", "secreto", pymupdf.PDF_ENCRYPT_AES_256),
+]:
+    doc = pymupdf.open(stream=(OUT / "standard.pdf").read_bytes(), filetype="pdf")
+    raw = doc.tobytes(encryption=algo, owner_pw="dueno", user_pw=user,
+                      permissions=pymupdf.PDF_PERM_PRINT, garbage=0, deflate=False)
+    (OUT / f"{name}.pdf").write_bytes(indirect_encrypt(raw))
+    if name == "encrypted_owner":
+        (OUT / "encrypted_inline.pdf").write_bytes(raw)
 print("fixtures in", OUT)

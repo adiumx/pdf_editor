@@ -285,4 +285,38 @@ void main() {
       }
     });
   });
+
+  group('protected documents', () {
+    test('ask for a password only when one is needed', () async {
+      final free = open('encrypted_owner');
+      addTearDown(free.close);
+      expect(free.page(0).runs.first.text, 'Hola mundo');
+
+      expect(() => open('encrypted_user'), throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'password_required')));
+      expect(() => PdfDocument.open(fixture('encrypted_user'), password: 'mal', libraryPath: libraryPath),
+          throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'wrong_password')));
+      final doc = PdfDocument.open(fixture('encrypted_user'), password: 'secreto', libraryPath: libraryPath);
+      addTearDown(doc.close);
+      expect(doc.pageCount, 1);
+
+      await expectLater(PdfSession.open(fixture('encrypted_user'), libraryPath: libraryPath),
+          throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'password_required')));
+      final session = await PdfSession.open(fixture('encrypted_user'), password: 'secreto', libraryPath: libraryPath);
+      await session.close();
+    });
+  });
+
+  group('harder forms', () {
+    test('list boxes take several rows, and fields carry their filling order', () {
+      final doc = PdfDocument.open(fixture('form_hard'), libraryPath: libraryPath);
+      addTearDown(doc.close);
+      final fields = doc.fields();
+      final ramos = fields.firstWhere((f) => f.name == 'ramos');
+      expect(ramos.multiSelect, isTrue);
+      doc.setField('ramos', 'Vida\nAuto');
+      expect(doc.fields().firstWhere((f) => f.name == 'ramos').value, 'Vida\nAuto');
+      final ordered = [...fields]..sort((a, b) => a.order.compareTo(b.order));
+      expect(ordered.take(3).map((f) => f.name), ['rfc', 'notas', 'importe']);
+    });
+  });
 }

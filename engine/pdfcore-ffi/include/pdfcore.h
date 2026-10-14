@@ -19,6 +19,10 @@ typedef struct PdfDoc PdfDoc;
 
 /* Opening, closing, freeing. */
 PdfDoc *pdfcore_open(const uint8_t *data, size_t len); /* NULL on failure */
+/* For a document protected by a password. On NULL, pdfcore_last_error_kind() is
+   "password_required" or "wrong_password" when that is the reason. */
+PdfDoc *pdfcore_open_with_password(const uint8_t *data, size_t len, const char *password);
+const char *pdfcore_last_error_kind(void);
 const char *pdfcore_last_error(void);                  /* valid until the next call */
 void pdfcore_close(PdfDoc *doc);
 void pdfcore_free_string(char *s);

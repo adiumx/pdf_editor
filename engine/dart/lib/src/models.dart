@@ -248,6 +248,8 @@ class FormField {
     required this.password,
     required this.comb,
     required this.editable,
+    required this.multiSelect,
+    required this.order,
     required this.maxLen,
     required this.options,
     required this.widgets,
@@ -268,6 +270,13 @@ class FormField {
   final bool password;
   final bool comb;
   final bool editable;
+
+  /// A list box that allows several rows; set its value with one option per line.
+  final bool multiSelect;
+
+  /// Position in the order a person fills the form (page, then top to bottom,
+  /// then left to right): sort by it for a "next field" button.
+  final int order;
   final int? maxLen;
   final List<FieldOption> options;
   final List<FieldWidget> widgets;
@@ -287,6 +296,8 @@ class FormField {
         password: j['password'] as bool,
         comb: j['comb'] as bool,
         editable: j['editable'] as bool,
+        multiSelect: j['multi_select'] as bool,
+        order: (j['order'] as num).toInt(),
         maxLen: j['max_len'] as int?,
         options: (j['options'] as List)
             .map((o) => FieldOption((o as Map)['export'] as String, o['label'] as String))

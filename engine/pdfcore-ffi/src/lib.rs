@@ -28,11 +28,12 @@ pub struct PdfDoc {
 }
 
 thread_local! {
-    static LAST_ERROR: RefCell<CString> = RefCell::new(CString::default());
+    static LAST_ERROR: RefCell<(CString, CString)> = RefCell::new((CString::default(), CString::default()));
 }
 
-fn remember(message: &str) {
-    LAST_ERROR.with(|e| *e.borrow_mut() = CString::new(message.replace('\0', " ")).unwrap_or_default());
+fn remember(message: &str, kind: &str) {
+    let clean = |text: &str| CString::new(text.replace('\0', " ")).unwrap_or_default();
+    LAST_ERROR.with(|e| *e.borrow_mut() = (clean(message), clean(kind)));
 }
 
 fn text(value: Value) -> *mut c_char {
@@ -42,6 +43,8 @@ fn text(value: Value) -> *mut c_char {
 fn failure(error: &Error) -> Value {
     let kind = match error {
         Error::Pdf(_) => "pdf",
+        Error::PasswordRequired => "password_required",
+        Error::WrongPassword => "wrong_password",
         Error::NoSuchPage(_) => "no_such_page",
         Error::MissingGlyphs(_) => "missing_glyphs",
         Error::NoSuchField(_) => "no_such_field",
@@ -88,28 +91,49 @@ fn bad_argument() -> *mut c_char {
 /// `data` must point to `len` readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn pdfcore_open(data: *const u8, len: usize) -> *mut PdfDoc {
+    open_with(data, len, "")
+}
+
+/// Like `pdfcore_open`, for a document protected by `password` (UTF-8, may be null).
+/// On a null return `pdfcore_last_error_kind` says whether the password was
+/// needed (`password_required`) or wrong (`wrong_password`).
+///
+/// # Safety
+/// `data` must point to `len` readable bytes; `password` is null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_open_with_password(data: *const u8, len: usize, password: *const c_char) -> *mut PdfDoc {
+    open_with(data, len, string_arg(password).unwrap_or(""))
+}
+
+unsafe fn open_with(data: *const u8, len: usize, password: &str) -> *mut PdfDoc {
     if data.is_null() {
-        remember("sin datos");
+        remember("sin datos", "bad_argument");
         return std::ptr::null_mut();
     }
     let bytes = std::slice::from_raw_parts(data, len);
-    match catch_unwind(|| Document::open(bytes)) {
+    match catch_unwind(|| Document::open_with_password(bytes, password)) {
         Ok(Ok(doc)) => Box::into_raw(Box::new(PdfDoc { doc, reading: HashMap::new() })),
         Ok(Err(e)) => {
-            remember(&e.to_string());
+            remember(&e.to_string(), failure(&e)["kind"].as_str().unwrap_or("pdf"));
             std::ptr::null_mut()
         }
         Err(_) => {
-            remember("fallo interno del motor al abrir el PDF");
+            remember("fallo interno del motor al abrir el PDF", "panic");
             std::ptr::null_mut()
         }
     }
 }
 
-/// Why the last `pdfcore_open` on this thread failed. Valid until the next call.
+/// Why the last open on this thread failed. Valid until the next call.
 #[no_mangle]
 pub extern "C" fn pdfcore_last_error() -> *const c_char {
-    LAST_ERROR.with(|e| e.borrow().as_ptr())
+    LAST_ERROR.with(|e| e.borrow().0.as_ptr())
+}
+
+/// The kind of that failure (`pdf`, `password_required`, `wrong_password`, `unsupported`, ...).
+#[no_mangle]
+pub extern "C" fn pdfcore_last_error_kind() -> *const c_char {
+    LAST_ERROR.with(|e| e.borrow().1.as_ptr())
 }
 
 /// # Safety
@@ -200,7 +224,7 @@ pub unsafe extern "C" fn pdfcore_fields(doc: *mut PdfDoc) -> *mut c_char {
                     "value": f.value, "checked": f.checked,
                     "read_only": f.read_only, "required": f.required,
                     "multiline": f.multiline, "password": f.password, "comb": f.comb,
-                    "editable": f.editable, "max_len": f.max_len,
+                    "editable": f.editable, "multi_select": f.multi_select, "order": f.order, "max_len": f.max_len,
                     "signed": f.signed, "signer": f.signer,
                     "options": f.options.iter().map(|(e, l)| json!({"export": e, "label": l})).collect::<Vec<_>>(),
                     "widgets": f.widgets.iter().map(|w| json!({
@@ -433,11 +457,11 @@ pub unsafe extern "C" fn pdfcore_save(doc: *mut PdfDoc, len: *mut usize) -> *mut
             ptr
         }
         Ok(Err(e)) => {
-            remember(&e.to_string());
+            remember(&e.to_string(), "pdf");
             std::ptr::null_mut()
         }
         Err(_) => {
-            remember("fallo interno del motor al guardar");
+            remember("fallo interno del motor al guardar", "panic");
             std::ptr::null_mut()
         }
     }

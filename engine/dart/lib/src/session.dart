@@ -26,11 +26,11 @@ class PdfSession {
   var _next = 0;
   var _closed = false;
 
-  static Future<PdfSession> open(Uint8List bytes, {String? libraryPath}) async {
+  static Future<PdfSession> open(Uint8List bytes, {String? password, String? libraryPath}) async {
     final inbox = ReceivePort();
     final isolate = await Isolate.spawn(
       _engineMain,
-      _Start(inbox.sendPort, TransferableTypedData.fromList([bytes]), libraryPath),
+      _Start(inbox.sendPort, TransferableTypedData.fromList([bytes]), libraryPath, password),
       errorsAreFatal: false,
     );
     final first = await inbox.first;
@@ -106,17 +106,19 @@ PdfException _exception(Map<Object?, Object?> m) =>
 Map<String, Object?> _describe(PdfException e) => {'kind': e.kind, 'error': e.message, 'chars': e.chars};
 
 class _Start {
-  _Start(this.reply, this.bytes, this.libraryPath);
+  _Start(this.reply, this.bytes, this.libraryPath, this.password);
   final SendPort reply;
   final TransferableTypedData bytes;
   final String? libraryPath;
+  final String? password;
 }
 
 /// Entry point of the engine's isolate.
 void _engineMain(_Start start) {
   final PdfDocument doc;
   try {
-    doc = PdfDocument.open(start.bytes.materialize().asUint8List(), libraryPath: start.libraryPath);
+    doc = PdfDocument.open(start.bytes.materialize().asUint8List(),
+        password: start.password, libraryPath: start.libraryPath);
   } on PdfException catch (e) {
     start.reply.send(_describe(e));
     return;

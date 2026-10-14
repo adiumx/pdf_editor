@@ -27,7 +27,10 @@ class _Native {
   _Native(DynamicLibrary lib)
       : open = lib.lookupFunction<_Handle Function(Pointer<Uint8>, Size), _Handle Function(Pointer<Uint8>, int)>(
             'pdfcore_open'),
+        openWithPassword = lib.lookupFunction<_Handle Function(Pointer<Uint8>, Size, _Str),
+            _Handle Function(Pointer<Uint8>, int, _Str)>('pdfcore_open_with_password'),
         lastError = lib.lookupFunction<_Str Function(), _Str Function()>('pdfcore_last_error'),
+        lastErrorKind = lib.lookupFunction<_Str Function(), _Str Function()>('pdfcore_last_error_kind'),
         close = lib.lookupFunction<Void Function(_Handle), void Function(_Handle)>('pdfcore_close'),
         closeAddress = lib.lookup<NativeFunction<Void Function(_Handle)>>('pdfcore_close'),
         freeString = lib.lookupFunction<Void Function(_Str), void Function(_Str)>('pdfcore_free_string'),
@@ -52,7 +55,9 @@ class _Native {
             Pointer<Uint8> Function(_Handle, Pointer<Size>)>('pdfcore_save');
 
   final _Handle Function(Pointer<Uint8>, int) open;
+  final _Handle Function(Pointer<Uint8>, int, _Str) openWithPassword;
   final _Str Function() lastError;
+  final _Str Function() lastErrorKind;
   final void Function(_Handle) close;
   final Pointer<NativeFunction<Void Function(_Handle)>> closeAddress;
   final void Function(_Str) freeString;
@@ -90,15 +95,26 @@ class PdfDocument implements Finalizable {
       _finalizers.putIfAbsent(n, () => NativeFinalizer(n.closeAddress.cast()));
 
   /// Parse [bytes] as a PDF. Throws [PdfException] if they are not one.
-  static PdfDocument open(Uint8List bytes, {DynamicLibrary? library, String? libraryPath}) {
+  ///
+  /// A document protected only against editing or printing opens as any other.
+  /// One that needs a password throws a [PdfException] of kind
+  /// `password_required`; call again with [password], and a wrong one throws
+  /// `wrong_password`. Saving writes the document without protection.
+  static PdfDocument open(Uint8List bytes, {String? password, DynamicLibrary? library, String? libraryPath}) {
     final lib = library ?? loadPdfCoreLibrary(path: libraryPath);
     final n = _natives[lib] ??= _Native(lib);
     final buffer = malloc<Uint8>(bytes.isEmpty ? 1 : bytes.length);
     try {
       buffer.asTypedList(bytes.length).setAll(0, bytes);
-      final handle = n.open(buffer, bytes.length);
+      final secret = (password ?? '').toNativeUtf8();
+      final Pointer<Void> handle;
+      try {
+        handle = n.openWithPassword(buffer, bytes.length, secret);
+      } finally {
+        malloc.free(secret);
+      }
       if (handle == nullptr) {
-        throw PdfException('pdf', n.lastError().toDartString());
+        throw PdfException(n.lastErrorKind().toDartString(), n.lastError().toDartString());
       }
       return PdfDocument._(n, handle);
     } finally {

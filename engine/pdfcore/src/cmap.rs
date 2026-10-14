@@ -21,6 +21,9 @@ impl CMap {
         let mut cmap = CMap::default();
         let mut tokens = Tokens::new(data);
         while let Some(token) = tokens.next() {
+            if cmap.to_text.len() >= MAX_ENTRIES {
+                break;
+            }
             match token {
                 Token::Word(w) if w == "begincodespacerange" => {
                     while let Some(Token::Hex(low)) = tokens.peek() {
@@ -48,7 +51,10 @@ impl CMap {
                         match target {
                             Token::Hex(dst) => {
                                 let base = utf16(&dst);
-                                for (i, code) in (low..=high.min(low + 0xFFFF)).enumerate() {
+                                for (i, code) in (low..=high.min(low.saturating_add(0xFFFF))).enumerate() {
+                                    if cmap.to_text.len() >= MAX_ENTRIES {
+                                        break;
+                                    }
                                     cmap.insert(code, bump(&base, i as u32));
                                 }
                             }
@@ -57,7 +63,7 @@ impl CMap {
                                 while let Some(Token::Hex(dst)) = tokens.peek() {
                                     tokens.next();
                                     cmap.insert(code, utf16(&dst));
-                                    code += 1;
+                                    code = code.saturating_add(1);
                                 }
                                 tokens.next(); // the closing bracket
                             }
@@ -72,6 +78,10 @@ impl CMap {
     }
 
     fn insert(&mut self, code: u32, text: String) {
+        // A 16-bit code space is the largest a font can use; more is a damaged file.
+        if self.to_text.len() >= MAX_ENTRIES && !self.to_text.contains_key(&code) {
+            return;
+        }
         // The first code to claim a text wins: a subset rarely has two, and
         // when it does, the lower is the one the original producer wrote.
         self.to_code.entry(text.clone()).or_insert(code);
@@ -92,11 +102,13 @@ impl CMap {
     }
 }
 
+const MAX_ENTRIES: usize = 0x1_0000;
+
 /// Add `by` to the last UTF-16 unit of a range's starting text.
 fn bump(base: &str, by: u32) -> String {
     let mut chars: Vec<char> = base.chars().collect();
     if let Some(last) = chars.last_mut() {
-        if let Some(next) = char::from_u32(*last as u32 + by) {
+        if let Some(next) = char::from_u32((*last as u32).saturating_add(by)) {
             *last = next;
         }
     }
@@ -154,6 +166,8 @@ impl<'a> Tokens<'a> {
                 }
                 b'<' if self.data.get(self.at + 1) == Some(&b'<') => self.at += 2,
                 b'>' if self.data.get(self.at + 1) == Some(&b'>') => self.at += 2,
+                // A stray `>` (damaged file) is skipped, or it would be an empty word forever.
+                b'>' | b')' | b'(' | b'{' | b'}' => self.at += 1,
                 b'<' => {
                     self.at += 1;
                     let mut digits = Vec::new();

@@ -63,9 +63,14 @@ pub struct Field {
     pub password: bool,
     pub comb: bool,
     pub editable: bool,
+    /// A list box that allows more than one row to be selected.
+    pub multi_select: bool,
     pub max_len: Option<usize>,
     /// `(export value, label)` of a choice field's options.
     pub options: Vec<(String, String)>,
+    /// Where this field comes in the order a person fills the form: by page,
+    /// then top to bottom, then left to right. Use it for a "next field" button.
+    pub order: usize,
     pub widgets: Vec<Widget>,
     /// A signature field that holds a completed signature. Editing the document
     /// invalidates it.
@@ -97,22 +102,6 @@ impl Document {
         resolve(&self.pdf, catalog.get(b"AcroForm").ok()?).as_dict().ok()
     }
 
-    fn mark_need_appearances(&mut self) -> Result<()> {
-        let root = self.pdf.trailer.get(b"Root")?.as_reference()?;
-        let held = self.pdf.get_dictionary(root)?.get(b"AcroForm")?.clone();
-        match held {
-            Object::Reference(id) => {
-                self.pdf.get_dictionary_mut(id)?.set("NeedAppearances", Object::Boolean(true));
-            }
-            _ => {
-                if let Ok(Object::Dictionary(form)) = self.pdf.get_dictionary_mut(root)?.get_mut(b"AcroForm") {
-                    form.set("NeedAppearances", Object::Boolean(true));
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Every terminal field in the document's form, in tree order.
     pub fn fields(&self) -> Vec<Field> {
         let mut out = Vec::new();
@@ -130,6 +119,33 @@ impl Document {
             .unwrap_or_default();
         for id in roots {
             self.collect_field(id, "", &defaults, &pages, &mut out, 0);
+        }
+        // Reading order: page, then rows top to bottom (tops within a few points
+        // share a row), then left to right. Rows are found by scanning tops in
+        // order, not by comparing pairs, which would not be a consistent order.
+        let place = |f: &Field| {
+            let w = f.widgets.first();
+            (w.and_then(|w| w.page).unwrap_or(usize::MAX), w.map_or(0.0, |w| w.display[1]), w.map_or(0.0, |w| w.display[0]))
+        };
+        let mut by_top: Vec<usize> = (0..out.len()).collect();
+        by_top.sort_by(|&a, &b| {
+            let ((pa, ya, _), (pb, yb, _)) = (place(&out[a]), place(&out[b]));
+            pa.cmp(&pb).then(ya.total_cmp(&yb))
+        });
+        let mut row_of = vec![0usize; out.len()];
+        let (mut row, mut row_page, mut row_top) = (0usize, usize::MAX, f32::MIN);
+        for &i in &by_top {
+            let (page, top, _) = place(&out[i]);
+            if page != row_page || top - row_top > 6.0 {
+                row += 1;
+                (row_page, row_top) = (page, top);
+            }
+            row_of[i] = row;
+        }
+        let mut ranked: Vec<usize> = (0..out.len()).collect();
+        ranked.sort_by(|&a, &b| row_of[a].cmp(&row_of[b]).then(place(&out[a]).2.total_cmp(&place(&out[b]).2)).then(a.cmp(&b)));
+        for (rank, index) in ranked.into_iter().enumerate() {
+            out[index].order = rank;
         }
         out
     }
@@ -237,7 +253,12 @@ impl Document {
         let value = match &here.v {
             Some(Object::String(b, _)) => text_string(b),
             Some(Object::Name(n)) => String::from_utf8_lossy(n).into_owned(),
-            Some(Object::Array(a)) => a.first().and_then(|o| o.as_str().ok()).map(text_string).unwrap_or_default(),
+            Some(Object::Array(a)) => a
+                .iter()
+                .filter_map(|o| resolve(&self.pdf, o).as_str().ok())
+                .map(text_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
             _ => String::new(),
         };
         // A signature's value is a dictionary; one with contents or a byte range is
@@ -261,8 +282,10 @@ impl Document {
             password: kind == FieldKind::Text && here.ff & (1 << 13) != 0,
             comb: kind == FieldKind::Text && here.ff & (1 << 24) != 0,
             editable: kind == FieldKind::Combo && here.ff & (1 << 18) != 0,
+            multi_select: kind == FieldKind::List && here.ff & (1 << 21) != 0,
             max_len: here.max_len,
             options: options_of(&self.pdf, here.opt.as_ref()),
+            order: 0,
             widgets,
             signed,
             signer,
@@ -390,7 +413,7 @@ impl Document {
                 }
                 self.fill_text(&field, value)
             }
-            FieldKind::Combo | FieldKind::List => {
+            FieldKind::Combo => {
                 let chosen = field.options.iter().find(|(e, l)| e == value || l == value).map(|(e, _)| e.clone());
                 let stored = match (chosen, field.editable) {
                     (Some(export), _) => export,
@@ -401,7 +424,27 @@ impl Document {
                 };
                 self.fill_text(&field, &stored)
             }
-            FieldKind::Checkbox | FieldKind::Radio => self.fill_button(&field, value),
+            FieldKind::List => {
+                // One row, or with several allowed, one per line of `value`.
+                let wanted: Vec<&str> = if value.is_empty() {
+                    Vec::new()
+                } else if field.multi_select {
+                    value.split('\n').collect()
+                } else {
+                    vec![value]
+                };
+                let mut chosen = Vec::new();
+                for item in wanted {
+                    let found = field.options.iter().position(|(e, l)| e == item || l == item);
+                    chosen.push(found.ok_or_else(|| Error::Rejected(format!("«{item}» no es una opción de «{name}»")))?);
+                }
+                self.fill_list(&field, &chosen)
+            }
+            FieldKind::Checkbox | FieldKind::Radio => {
+                self.ensure_button_appearances(&field)?;
+                let field = self.field(name).ok_or_else(|| Error::NoSuchField(name.to_string()))?;
+                self.fill_button(&field, value)
+            }
             FieldKind::PushButton => Err(Error::Unsupported(format!("«{name}» es un botón, no un campo que se rellene"))),
             FieldKind::Signature => Err(Error::Unsupported(format!("«{name}» es una firma: no se rellena como un texto"))),
         }
@@ -435,20 +478,46 @@ impl Document {
     fn fill_text(&mut self, field: &Field, value: &str) -> Result<()> {
         // Build every appearance first: a failure there leaves the field as it was.
         let mut appearances = Vec::new();
-        if field.kind != FieldKind::List {
-            for widget in &field.widgets {
-                appearances.push((widget.id, self.text_appearance(field, widget, value)?));
-            }
+        for widget in &field.widgets {
+            appearances.push((widget.id, self.text_appearance(field, widget, value, &[])?));
         }
         self.pdf.get_dictionary_mut(field.id)?.set("V", encode_text_string(value));
         for (widget, stream) in appearances {
-            let mut ap = Dictionary::new();
-            ap.set("N", Object::Reference(stream));
-            self.pdf.get_dictionary_mut(widget)?.set("AP", Object::Dictionary(ap));
+            self.set_normal_appearance(widget, stream)?;
         }
-        if field.kind == FieldKind::List {
-            // A list box's highlighted row is not drawn here; ask readers to.
-            self.mark_need_appearances()?;
+        Ok(())
+    }
+
+    fn set_normal_appearance(&mut self, widget: ObjectId, stream: ObjectId) -> Result<()> {
+        let mut ap = Dictionary::new();
+        ap.set("N", Object::Reference(stream));
+        self.pdf.get_dictionary_mut(widget)?.set("AP", Object::Dictionary(ap));
+        Ok(())
+    }
+
+    /// Select the rows at `chosen` (indexes into the options) of a list box.
+    fn fill_list(&mut self, field: &Field, chosen: &[usize]) -> Result<()> {
+        let mut sorted = chosen.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let exports: Vec<&String> = sorted.iter().map(|&i| &field.options[i].0).collect();
+        let mut appearances = Vec::new();
+        for widget in &field.widgets {
+            appearances.push((widget.id, self.text_appearance(field, widget, "", &sorted)?));
+        }
+        let (value, indexes) = match exports.as_slice() {
+            [] => (Object::Null, Object::Null),
+            [one] if !field.multi_select => (encode_text_string(one), Object::Array(vec![Object::Integer(sorted[0] as i64)])),
+            many => (
+                Object::Array(many.iter().map(|e| encode_text_string(e)).collect()),
+                Object::Array(sorted.iter().map(|&i| Object::Integer(i as i64)).collect()),
+            ),
+        };
+        let dict = self.pdf.get_dictionary_mut(field.id)?;
+        dict.set("V", value);
+        dict.set("I", indexes);
+        for (widget, stream) in appearances {
+            self.set_normal_appearance(widget, stream)?;
         }
         Ok(())
     }
@@ -473,11 +542,18 @@ impl Document {
         None
     }
 
-    fn text_appearance(&mut self, field: &Field, widget: &Widget, value: &str) -> Result<ObjectId> {
+    fn text_appearance(&mut self, field: &Field, widget: &Widget, value: &str, selected: &[usize]) -> Result<ObjectId> {
         let [x0, y0, x1, y1] = widget.rect;
         let (w, h) = (x1 - x0, y1 - y0);
         let da = parse_da(&field.da);
-        let shown: String = if field.password { "*".repeat(value.chars().count()) } else { value.to_string() };
+        let is_list = field.kind == FieldKind::List;
+        let shown: String = if is_list {
+            field.options.iter().map(|(_, label)| label.as_str()).collect::<Vec<_>>().join("\n")
+        } else if field.password {
+            "*".repeat(value.chars().count())
+        } else {
+            value.to_string()
+        };
 
         // The form's own font when it can draw every character; ours otherwise.
         let own = self
@@ -494,32 +570,56 @@ impl Document {
         let pad = 2.0f32;
         let (inner_w, inner_h) = ((w - 2.0 * pad).max(1.0), (h - 2.0 * pad).max(1.0));
         let line_box = (ascent - descent) / 1000.0;
+        let wrap = |size: f32| -> Vec<String> {
+            let mut lines: Vec<String> = Vec::new();
+            for paragraph in shown.split('\n').map(|l| l.trim_end_matches('\r')) {
+                if !field.multiline {
+                    lines.push(paragraph.to_string());
+                    continue;
+                }
+                let mut current = String::new();
+                for word in paragraph.split(' ') {
+                    let candidate = if current.is_empty() { word.to_string() } else { format!("{current} {word}") };
+                    if !current.is_empty() && measure(&candidate, size) > inner_w {
+                        lines.push(std::mem::take(&mut current));
+                        current = word.to_string();
+                    } else {
+                        current = candidate;
+                    }
+                }
+                lines.push(current);
+            }
+            lines
+        };
         let mut size = da.size;
         if size <= 0.0 {
-            size = if field.multiline { 12.0 } else { (inner_h / line_box).min(12.0) };
-            while !field.multiline && size > 4.0 && measure(&shown, size) > inner_w {
-                size *= 0.92;
-            }
-        }
-
-        let paragraphs: Vec<&str> = shown.split('\n').map(|l| l.trim_end_matches('\r')).collect();
-        let mut lines: Vec<String> = Vec::new();
-        for paragraph in paragraphs {
-            if !field.multiline {
-                lines.push(paragraph.to_string());
-                continue;
-            }
-            let mut current = String::new();
-            for word in paragraph.split(' ') {
-                let candidate = if current.is_empty() { word.to_string() } else { format!("{current} {word}") };
-                if !current.is_empty() && measure(&candidate, size) > inner_w {
-                    lines.push(std::mem::take(&mut current));
-                    current = word.to_string();
-                } else {
-                    current = candidate;
+            if field.multiline {
+                // Largest size up to 12 at which the wrapped text still fits the box.
+                size = 12.0;
+                while size > 6.0 && wrap(size).len() as f32 * size * 1.15 > inner_h {
+                    size *= 0.92;
+                }
+            } else if is_list {
+                size = 12.0;
+            } else {
+                size = (inner_h / line_box).min(12.0);
+                while size > 4.0 && measure(&shown, size) > inner_w {
+                    size *= 0.92;
                 }
             }
-            lines.push(current);
+        }
+        let mut lines = wrap(size);
+        // A list box scrolls: start at the first row that keeps the first selected one in view.
+        let lead_for_rows = size * 1.15;
+        let first_row = if is_list {
+            let visible = ((inner_h / lead_for_rows).floor() as usize).max(1);
+            selected.first().map_or(0, |&s| (s + 1).saturating_sub(visible))
+        } else {
+            0
+        };
+        let selected_in_view: Vec<usize> = selected.iter().filter_map(|s| s.checked_sub(first_row)).collect();
+        if first_row > 0 {
+            lines.drain(..first_row.min(lines.len()));
         }
 
         // Encode through whichever font was chosen.
@@ -556,7 +656,7 @@ impl Document {
                     2 => w - pad - width,
                     _ => pad,
                 };
-                let y = if field.multiline {
+                let y = if field.multiline || is_list {
                     h - pad - ascent / 1000.0 * size - lead * i as f32
                 } else {
                     (h - size * line_box) / 2.0 - descent / 1000.0 * size
@@ -596,7 +696,12 @@ impl Document {
                 }
             }
         }
-        content.push_str(&format!("{pad:.2} {pad:.2} {inner_w:.2} {inner_h:.2} re W n\nBT\n{}\n/{resource} {size:.2} Tf\n", da.color));
+        content.push_str(&format!("{pad:.2} {pad:.2} {inner_w:.2} {inner_h:.2} re W n\n"));
+        for row in selected_in_view {
+            let top = h - pad - lead * row as f32;
+            content.push_str(&format!("0.6 0.75 0.85 rg\n{pad:.2} {:.2} {inner_w:.2} {lead:.2} re f\n", top - lead));
+        }
+        content.push_str(&format!("BT\n{}\n/{resource} {size:.2} Tf\n", da.color));
         content.push_str(&body);
         content.push_str("ET\nQ\nEMC\n");
 
@@ -674,5 +779,107 @@ impl Document {
             .filter(|f| f.signed)
             .map(|f| Signature { field: f.name, signer: f.signer })
             .collect()
+    }
+}
+
+// -- buttons without an appearance --------------------------------------------
+
+impl Document {
+    /// Give every checkbox or radio widget that has no "on" appearance one, so it
+    /// can be ticked: forms made by some producers carry the fields but no
+    /// drawings for their states, and a reader then shows nothing when ticked.
+    ///
+    /// A checkbox's on state is called `Yes`; a radio button's is its `/Opt`
+    /// entry when there is one, or its position in the group.
+    fn ensure_button_appearances(&mut self, field: &Field) -> Result<()> {
+        for (index, widget) in field.widgets.iter().enumerate() {
+            if widget.on_state.is_some() {
+                continue;
+            }
+            let state = match field.kind {
+                FieldKind::Radio => field
+                    .options
+                    .get(index)
+                    .map(|(export, _)| export.clone())
+                    .unwrap_or_else(|| index.to_string()),
+                _ => "Yes".to_string(),
+            };
+            let [x0, y0, x1, y1] = widget.rect;
+            let (w, h) = (x1 - x0, y1 - y0);
+            let dict = self.pdf.get_dictionary(widget.id)?.clone();
+            let mk = dict.get(b"MK").ok().and_then(|o| resolve(&self.pdf, o).as_dict().ok()).cloned();
+            let mut frame = String::new();
+            if let Some(mk) = &mk {
+                if let Some(bg) = color_ops(&self.pdf, mk.get(b"BG").ok(), false) {
+                    frame.push_str(&format!("{bg}\n0 0 {w:.2} {h:.2} re f\n"));
+                }
+                if let Some(bc) = color_ops(&self.pdf, mk.get(b"BC").ok(), true) {
+                    frame.push_str(&format!("{bc}\n1 w\n0.5 0.5 {:.2} {:.2} re S\n", w - 1.0, h - 1.0));
+                }
+            }
+            let style = mk
+                .as_ref()
+                .and_then(|m| m.get(b"CA").ok())
+                .and_then(|o| resolve(&self.pdf, o).as_str().ok())
+                .and_then(|b| b.first().copied())
+                .map(|c| c as char)
+                .unwrap_or(if field.kind == FieldKind::Radio { 'l' } else { '4' });
+            let color = parse_da(&field.da).color;
+            let mark = mark_ops(style, w, h, &color);
+            let on = self.add_button_state(w, h, &format!("q\n{frame}Q\nq\n{mark}Q\n"));
+            let off = self.add_button_state(w, h, &format!("q\n{frame}Q\n"));
+            let mut states = Dictionary::new();
+            states.set(state.as_str(), Object::Reference(on));
+            states.set("Off", Object::Reference(off));
+            let mut ap = Dictionary::new();
+            ap.set("N", Object::Dictionary(states));
+            let target = self.pdf.get_dictionary_mut(widget.id)?;
+            target.set("AP", Object::Dictionary(ap));
+            target.set("AS", Object::Name(b"Off".to_vec()));
+        }
+        Ok(())
+    }
+
+    fn add_button_state(&mut self, w: f32, h: f32, content: &str) -> ObjectId {
+        let mut dict = Dictionary::new();
+        dict.set("Type", Object::Name(b"XObject".to_vec()));
+        dict.set("Subtype", Object::Name(b"Form".to_vec()));
+        dict.set("BBox", vec![Object::Real(0.0), Object::Real(0.0), Object::Real(w), Object::Real(h)]);
+        let mut stream = Stream::new(dict, content.as_bytes().to_vec());
+        let _ = stream.compress();
+        self.pdf.add_object(stream)
+    }
+}
+
+/// The drawing of a tick, cross, circle, square or diamond in a `w` by `h` box
+/// (the characters a widget's `/MK /CA` uses: `4` ✔, `8` ✘, `l` ●, `n` ■, `u` ◆).
+fn mark_ops(style: char, w: f32, h: f32, color: &str) -> String {
+    let s = w.min(h);
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    let stroke = color.replace(" rg", " RG").replace(" g", " G").replace(" k", " K");
+    match style {
+        '8' => format!(
+            "{stroke}\n{:.2} w 1 J\n{:.2} {:.2} m {:.2} {:.2} l S\n{:.2} {:.2} m {:.2} {:.2} l S\n",
+            s * 0.1, cx - s * 0.28, cy - s * 0.28, cx + s * 0.28, cy + s * 0.28, cx - s * 0.28, cy + s * 0.28, cx + s * 0.28, cy - s * 0.28
+        ),
+        'l' => {
+            let r = s * 0.27;
+            let k = r * 0.5523;
+            format!(
+                "{color}\n{:.2} {:.2} m {:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c {:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c {:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c {:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c f\n",
+                cx + r, cy, cx + r, cy + k, cx + k, cy + r, cx, cy + r, cx - k, cy + r, cx - r, cy + k, cx - r, cy,
+                cx - r, cy - k, cx - k, cy - r, cx, cy - r, cx + k, cy - r, cx + r, cy - k, cx + r, cy
+            )
+        }
+        'n' => format!("{color}\n{:.2} {:.2} {:.2} {:.2} re f\n", cx - s * 0.25, cy - s * 0.25, s * 0.5, s * 0.5),
+        'u' => format!(
+            "{color}\n{:.2} {:.2} m {:.2} {:.2} l {:.2} {:.2} l {:.2} {:.2} l f\n",
+            cx, cy + s * 0.32, cx + s * 0.32, cy, cx, cy - s * 0.32, cx - s * 0.32, cy
+        ),
+        // `4` and anything else: a tick.
+        _ => format!(
+            "{stroke}\n{:.2} w 1 J 1 j\n{:.2} {:.2} m {:.2} {:.2} l {:.2} {:.2} l S\n",
+            s * 0.12, cx - s * 0.3, cy + s * 0.02, cx - s * 0.08, cy - s * 0.24, cx + s * 0.32, cy + s * 0.3
+        ),
     }
 }

@@ -158,3 +158,88 @@ fn every_text_widget_filled_gets_an_appearance() {
         assert!(after.field(name).unwrap().widgets.iter().all(|w| w.has_appearance), "{name}");
     }
 }
+
+// -- harder forms ---------------------------------------------------------------
+
+fn open_fixture(name: &str) -> Document {
+    let path = format!("{}/tests/fixtures/{name}.pdf", env!("CARGO_MANIFEST_DIR"));
+    Document::open(&std::fs::read(path).expect("fixture")).expect("open")
+}
+
+#[test]
+fn a_checkbox_with_no_appearance_can_still_be_ticked() {
+    let mut doc = open_fixture("form_hard_no_ap");
+    assert!(doc.field("acepto").unwrap().widgets[0].on_state.is_none(), "el fixture no debería traer estados");
+    doc.set_field_value("acepto", "true").unwrap();
+    let mut again = reopen(&mut doc);
+    let field = again.field("acepto").unwrap();
+    assert!(field.checked);
+    assert_eq!(field.widgets[0].on_state.as_deref(), Some("Yes"));
+    assert!(field.widgets[0].has_appearance);
+    again.set_field_value("acepto", "false").unwrap();
+    assert!(!again.field("acepto").unwrap().checked);
+}
+
+#[test]
+fn a_list_box_takes_several_rows_when_the_form_allows_it() {
+    let mut doc = open_fixture("form_hard");
+    let field = doc.field("ramos").unwrap();
+    assert_eq!(field.kind, FieldKind::List);
+    assert!(field.multi_select);
+    doc.set_field_value("ramos", "Vida\nAuto").unwrap();
+    let mut again = reopen(&mut doc);
+    assert_eq!(again.field("ramos").unwrap().value, "Vida\nAuto");
+    assert!(again.field("ramos").unwrap().widgets[0].has_appearance);
+    // An unknown row is refused and nothing changes.
+    assert!(matches!(again.set_field_value("ramos", "Vida\nMarcianos"), Err(Error::Rejected(_))));
+    assert_eq!(again.field("ramos").unwrap().value, "Vida\nAuto");
+    // Clearing the selection is a value too.
+    again.set_field_value("ramos", "").unwrap();
+    assert_eq!(again.field("ramos").unwrap().value, "");
+}
+
+/// The font size an appearance stream draws its text at.
+fn drawn_size(doc: &mut Document, field: &str) -> f32 {
+    let saved = doc.save_to_bytes().unwrap();
+    let raw = lopdf::Document::load_mem(&saved).unwrap();
+    let again = Document::open(&saved).unwrap();
+    let widget = again.field(field).unwrap();
+    // The widget's /AP /N stream is the only form XObject with a /Tx marked-content block.
+    for (_, object) in raw.objects.iter() {
+        if let Ok(stream) = object.as_stream() {
+            let content = stream.decompressed_content().unwrap_or_else(|_| stream.content.clone());
+            let text = String::from_utf8_lossy(&content);
+            if text.starts_with("/Tx BMC") && stream.dict.get(b"BBox").is_ok() {
+                let bbox: Vec<f32> = stream.dict.get(b"BBox").unwrap().as_array().unwrap().iter().map(|n| n.as_float().unwrap_or(0.0)).collect();
+                let w = widget.widgets[0].rect;
+                if ((bbox[2] - (w[2] - w[0])).abs() < 0.01) && ((bbox[3] - (w[3] - w[1])).abs() < 0.01) {
+                    let tf = text.lines().find(|l| l.ends_with(" Tf")).expect("Tf");
+                    return tf.split_whitespace().rev().nth(1).unwrap().parse().unwrap();
+                }
+            }
+        }
+    }
+    panic!("no appearance found for {field}");
+}
+
+#[test]
+fn an_auto_sized_multiline_field_shrinks_its_text_to_fit() {
+    let mut doc = open_fixture("form_hard");
+    doc.set_field_value("notas", "Corto").unwrap();
+    assert_eq!(drawn_size(&mut doc, "notas"), 12.0);
+    let long = "palabra ".repeat(120);
+    doc.set_field_value("notas", long.trim()).unwrap();
+    let size = drawn_size(&mut doc, "notas");
+    assert!((6.0..12.0).contains(&size), "tamaño {size}");
+}
+
+#[test]
+fn fields_come_with_the_order_a_person_fills_them_in() {
+    let doc = open_fixture("form_hard");
+    let mut by_order: Vec<(usize, String)> = doc.fields().into_iter().map(|f| (f.order, f.name)).collect();
+    by_order.sort();
+    let names: Vec<&str> = by_order.iter().map(|(_, n)| n.as_str()).collect();
+    assert_eq!(&names[..6], ["rfc", "notas", "importe", "estado", "ramos", "acepto"]);
+    let orders: Vec<usize> = by_order.iter().map(|(o, _)| *o).collect();
+    assert_eq!(orders, (0..orders.len()).collect::<Vec<_>>());
+}

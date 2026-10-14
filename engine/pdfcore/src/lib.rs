@@ -35,6 +35,25 @@ pub struct PageSize {
     pub rotation: i32,
 }
 
+/// `/Encrypt` written as a dictionary in the trailer instead of a reference to
+/// an object (the PDF spec allows both, MuPDF writes the first); lopdf cannot
+/// read that form.
+fn has_inline_encrypt(bytes: &[u8]) -> bool {
+    let key = b"/Encrypt";
+    // The last one belongs to the newest trailer, the one that counts.
+    // (`/EncryptMetadata` starts the same way, so the name must end there.)
+    let Some(at) = (0..bytes.len().saturating_sub(key.len()))
+        .rev()
+        .find(|&at| &bytes[at..at + key.len()] == key && !bytes[at + key.len()].is_ascii_alphanumeric())
+    else {
+        return false;
+    };
+    bytes[at + key.len()..]
+        .iter()
+        .find(|b| !b.is_ascii_whitespace())
+        .is_some_and(|b| *b == b'<')
+}
+
 pub struct Document {
     pdf: Tracked,
     pages: Vec<ObjectId>,
@@ -50,8 +69,26 @@ pub struct Document {
 const UNDO_LIMIT: usize = 200;
 
 impl Document {
+    /// Open a document. One protected only against editing or printing (an
+    /// owner password, with an empty user password) opens like any other; one
+    /// that needs a password to be read fails with `Error::PasswordRequired`.
     pub fn open(bytes: &[u8]) -> Result<Document> {
-        let pdf = Raw::load_mem(bytes)?;
+        Self::open_with_password(bytes, "")
+    }
+
+    /// Open a document protected by `password`. Saving writes it unprotected.
+    pub fn open_with_password(bytes: &[u8], password: &str) -> Result<Document> {
+        let pdf = match Raw::load_mem_with_options(bytes, lopdf::LoadOptions::with_password(password)) {
+            Ok(pdf) => pdf,
+            Err(lopdf::Error::InvalidPassword) if has_inline_encrypt(bytes) => {
+                return Err(Error::Unsupported(
+                    "este PDF protegido guarda su cifrado de una forma que el motor no lee todavía".into(),
+                ))
+            }
+            Err(lopdf::Error::InvalidPassword) if password.is_empty() => return Err(Error::PasswordRequired),
+            Err(lopdf::Error::InvalidPassword) => return Err(Error::WrongPassword),
+            Err(other) => return Err(other.into()),
+        };
         let pages = pdf.get_pages().values().copied().collect();
         Ok(Document {
             pdf: Tracked::new(pdf),

@@ -18,6 +18,9 @@ lib.pdfcore_close.argtypes = [ctypes.c_void_p]
 lib.pdfcore_free_string.argtypes = [ctypes.c_void_p]
 lib.pdfcore_free_bytes.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
 lib.pdfcore_page_count.argtypes = [ctypes.c_void_p]
+lib.pdfcore_open_with_password.restype = ctypes.c_void_p
+lib.pdfcore_open_with_password.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p]
+lib.pdfcore_last_error_kind.restype = ctypes.c_char_p
 lib.pdfcore_save.restype = ctypes.c_void_p
 lib.pdfcore_save.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
 for name, args in {
@@ -242,3 +245,28 @@ def test_signatures_and_appearance_flags():
         assert d.signatures() == []
     finally:
         d.close()
+
+
+def test_a_protected_document_asks_for_its_password():
+    data = (FIXTURES / "encrypted_user.pdf").read_bytes()
+    assert not lib.pdfcore_open(data, len(data))
+    assert lib.pdfcore_last_error_kind() == b"password_required"
+    assert not lib.pdfcore_open_with_password(data, len(data), b"mal")
+    assert lib.pdfcore_last_error_kind() == b"wrong_password"
+    handle = lib.pdfcore_open_with_password(data, len(data), b"secreto")
+    assert handle and lib.pdfcore_page_count(handle) == 1
+    lib.pdfcore_close(handle)
+    # Only an owner password: opens with none.
+    free = Doc("encrypted_owner")
+    assert free.texts() == ["Hola mundo", "Negrita áéíóú ñ"]
+    free.close()
+
+
+def test_harder_forms_cross_the_boundary():
+    d = Doc("form_hard")
+    fields = d.fields()
+    assert fields["ramos"]["multi_select"] is True
+    assert [n for n, f in sorted(fields.items(), key=lambda kv: kv[1]["order"])][:3] == ["rfc", "notas", "importe"]
+    assert "error" not in d.field("ramos", "Vida\nAuto")
+    assert d.fields()["ramos"]["value"] == "Vida\nAuto"
+    d.close()
