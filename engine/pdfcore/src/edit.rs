@@ -1,84 +1,169 @@
 //! Changing what a page says without changing how it looks.
 //!
-//! An edit swaps the operand of the one drawing operation that showed a run,
-//! in place: the operation keeps its place in the stream, so every other run's
-//! `op_index` stays valid and several edits can be made one after another from
-//! a single reading of the page.
+//! An edit swaps the operand of the one drawing operation that showed a run.
+//! When the document's font can draw every character that is all it does, in
+//! place: the operation keeps its place in the stream, so every other run's
+//! `op_index` stays valid and several edits can follow from one reading.
+//!
+//! Characters the font cannot draw (a subset keeps only what its document
+//! used) can be drawn with a bundled font instead, see
+//! [`Document::replace_text_with_fallback`]. That inserts font switches, so the
+//! page has to be read again afterwards; [`Replaced::reread`] says so.
 
-use lopdf::content::Content;
-use lopdf::{Object, Stream, StringFormat};
+use lopdf::content::{Content, Operation};
+use lopdf::{Dictionary, Object, Stream};
 
 use crate::error::{Error, Result};
+use crate::fallback::{self, Embedded};
 use crate::text::{fonts_of, TextRun};
 use crate::Document;
 
-/// What an edit did to the line's length, so a caller can decide what to do
-/// about whatever follows on the same line.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// What an edit did, so a caller can decide what to do next.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Replaced {
     /// Advance of the old string, in points.
     pub old_width: f32,
-    /// Advance of the new one.
+    /// Advance of the new one, in points. A different length does not move
+    /// whatever follows on the same line.
     pub new_width: f32,
+    /// Characters drawn with the bundled font because the document's own could
+    /// not. Empty when the original font did it all; worth telling the person.
+    pub fallback_chars: Vec<char>,
+    /// The page's operations were renumbered: read its runs again before the
+    /// next edit on it.
+    pub reread: bool,
 }
 
 impl Document {
     /// Draw `new_text` where `run` was, with the font it already used.
     ///
-    /// Fails with [`Error::MissingGlyphs`] when the font — typically a subset
-    /// that kept only the glyphs the original text used — has no glyph for
-    /// some character, and with nothing changed.
+    /// Fails with [`Error::MissingGlyphs`] when that font has no glyph for some
+    /// character, and with nothing changed.
     pub fn replace_text(&mut self, page: usize, run: &TextRun, new_text: &str) -> Result<Replaced> {
+        self.replace(page, run, new_text, false)
+    }
+
+    /// As [`replace_text`](Self::replace_text), but characters the original
+    /// font lacks are drawn with a bundled font of the closest style. Fails
+    /// only for characters neither font has, again with nothing changed.
+    pub fn replace_text_with_fallback(&mut self, page: usize, run: &TextRun, new_text: &str) -> Result<Replaced> {
+        self.replace(page, run, new_text, true)
+    }
+
+    fn replace(&mut self, page: usize, run: &TextRun, new_text: &str, allow_fallback: bool) -> Result<Replaced> {
         if run.xobject.is_some() {
             return Err(Error::Unsupported(
                 "editar texto dentro de un formulario XObject aún no está soportado".into(),
             ));
         }
         let id = self.page_id(page)?;
-        let resources = self.resources(id);
-        let fonts = fonts_of(&self.pdf, &resources);
+        let fonts = fonts_of(&self.pdf, &self.resources(id));
         let font = fonts
             .get(&run.font)
             .ok_or_else(|| Error::Unsupported(format!("no se encontró la fuente {}", run.font)))?;
 
-        let bytes = font.encode(new_text).map_err(Error::MissingGlyphs)?;
+        let segments = font.segments(new_text);
+        let (key, data) = fallback::choose(&run.base_font);
+
+        // Everything that can fail is decided before anything is changed.
+        let unfit: Vec<char> = segments.iter().filter(|(_, b)| b.is_none()).flat_map(|(t, _)| t.chars()).collect();
+        if !unfit.is_empty() {
+            let lacking = if allow_fallback { fallback::lacks(data, &unfit.iter().collect::<String>()) } else { unfit.clone() };
+            if !lacking.is_empty() {
+                return Err(Error::MissingGlyphs(lacking));
+            }
+        }
+
         let old: Vec<u8> = run
             .glyphs
             .iter()
             .flat_map(|g| (0..font.code_bytes()).rev().map(move |b| (g.code >> (8 * b)) as u8))
             .collect();
-        let replaced = Replaced {
-            old_width: font.advance_of(&old, run.size),
-            new_width: font.advance_of(&bytes, run.size),
-        };
+        let old_width = font.advance_of(&old, run.size);
 
         let mut content = Content::decode(&self.pdf.get_page_content(id))?;
-        let op = content
+        let original = content
             .operations
-            .get_mut(run.op_index)
-            .ok_or_else(|| Error::Unsupported("el texto ya no está donde se leyó".into()))?;
-        let shown = Object::String(bytes, StringFormat::Hexadecimal);
-        match op.operator.as_str() {
-            "Tj" | "'" => op.operands = vec![shown],
-            "\"" => {
-                op.operands.truncate(2);
-                op.operands.push(shown);
-            }
-            // Kerning goes: the new string has different letters to kern.
-            "TJ" => op.operands = vec![Object::Array(vec![shown])],
-            other => return Err(Error::Unsupported(format!("operación inesperada: {other}"))),
+            .get(run.op_index)
+            .ok_or_else(|| Error::Unsupported("el texto ya no está donde se leyó".into()))?
+            .clone();
+        if !matches!(original.operator.as_str(), "Tj" | "TJ" | "'" | "\"") {
+            return Err(Error::Unsupported(format!("operación inesperada: {}", original.operator)));
         }
+
+        // Build the replacement operations.
+        let mut new_width = 0.0;
+        let mut ops: Vec<Operation> = Vec::new();
+        let mut in_fallback = false;
+        let mut used_fallback: Vec<char> = Vec::new();
+        let switch = |name: &str, size: f32| {
+            Operation::new("Tf", vec![Object::Name(name.as_bytes().to_vec()), Object::Real(size)])
+        };
+        let first_shows = |ops: &Vec<Operation>| !ops.iter().any(|o| o.operator != "Tf");
+
+        for (piece, bytes) in &segments {
+            let (shown, wants_fallback) = match bytes {
+                Some(b) => {
+                    new_width += font.advance_of(b, run.size);
+                    (Embedded::hex(b.clone()), false)
+                }
+                None => {
+                    if !self.fallbacks.contains_key(key) {
+                        let embedded = Embedded::embed(&mut self.pdf, key, data)?;
+                        self.fallbacks.insert(key, embedded);
+                    }
+                    let embedded = self.fallbacks.get_mut(key).expect("just inserted");
+                    let (b, advance) = embedded.write(&mut self.pdf, piece, run.size)?;
+                    new_width += advance;
+                    used_fallback.extend(piece.chars());
+                    (Embedded::hex(b), true)
+                }
+            };
+            if wants_fallback != in_fallback {
+                let name = if wants_fallback { self.fallbacks[key].resource.clone() } else { run.font.clone() };
+                ops.push(switch(&name, run.tf_size));
+                in_fallback = wants_fallback;
+            }
+            ops.push(if first_shows(&ops) { show_like(&original, shown) } else { Operation::new("Tj", vec![shown]) });
+        }
+        if in_fallback {
+            ops.push(switch(&run.font, run.tf_size)); // what follows expects the original font
+        }
+        if ops.iter().all(|o| o.operator == "Tf") {
+            return Err(Error::Unsupported("el texto nuevo está vacío".into()));
+        }
+
+        let reread = ops.len() != 1;
+        if !used_fallback.is_empty() {
+            let resource = self.fallbacks[key].resource.clone();
+            let font_id = self.fallbacks[key].font_id;
+            self.register_font(id, &resource, font_id)?;
+        }
+        content.operations.splice(run.op_index..=run.op_index, ops);
         self.set_page_content(id, &content)?;
-        Ok(replaced)
+        Ok(Replaced { old_width, new_width, fallback_chars: used_fallback, reread })
+    }
+
+    /// Make a font usable by name in one page's content.
+    fn register_font(&mut self, page: lopdf::ObjectId, resource: &str, font: lopdf::ObjectId) -> Result<()> {
+        let mut resources = self.resources(page);
+        let mut fonts = resources
+            .get(b"Font")
+            .ok()
+            .map(|o| crate::font::resolve(&self.pdf, o))
+            .and_then(|o| o.as_dict().ok().cloned())
+            .unwrap_or_default();
+        fonts.set(resource, Object::Reference(font));
+        resources.set("Font", Object::Dictionary(fonts));
+        self.pdf.get_dictionary_mut(page)?.set("Resources", Object::Dictionary(resources));
+        Ok(())
     }
 
     fn set_page_content(&mut self, page: lopdf::ObjectId, content: &Content) -> Result<()> {
-        let mut stream = Stream::new(lopdf::Dictionary::new(), content.encode()?);
+        let mut stream = Stream::new(Dictionary::new(), content.encode()?);
         let _ = stream.compress();
         let stream_id = self.pdf.add_object(stream);
-        self.pdf
-            .get_dictionary_mut(page)?
-            .set("Contents", Object::Reference(stream_id));
+        self.pdf.get_dictionary_mut(page)?.set("Contents", Object::Reference(stream_id));
         Ok(())
     }
 
@@ -88,5 +173,19 @@ impl Document {
         let mut out = Vec::new();
         self.pdf.save_to(&mut out).map_err(lopdf::Error::from)?;
         Ok(out)
+    }
+}
+
+/// The operation that shows `string` the way `original` did (`'` and `"` also
+/// start a new line; `TJ` loses its kerning, which belonged to the old letters).
+fn show_like(original: &Operation, string: Object) -> Operation {
+    match original.operator.as_str() {
+        "TJ" => Operation::new("TJ", vec![Object::Array(vec![string])]),
+        "\"" => {
+            let mut operands: Vec<Object> = original.operands.iter().take(2).cloned().collect();
+            operands.push(string);
+            Operation::new("\"", operands)
+        }
+        other => Operation::new(other, vec![string]),
     }
 }

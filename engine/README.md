@@ -28,7 +28,7 @@ como referencia y como oráculo de pruebas.
 |---|---|
 | 1. Leer: páginas, tamaño y rotación, tramos de texto con fuente, tamaño y caja | **hecho** |
 | 2. Reemplazar un tramo conservando la fuente, con la que ya trae el PDF | **hecho** |
-| 2b. Carácter que el subconjunto no trae: incrustar una fuente de respaldo (Liberation Sans, OFL) y avisar. Hoy se rechaza con `MissingGlyphs` y no cambia nada | siguiente |
+| 2b. Carácter que el subconjunto no trae: se dibuja con una fuente de respaldo incluida (Liberation Sans/Serif, OFL) y se avisa cuáles | **hecho** |
 | 3. Añadir texto nuevo; campos de formulario (AcroForm) con su apariencia | |
 | 4. Guardar, y modelo de deshacer | |
 | 5. Capa C ABI + plugin Flutter (`flutter_rust_bridge` o `dart:ffi`) | |
@@ -70,6 +70,28 @@ descubrió una prueba que decía que sí existían `X` y `Q`; ahora fallan limpi
 Comprobado en un formulario real de seguros: se cambió una línea en Arial
 (Type0/Identity-H, subconjunto), MuPDF abre el resultado, la dibuja con la
 misma fuente en el mismo sitio, y es la única diferencia de texto de la página.
+
+### Fuente de respaldo (hito 2b)
+
+`replace_text` es estricto: si la fuente del PDF no trae un carácter, falla
+con `MissingGlyphs` y no cambia nada. `replace_text_with_fallback` dibuja sólo
+esos caracteres con una fuente incluida del estilo más cercano (serif o sans,
+negrita, cursiva) y el resto con la original. Liberation es métricamente
+compatible con Arial/Helvetica y Times, así que la letra cambiada ocupa lo que
+ocuparía la original. El color y el tamaño no cambian: son estado gráfico, no de
+la fuente.
+
+- Devuelve en `Replaced` qué caracteres usaron respaldo (`fallback_chars`) para
+  poder decírselo a la persona, y `reread: true` si hubo que insertar cambios de
+  fuente: la página se vuelve a leer antes de la siguiente edición.
+- La fuente se incrusta **una vez por documento y estilo**, comprimida (~200 KB);
+  sólo crece su tabla de anchuras y el mapa de texto, así que el texto se puede
+  buscar y copiar.
+- Si ni el respaldo trae el carácter (por ejemplo CJK) falla igual con
+  `MissingGlyphs` y sin cambios. Pendiente: Liberation Mono y subconjuntar la
+  fuente incrustada para que pese menos.
+- Licencia: las fuentes son SIL OFL 1.1 (`pdfcore/fonts/LICENSE-Liberation-OFL.txt`),
+  que permite incluirlas e incrustarlas en un producto de pago.
 
 ### Huecos conocidos (aún no implementados)
 

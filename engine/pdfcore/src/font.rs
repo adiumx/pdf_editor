@@ -264,27 +264,47 @@ impl Font {
         }
     }
 
-    /// The bytes that make this font draw `text`, or the characters it has no
-    /// glyph for. A ligature the font keeps as one glyph ("fi") is found as
-    /// such: the longest run of characters with a code wins.
-    pub fn encode(&self, text: &str) -> std::result::Result<Vec<u8>, Vec<char>> {
+    /// Split `text` into stretches this font can draw (`Some(bytes)`) and
+    /// stretches it cannot (`None`). A ligature the font keeps as one glyph
+    /// ("fi") is found as such: the longest run of characters with a code wins.
+    pub fn segments(&self, text: &str) -> Vec<(String, Option<Vec<u8>>)> {
         let chars: Vec<char> = text.chars().collect();
-        let (mut bytes, mut missing, mut i) = (Vec::new(), Vec::new(), 0);
+        let mut out: Vec<(String, Option<Vec<u8>>)> = Vec::new();
+        let mut i = 0;
         while i < chars.len() {
             let found = (1..=chars.len().min(i + 4) - i).rev().find_map(|len| {
                 let piece: String = chars[i..i + len].iter().collect();
                 self.code_for(&piece).map(|code| (code, len))
             });
-            match found {
+            let (piece, bytes, len) = match found {
                 Some((code, len)) => {
                     let width = self.code_bytes.max(1);
-                    bytes.extend((0..width).rev().map(|b| (code >> (8 * b)) as u8));
-                    i += len;
+                    let bytes: Vec<u8> = (0..width).rev().map(|b| (code >> (8 * b)) as u8).collect();
+                    (chars[i..i + len].iter().collect::<String>(), Some(bytes), len)
                 }
-                None => {
-                    missing.push(chars[i]);
-                    i += 1;
+                None => (chars[i].to_string(), None, 1),
+            };
+            match (out.last_mut(), &bytes) {
+                (Some((text, Some(have))), Some(more)) => {
+                    text.push_str(&piece);
+                    have.extend_from_slice(more);
                 }
+                (Some((text, None)), None) => text.push_str(&piece),
+                _ => out.push((piece, bytes)),
+            }
+            i += len;
+        }
+        out
+    }
+
+    /// The bytes that make this font draw `text`, or the characters it has no
+    /// glyph for.
+    pub fn encode(&self, text: &str) -> std::result::Result<Vec<u8>, Vec<char>> {
+        let (mut bytes, mut missing) = (Vec::new(), Vec::new());
+        for (piece, encoded) in self.segments(text) {
+            match encoded {
+                Some(b) => bytes.extend(b),
+                None => missing.extend(piece.chars()),
             }
         }
         if missing.is_empty() { Ok(bytes) } else { Err(missing) }

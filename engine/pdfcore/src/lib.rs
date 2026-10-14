@@ -6,6 +6,7 @@
 mod cmap;
 mod edit;
 mod error;
+mod fallback;
 mod font;
 mod standard_widths;
 mod text;
@@ -28,13 +29,15 @@ pub struct PageSize {
 pub struct Document {
     pdf: Pdf,
     pages: Vec<ObjectId>,
+    /// Fallback fonts already written into this document, by style.
+    fallbacks: std::collections::HashMap<&'static str, fallback::Embedded>,
 }
 
 impl Document {
     pub fn open(bytes: &[u8]) -> Result<Document> {
         let pdf = Pdf::load_mem(bytes)?;
         let pages = pdf.get_pages().values().copied().collect();
-        Ok(Document { pdf, pages })
+        Ok(Document { pdf, pages, fallbacks: Default::default() })
     }
 
     pub fn page_count(&self) -> usize {

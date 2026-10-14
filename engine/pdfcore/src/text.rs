@@ -40,6 +40,8 @@ pub struct TextRun {
     pub text: String,
     /// Name the page's resources give the font (`F1`, `TT0`...).
     pub font: String,
+    /// The size operand of the `Tf` that selected the font, before any matrix.
+    pub tf_size: f32,
     pub base_font: String,
     /// Size on the page, in points, after every scaling in between.
     pub size: f32,
@@ -304,6 +306,7 @@ fn show(
     runs.push(TextRun {
         text,
         font: name.to_string(),
+        tf_size: state.size,
         base_font: font.base_font.clone(),
         size,
         origin: (ox, oy),
