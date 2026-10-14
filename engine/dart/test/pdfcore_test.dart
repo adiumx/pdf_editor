@@ -352,4 +352,37 @@ void main() {
       }
     });
   });
+
+  group('pages', () {
+    test('rotate, move, delete, bring in and extract', () async {
+      final doc = PdfDocument.open(fixture('multi'), libraryPath: libraryPath);
+      addTearDown(doc.close);
+      doc.rotatePage(0, 90);
+      expect(doc.page(0).rotation, 90);
+      doc.movePage(0, 2);
+      expect(doc.lines(2).any((l) => l.text.startsWith('Contrato 1')), isTrue);
+      doc.deletePage(0);
+      expect(doc.pageCount, 2);
+      expect(doc.insertPages(fixture('form'), at: 0), 1);
+      expect(doc.pageCount, 3);
+      expect(doc.fields().any((f) => f.name == 'nombre'), isTrue);
+      final part = PdfDocument.open(doc.extractPages([2, 1]), libraryPath: libraryPath);
+      addTearDown(part.close);
+      expect(part.pageCount, 2);
+      expect(() => doc.extractPages([99]), throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'no_such_page')));
+      expect(() => doc.deletePage(99), throwsA(isA<PdfException>()));
+
+      final session = await PdfSession.open(fixture('multi'), libraryPath: libraryPath);
+      try {
+        await session.deletePage(1);
+        expect(await session.pageCount(), 2);
+        expect(await session.insertPages(fixture('standard'), pages: [0]), 1);
+        expect(await session.pageCount(), 3);
+        final out = await session.extractPages([0]);
+        expect(out, isNotEmpty);
+      } finally {
+        await session.close();
+      }
+    });
+  });
 }

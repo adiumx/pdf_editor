@@ -51,6 +51,13 @@ class _Native {
         find = lib.lookupFunction<_Str Function(_Handle, _Str, Int), _Str Function(_Handle, _Str, int)>('pdfcore_find'),
         replaceAll = lib.lookupFunction<_Str Function(_Handle, _Str, _Str, Int, Int, Int),
             _Str Function(_Handle, _Str, _Str, int, int, int)>('pdfcore_replace_all'),
+        rotatePage = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_rotate_page'),
+        deletePage = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_delete_page'),
+        movePage = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_move_page'),
+        insertPages = lib.lookupFunction<_Str Function(_Handle, Pointer<Uint8>, Size, _Str, Pointer<Int>, Size, Int),
+            _Str Function(_Handle, Pointer<Uint8>, int, _Str, Pointer<Int>, int, int)>('pdfcore_insert_pages'),
+        extractPages = lib.lookupFunction<Pointer<Uint8> Function(_Handle, Pointer<Int>, Size, Pointer<Size>),
+            Pointer<Uint8> Function(_Handle, Pointer<Int>, int, Pointer<Size>)>('pdfcore_extract_pages'),
         signatures = lib.lookupFunction<_Str Function(_Handle), _Str Function(_Handle)>('pdfcore_signatures'),
         addText = lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>(
             'pdfcore_add_text'),
@@ -78,6 +85,11 @@ class _Native {
   final _Str Function(_Handle, int) lines;
   final _Str Function(_Handle, _Str, int) find;
   final _Str Function(_Handle, _Str, _Str, int, int, int) replaceAll;
+  final _Str Function(_Handle, int, int) rotatePage;
+  final _Str Function(_Handle, int) deletePage;
+  final _Str Function(_Handle, int, int) movePage;
+  final _Str Function(_Handle, Pointer<Uint8>, int, _Str, Pointer<Int>, int, int) insertPages;
+  final Pointer<Uint8> Function(_Handle, Pointer<Int>, int, Pointer<Size>) extractPages;
   final _Str Function(_Handle) signatures;
   final _Str Function(_Handle, int, _Str) addText;
   final _Str Function(_Handle, _Str, _Str, int) setField;
@@ -246,6 +258,59 @@ class PdfDocument implements Finalizable {
   History get history {
     final j = _json(_n.history(_live));
     return History(j['can_undo'] as bool, j['can_redo'] as bool);
+  }
+
+  /// Turn a page by [degrees] (a multiple of 90, clockwise as a reader shows it).
+  void rotatePage(int page, int degrees) => _json(_n.rotatePage(_live, page, degrees));
+
+  /// Remove a page and the form fields only it held. A document keeps one page
+  /// at least. Invalidates every run id.
+  void deletePage(int page) => _json(_n.deletePage(_live, page));
+
+  /// Move the page at [from] so it ends up at index [to].
+  void movePage(int from, int to) => _json(_n.movePage(_live, from, to));
+
+  /// Bring pages of another PDF in before page [at] ([pageCount] appends), all
+  /// of them or the [pages] listed. [password] is for a protected source.
+  /// Returns how many came in. Field names are not made unique.
+  int insertPages(Uint8List source, {int? at, List<int>? pages, String? password}) {
+    final buffer = malloc<Uint8>(source.isEmpty ? 1 : source.length);
+    final list = pages == null ? nullptr.cast<Int>() : malloc<Int>(pages.isEmpty ? 1 : pages.length);
+    try {
+      buffer.asTypedList(source.length).setAll(0, source);
+      if (pages != null) {
+        for (var i = 0; i < pages.length; i++) {
+          list[i] = pages[i];
+        }
+      }
+      final result = _withString(password ?? '', (secret) => _json(
+          _n.insertPages(_live, buffer, source.length, secret, list, pages?.length ?? 0, at ?? pageCount)));
+      return (result['added'] as num).toInt();
+    } finally {
+      malloc.free(buffer);
+      if (pages != null) malloc.free(list);
+    }
+  }
+
+  /// A new PDF with only [pages], in that order.
+  Uint8List extractPages(List<int> pages) {
+    final list = malloc<Int>(pages.isEmpty ? 1 : pages.length);
+    final length = calloc<Size>();
+    try {
+      for (var i = 0; i < pages.length; i++) {
+        list[i] = pages[i];
+      }
+      final data = _n.extractPages(_live, list, pages.length, length);
+      if (data == nullptr) throw PdfException(_n.lastErrorKind().toDartString(), _n.lastError().toDartString());
+      try {
+        return Uint8List.fromList(data.asTypedList(length.value));
+      } finally {
+        _n.freeBytes(data, length.value);
+      }
+    } finally {
+      malloc.free(list);
+      calloc.free(length);
+    }
   }
 
   /// The document as PDF bytes (a copy: safe to keep and write to a file).

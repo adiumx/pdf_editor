@@ -529,6 +529,123 @@ pub unsafe extern "C" fn pdfcore_history(doc: *mut PdfDoc) -> *mut c_char {
     guard(|| json!({ "can_undo": d.doc.can_undo(), "can_redo": d.doc.can_redo() }))
 }
 
+// -- pages ------------------------------------------------------------------
+
+fn page_edit(d: &mut PdfDoc, body: impl FnOnce(&mut Document) -> pdfcore::Result<()>) -> Value {
+    match body(&mut d.doc) {
+        Ok(()) => {
+            edited(d);
+            json!({ "ok": true, "pages": d.doc.page_count() })
+        }
+        Err(e) => failure(&e),
+    }
+}
+
+/// Turn a page by `degrees` (a multiple of 90, clockwise).
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_rotate_page(doc: *mut PdfDoc, page: c_int, degrees: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| page_edit(d, |doc| doc.rotate_page(page.max(0) as usize, degrees)))
+}
+
+/// Remove a page (and the fields only it held). Invalidates every run id.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_delete_page(doc: *mut PdfDoc, page: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| page_edit(d, |doc| doc.delete_page(page.max(0) as usize)))
+}
+
+/// Move the page at `from` so it ends up at index `to`.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_move_page(doc: *mut PdfDoc, from: c_int, to: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| page_edit(d, |doc| doc.move_page(from.max(0) as usize, to.max(0) as usize)))
+}
+
+/// Bring pages of another PDF in before page `at` (the page count appends):
+/// `{"ok":true,"added":n,"pages":total}`. `pages` lists which pages of the other
+/// document (`n_pages` of them; null for all). `password` may be null.
+///
+/// # Safety
+/// `doc` must be a live handle; `data` must point to `len` bytes; `pages`, when
+/// not null, to `n_pages` ints; `password`, when not null, to a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_insert_pages(
+    doc: *mut PdfDoc,
+    data: *const u8,
+    len: usize,
+    password: *const c_char,
+    pages: *const c_int,
+    n_pages: usize,
+    at: c_int,
+) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    if data.is_null() {
+        return bad_argument();
+    }
+    let source = std::slice::from_raw_parts(data, len);
+    let password = string_arg(password).unwrap_or("");
+    let chosen: Option<Vec<usize>> = if pages.is_null() {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(pages, n_pages).iter().map(|p| (*p).max(0) as usize).collect())
+    };
+    guard(|| match d.doc.insert_pages(source, password, chosen.as_deref(), at.max(0) as usize) {
+        Ok(added) => {
+            edited(d);
+            json!({ "ok": true, "added": added, "pages": d.doc.page_count() })
+        }
+        Err(e) => failure(&e),
+    })
+}
+
+/// A new PDF with only the `n_pages` pages listed, in that order. Returns a
+/// buffer of `*len` bytes to free with `pdfcore_free_bytes`, or null with the
+/// reason in `pdfcore_last_error` / `pdfcore_last_error_kind`.
+///
+/// # Safety
+/// `doc` must be a live handle; `pages` must point to `n_pages` ints; `len` a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_extract_pages(doc: *mut PdfDoc, pages: *const c_int, n_pages: usize, len: *mut usize) -> *mut u8 {
+    if len.is_null() {
+        return std::ptr::null_mut();
+    }
+    *len = 0;
+    let Some(d) = handle(doc) else { return std::ptr::null_mut() };
+    if pages.is_null() {
+        remember("argumento no válido", "bad_argument");
+        return std::ptr::null_mut();
+    }
+    let chosen: Vec<usize> = std::slice::from_raw_parts(pages, n_pages).iter().map(|p| (*p).max(0) as usize).collect();
+    match catch_unwind(AssertUnwindSafe(|| d.doc.extract_pages(&chosen))) {
+        Ok(Ok(bytes)) => {
+            let mut bytes = bytes.into_boxed_slice().into_vec();
+            bytes.shrink_to_fit();
+            *len = bytes.len();
+            let ptr = bytes.as_mut_ptr();
+            std::mem::forget(bytes);
+            ptr
+        }
+        Ok(Err(e)) => {
+            remember(&e.to_string(), failure(&e)["kind"].as_str().unwrap_or("pdf"));
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            remember("fallo interno del motor", "panic");
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// The document as PDF bytes. On success returns a buffer of `*len` bytes the
 /// caller frees with `pdfcore_free_bytes`; on failure returns null and `*len` is 0.
 ///

@@ -96,7 +96,7 @@ struct Inherited {
 
 impl Document {
     /// The form's dictionary, whether the catalog holds it directly or points to it.
-    fn acroform_dict(&self) -> Option<&Dictionary> {
+    pub(crate) fn acroform_dict(&self) -> Option<&Dictionary> {
         let root = self.pdf.trailer.get(b"Root").ok()?.as_reference().ok()?;
         let catalog = self.pdf.get_dictionary(root).ok()?;
         resolve(&self.pdf, catalog.get(b"AcroForm").ok()?).as_dict().ok()

@@ -125,3 +125,24 @@ fn a_replacement_that_contains_the_search_text_terminates() {
     assert_eq!(done.replaced, 9);
     assert!(all_text(&doc).iter().any(|l| l == "Contrato 3 de la aseguradora Prudential Financial"));
 }
+
+#[test]
+fn text_turned_upright_by_the_page_rotation_reads_as_lines() {
+    let doc = open("turned_upright");
+    let lines = doc.text_lines(0).unwrap();
+    let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+    // As a reader shows the page, "dos" is the upper line.
+    assert_eq!(texts, ["Linea girada dos", "Linea girada uno"]);
+    assert!(lines.iter().all(|l| l.display[2] - l.display[0] > l.display[3] - l.display[1]));
+    assert_eq!(doc.find_text("girada uno", SearchOptions::default()).len(), 1);
+}
+
+#[test]
+fn sideways_text_is_not_glued_into_lines() {
+    let doc = open("page_rotated");
+    let lines = doc.text_lines(0).unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].text, "Pagina girada");
+    // The box still covers the whole string.
+    assert!(lines[0].display[3] - lines[0].display[1] > lines[0].display[2] - lines[0].display[0]);
+}

@@ -82,6 +82,18 @@ class PdfSession {
           {SearchOptions options = const SearchOptions(), bool allowFallback = false, Reflow reflow = Reflow.following}) =>
       _call<ReplaceAllResult>('replaceAll', [find, replacement, options, allowFallback, reflow]);
 
+  Future<void> rotatePage(int page, int degrees) => _call<void>('rotatePage', [page, degrees]);
+  Future<void> deletePage(int page) => _call<void>('deletePage', [page]);
+  Future<void> movePage(int from, int to) => _call<void>('movePage', [from, to]);
+
+  Future<int> insertPages(Uint8List source, {int? at, List<int>? pages, String? password}) =>
+      _call<int>('insertPages', [TransferableTypedData.fromList([source]), at, pages, password]);
+
+  Future<Uint8List> extractPages(List<int> pages) async {
+    final data = await _call<TransferableTypedData>('extractPages', [pages]);
+    return data.materialize().asUint8List();
+  }
+
   Future<List<PdfSignature>> signatures() => _call<List<PdfSignature>>('signatures');
 
   Future<AddedText> addText(int page, NewText text) => _call<AddedText>('addText', [page, text]);
@@ -178,6 +190,20 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
     case 'replaceAll':
       return doc.replaceAll(a[0] as String, a[1] as String,
           options: a[2] as SearchOptions, allowFallback: a[3] as bool, reflow: a[4] as Reflow);
+    case 'rotatePage':
+      doc.rotatePage(a[0] as int, a[1] as int);
+      return null;
+    case 'deletePage':
+      doc.deletePage(a[0] as int);
+      return null;
+    case 'movePage':
+      doc.movePage(a[0] as int, a[1] as int);
+      return null;
+    case 'insertPages':
+      return doc.insertPages((a[0] as TransferableTypedData).materialize().asUint8List(),
+          at: a[1] as int?, pages: (a[2] as List?)?.cast<int>(), password: a[3] as String?);
+    case 'extractPages':
+      return TransferableTypedData.fromList([doc.extractPages((a[0] as List).cast<int>())]);
     case 'signatures':
       return doc.signatures();
     case 'addText':

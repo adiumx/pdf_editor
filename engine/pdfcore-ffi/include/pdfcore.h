@@ -36,6 +36,14 @@ char *pdfcore_lines(PdfDoc *doc, int page); /* {"lines":[{"text","display","runs
 /* flags: 1 match case, 2 whole words, 4 accents matter */
 char *pdfcore_find(PdfDoc *doc, const char *query, int flags); /* {"matches":[{"page","text","line","display","run","within_run"}]} */
 char *pdfcore_replace_all(PdfDoc *doc, const char *find, const char *replacement, int flags, int allow_fallback, int reflow); /* {"ok":true,"replaced","skipped"} */
+char *pdfcore_rotate_page(PdfDoc *doc, int page, int degrees);
+char *pdfcore_delete_page(PdfDoc *doc, int page);
+char *pdfcore_move_page(PdfDoc *doc, int from, int to);
+/* pages: which pages of the other document (NULL for all). {"ok":true,"added","pages"} */
+char *pdfcore_insert_pages(PdfDoc *doc, const uint8_t *data, size_t len, const char *password,
+                           const int *pages, size_t n_pages, int at);
+/* NULL on failure (see pdfcore_last_error / _kind); free with pdfcore_free_bytes */
+uint8_t *pdfcore_extract_pages(PdfDoc *doc, const int *pages, size_t n_pages, size_t *len);
 char *pdfcore_signatures(PdfDoc *doc); /* {"signatures":[{"field","signer"}]} */
 
 /* Editing. */

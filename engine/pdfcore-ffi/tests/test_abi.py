@@ -21,6 +21,11 @@ lib.pdfcore_page_count.argtypes = [ctypes.c_void_p]
 lib.pdfcore_open_with_password.restype = ctypes.c_void_p
 lib.pdfcore_open_with_password.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p]
 lib.pdfcore_last_error_kind.restype = ctypes.c_char_p
+lib.pdfcore_insert_pages.restype = ctypes.c_void_p
+lib.pdfcore_insert_pages.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p,
+                                     ctypes.POINTER(ctypes.c_int), ctypes.c_size_t, ctypes.c_int]
+lib.pdfcore_extract_pages.restype = ctypes.c_void_p
+lib.pdfcore_extract_pages.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
 lib.pdfcore_save.restype = ctypes.c_void_p
 lib.pdfcore_save.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
 for name, args in {
@@ -30,6 +35,9 @@ for name, args in {
     "pdfcore_replace_text_ex": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_signatures": [ctypes.c_void_p],
     "pdfcore_lines": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_rotate_page": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
+    "pdfcore_delete_page": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_move_page": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_find": [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_replace_all": [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.c_int],
     "pdfcore_add_text": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
@@ -288,4 +296,29 @@ def test_lines_search_and_replace_all_cross_the_boundary():
     assert done["ok"] and done["replaced"] == 9 and done["skipped"] == 0, done
     assert call("pdfcore_find", d.handle, b"Prudential", 1)["matches"] == []
     assert call("pdfcore_replace_all", d.handle, b"", b"x", 0, 0, 1)["kind"] == "rejected"
+    d.close()
+
+
+def test_page_operations_cross_the_boundary():
+    d = Doc("multi")
+    assert call("pdfcore_rotate_page", d.handle, 0, 90)["ok"]
+    assert d.page(0)["rotation"] == 90
+    assert call("pdfcore_move_page", d.handle, 0, 2)["ok"]
+    assert call("pdfcore_delete_page", d.handle, 0)["pages"] == 2
+    assert call("pdfcore_rotate_page", d.handle, 0, 45)["kind"] == "rejected"
+    other = (FIXTURES / "form.pdf").read_bytes()
+    added = call("pdfcore_insert_pages", d.handle, other, len(other), None, None, 0, 1)
+    assert added == {"ok": True, "added": 1, "pages": 3}
+    # Extract pages 2 and 0 as a new document.
+    pages = (ctypes.c_int * 2)(2, 0)
+    size = ctypes.c_size_t()
+    ptr = lib.pdfcore_extract_pages(d.handle, pages, 2, ctypes.byref(size))
+    assert ptr and size.value > 0
+    part = Doc(ctypes.string_at(ptr, size.value))
+    lib.pdfcore_free_bytes(ptr, size.value)
+    assert lib.pdfcore_page_count(part.handle) == 2
+    part.close()
+    bad = (ctypes.c_int * 1)(99)
+    assert not lib.pdfcore_extract_pages(d.handle, bad, 1, ctypes.byref(size))
+    assert lib.pdfcore_last_error_kind() == b"no_such_page"
     d.close()

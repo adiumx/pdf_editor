@@ -11,6 +11,7 @@ mod fallback;
 mod font;
 mod forms;
 mod journal;
+mod pages;
 mod lines;
 mod reflow;
 mod search;
@@ -93,15 +94,19 @@ impl Document {
             Err(lopdf::Error::InvalidPassword) => return Err(Error::WrongPassword),
             Err(other) => return Err(other.into()),
         };
+        Ok(Document::from_raw(pdf))
+    }
+
+    pub(crate) fn from_raw(pdf: Raw) -> Document {
         let pages = pdf.get_pages().values().copied().collect();
-        Ok(Document {
+        Document {
             pdf: Tracked::new(pdf),
             pages,
             fallbacks: Default::default(),
             wrapped: Default::default(),
             undo: Vec::new(),
             redo: Vec::new(),
-        })
+        }
     }
 
     pub fn page_count(&self) -> usize {
@@ -180,6 +185,8 @@ impl Document {
     fn forget_caches(&mut self) {
         self.fallbacks.clear();
         self.wrapped.clear();
+        // Undoing or redoing a page operation changes which pages there are.
+        self.pages = self.pdf.get_pages().values().copied().collect();
     }
 
     pub fn can_undo(&self) -> bool {
@@ -224,8 +231,9 @@ impl Document {
     fn inherited(&self, mut id: ObjectId, key: &[u8]) -> Option<Object> {
         for _ in 0..32 {
             let dict = self.pdf.get_dictionary(id).ok()?;
-            if let Ok(value) = dict.get(key) {
-                return Some(font::resolve(&self.pdf, value).clone());
+            // An explicit `null` means the same as no entry at all.
+            if let Some(value) = dict.get(key).ok().map(|v| font::resolve(&self.pdf, v)).filter(|v| !matches!(v, Object::Null)) {
+                return Some(value.clone());
             }
             id = dict.get(b"Parent").ok()?.as_reference().ok()?;
         }

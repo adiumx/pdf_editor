@@ -210,6 +210,34 @@ for i in range(3):
                      "Pérez Núñez", fontname="hebo", fontsize=12)
 doc.save(OUT / "multi.pdf", garbage=0, deflate=False)
 
+# 14. Pages that inherit their size, resources and rotation from the page tree's
+#     root, the way many producers write them.
+doc = pymupdf.open()
+for i in range(2):
+    page = doc.new_page(width=400, height=300)
+    page.insert_text((50, 100), f"Hereda {i + 1}", fontname="helv", fontsize=14)
+root = doc.pdf_catalog()
+pages_xref = int(doc.xref_get_key(root, "Pages")[1].split()[0])
+for page in doc:
+    for key in ("MediaBox", "Resources"):
+        kind, value = doc.xref_get_key(page.xref, key)
+        if kind != "null":
+            doc.xref_set_key(pages_xref, key, value)
+            doc.xref_set_key(page.xref, key, "null")
+doc.xref_set_key(pages_xref, "Rotate", "90")
+for page in doc:
+    doc.xref_set_key(page.xref, "Rotate", "null")
+doc.save(OUT / "inherited.pdf", garbage=0, deflate=False)
+
+# 15. A scan turned upright by the page's /Rotate: the text runs sideways in the
+#     file and straight as a reader shows it.
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_text((100, 700), "Linea girada uno", fontname="helv", fontsize=12, rotate=90)
+page.insert_text((130, 700), "Linea girada dos", fontname="helv", fontsize=12, rotate=90)
+page.set_rotation(270)
+doc.save(OUT / "turned_upright.pdf", garbage=0, deflate=False)
+
 # 11. Encrypted copies of the simple text page. Most producers write /Encrypt as
 #     an indirect object, which MuPDF does not; `indirect_encrypt` rewrites it
 #     that way with an incremental update. One file keeps MuPDF's inline form.

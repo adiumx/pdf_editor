@@ -4,7 +4,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
-use pdfcore::{Document, Reflow, ReplaceOptions};
+use pdfcore::{Document, Reflow, ReplaceOptions, SearchOptions};
 
 fn fixtures() -> Vec<(String, Vec<u8>)> {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -33,6 +33,18 @@ fn exercise(doc: &mut Document) {
         let _ = doc.text_runs(page);
     }
     let _ = doc.undo();
+    let _ = doc.find_text("a", SearchOptions::default());
+    let _ = doc.replace_all("a", "bb", SearchOptions::default(), ReplaceOptions::default());
+    for page in 0..doc.page_count().min(3) {
+        let _ = doc.text_lines(page);
+    }
+    let _ = doc.rotate_page(0, 90);
+    let _ = doc.move_page(0, doc.page_count().saturating_sub(1));
+    let _ = doc.extract_pages(&[0]);
+    if let Ok(own) = doc.save_to_bytes() {
+        let _ = doc.insert_pages(&own, "", None, 0);
+    }
+    let _ = doc.delete_page(0);
     let _ = doc.save_to_bytes();
 }
 

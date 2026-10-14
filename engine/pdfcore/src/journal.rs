@@ -104,6 +104,21 @@ impl Tracked {
         Ok(self.doc.get_object_mut(id)?)
     }
 
+    /// Take in objects numbered above the current top (another document's,
+    /// renumbered to fit): they need no copy to be undone, like any new object.
+    pub fn absorb(&mut self, objects: BTreeMap<ObjectId, Object>, max_id: u32) {
+        self.doc.objects.extend(objects);
+        self.doc.max_id = self.doc.max_id.max(max_id);
+    }
+
+    pub fn into_inner(self) -> lopdf::Document {
+        self.doc
+    }
+
+    pub fn clone_inner(&self) -> lopdf::Document {
+        self.doc.clone()
+    }
+
     pub fn add_object<T: Into<Object>>(&mut self, object: T) -> ObjectId {
         self.doc.add_object(object)
     }
