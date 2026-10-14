@@ -1,0 +1,11 @@
+[package]
+name = "pdfcore"
+version = "0.1.0"
+edition = "2021"
+description = "PDF engine for the Flutter editor: read text with its fonts, replace it keeping the original typeface."
+license = "UNLICENSED"
+publish = false
+
+[dependencies]
+lopdf = { version = "0.45", default-features = false }
+thiserror = "2"

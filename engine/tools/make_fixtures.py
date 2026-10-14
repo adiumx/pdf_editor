@@ -1,0 +1,46 @@
+"""Builds the small PDFs the engine's tests read (dev-only, uses PyMuPDF).
+
+The expected text and positions live in the Rust tests next to the numbers
+used here; change one, change the other.
+
+    python3 tools/make_fixtures.py
+"""
+import pathlib
+import pymupdf
+
+OUT = pathlib.Path(__file__).resolve().parents[1] / "pdfcore/tests/fixtures"
+SANS = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+OUT.mkdir(parents=True, exist_ok=True)
+
+# 1. Standard fonts: no /Widths, no embedding, WinAnsi codes.
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_text((72, 100), "Hola mundo", fontname="helv", fontsize=12)
+page.insert_text((72, 130), "Negrita áéíóú ñ", fontname="hebo", fontsize=14)
+doc.save(OUT / "standard.pdf", garbage=0, deflate=False)
+
+# 2. An embedded TrueType, written as a composite (Type0) font with a ToUnicode.
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_font(fontname="F0", fontfile=SANS)
+page.insert_text((72, 200), "Póliza número 12345", fontname="F0", fontsize=11)
+try:
+    doc.subset_fonts()  # keep only the glyphs used, like a real producer does
+except Exception:
+    pass
+# Compressed on purpose: the engine must read Flate streams, not just plain ones.
+doc.save(OUT / "embedded.pdf", garbage=3, deflate=True)
+
+# 3. Text turned a quarter turn.
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_text((300, 400), "Vertical", fontname="helv", fontsize=12, rotate=90)
+doc.save(OUT / "rotated.pdf", garbage=0, deflate=False)
+
+# 4. A page that is itself rotated.
+doc = pymupdf.open()
+page = doc.new_page(width=400, height=600)
+page.insert_text((50, 80), "Pagina girada", fontname="helv", fontsize=12)
+page.set_rotation(90)
+doc.save(OUT / "page_rotated.pdf", garbage=0, deflate=False)
+print("fixtures in", OUT)
