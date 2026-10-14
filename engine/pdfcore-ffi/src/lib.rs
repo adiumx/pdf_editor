@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{Align, Alignment, Anchor, Document, Error, NewText, Reflow, ReplaceOptions, TextRun, Warning};
+use pdfcore::{Align, Alignment, Anchor, Document, Error, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -203,6 +203,100 @@ pub unsafe extern "C" fn pdfcore_page(doc: *mut PdfDoc, page: c_int) -> *mut c_c
             .collect();
         d.reading.insert(page, runs);
         json!({ "width": size.width, "height": size.height, "rotation": size.rotation, "runs": listed })
+    })
+}
+
+/// The page's text as lines of words: `{"lines":[{"text","display","runs":[ids],"words":[{"text","display"}],"invisible"}]}`.
+/// The run ids are those of `pdfcore_page` for the same page, which this call
+/// reads again (so they stay valid for editing).
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_lines(doc: *mut PdfDoc, page: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let runs = match d.doc.text_runs(page) {
+            Ok(r) => r,
+            Err(e) => return failure(&e),
+        };
+        let lines = pdfcore::text_lines_of(&runs);
+        d.reading.insert(page, runs);
+        let listed: Vec<Value> = lines
+            .iter()
+            .map(|l| {
+                json!({
+                    "text": l.text, "display": l.display, "runs": l.runs, "invisible": l.invisible,
+                    "words": l.words.iter().map(|w| json!({ "text": w.text, "display": w.display })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        json!({ "lines": listed })
+    })
+}
+
+/// Search flags: 1 match case, 2 whole words only, 4 accents matter.
+fn search_options(flags: c_int) -> SearchOptions {
+    SearchOptions { case_sensitive: flags & 1 != 0, whole_word: flags & 2 != 0, accent_sensitive: flags & 4 != 0 }
+}
+
+/// Every occurrence of `query` in the document:
+/// `{"matches":[{"page","text","line","display","run","within_run":[start,end]|null}]}`.
+///
+/// # Safety
+/// `doc` must be a live handle; `query` a NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_find(doc: *mut PdfDoc, query: *const c_char, flags: c_int) -> *mut c_char {
+    let (Some(d), Some(query)) = (handle(doc), string_arg(query)) else { return bad_argument() };
+    guard(|| {
+        let matches: Vec<Value> = d
+            .doc
+            .find_text(query, search_options(flags))
+            .iter()
+            .map(|m| {
+                json!({
+                    "page": m.page, "text": m.text, "line": m.line, "display": m.display, "run": m.run,
+                    "within_run": m.within_run.map(|(a, b)| json!([a, b])),
+                })
+            })
+            .collect();
+        json!({ "matches": matches })
+    })
+}
+
+/// Replace every occurrence of `find` with `replacement` as one undoable step:
+/// `{"ok":true,"replaced":n,"skipped":n}`. `reflow` is as in `pdfcore_replace_text_ex`.
+///
+/// # Safety
+/// `doc` must be a live handle; both strings NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_replace_all(
+    doc: *mut PdfDoc,
+    find: *const c_char,
+    replacement: *const c_char,
+    flags: c_int,
+    allow_fallback: c_int,
+    reflow: c_int,
+) -> *mut c_char {
+    let (Some(d), Some(find), Some(replacement)) = (handle(doc), string_arg(find), string_arg(replacement)) else {
+        return bad_argument();
+    };
+    guard(|| {
+        let reflow = match reflow {
+            0 => Reflow::None,
+            2 => Reflow::Centered,
+            3 => Reflow::RightAligned,
+            _ => Reflow::Following,
+        };
+        let options = ReplaceOptions { allow_fallback: allow_fallback != 0, reflow };
+        match d.doc.replace_all(find, replacement, search_options(flags), options) {
+            Ok(done) => {
+                edited(d);
+                json!({ "ok": true, "replaced": done.replaced, "skipped": done.skipped })
+            }
+            Err(e) => failure(&e),
+        }
     })
 }
 

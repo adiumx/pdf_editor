@@ -73,6 +73,15 @@ class PdfSession {
           {bool allowFallback = false, Reflow reflow = Reflow.following}) =>
       _call<EditResult>('replaceText', [page.index, run.id, text, allowFallback, reflow]);
 
+  Future<List<PdfLine>> lines(int page) => _call<List<PdfLine>>('lines', [page]);
+
+  Future<List<SearchMatch>> find(String query, {SearchOptions options = const SearchOptions()}) =>
+      _call<List<SearchMatch>>('find', [query, options]);
+
+  Future<ReplaceAllResult> replaceAll(String find, String replacement,
+          {SearchOptions options = const SearchOptions(), bool allowFallback = false, Reflow reflow = Reflow.following}) =>
+      _call<ReplaceAllResult>('replaceAll', [find, replacement, options, allowFallback, reflow]);
+
   Future<List<PdfSignature>> signatures() => _call<List<PdfSignature>>('signatures');
 
   Future<AddedText> addText(int page, NewText text) => _call<AddedText>('addText', [page, text]);
@@ -162,6 +171,13 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
     case 'replaceText':
       return doc.replaceTextById(a[0] as int, a[1] as int, a[2] as String,
           allowFallback: a[3] as bool, reflow: a[4] as Reflow);
+    case 'lines':
+      return doc.lines(a[0] as int);
+    case 'find':
+      return doc.find(a[0] as String, options: a[1] as SearchOptions);
+    case 'replaceAll':
+      return doc.replaceAll(a[0] as String, a[1] as String,
+          options: a[2] as SearchOptions, allowFallback: a[3] as bool, reflow: a[4] as Reflow);
     case 'signatures':
       return doc.signatures();
     case 'addText':

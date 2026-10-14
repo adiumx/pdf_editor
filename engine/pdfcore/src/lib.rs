@@ -11,7 +11,9 @@ mod fallback;
 mod font;
 mod forms;
 mod journal;
+mod lines;
 mod reflow;
+mod search;
 mod standard_widths;
 mod text;
 
@@ -25,6 +27,8 @@ pub use add::{Added, Align, Anchor, NewText};
 pub use edit::{ReplaceOptions, Replaced};
 pub use reflow::{Alignment, Reflow, Warning};
 pub use forms::{Field, FieldKind, Signature, Widget};
+pub use lines::{text_lines_of, Line, Word};
+pub use search::{Match, ReplacedAll, SearchOptions};
 pub use text::{Matrix, TextRun};
 
 /// A page's size as a reader shows it: rotation applied, origin top-left.

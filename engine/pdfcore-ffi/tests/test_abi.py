@@ -29,6 +29,9 @@ for name, args in {
     "pdfcore_replace_text": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_replace_text_ex": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_signatures": [ctypes.c_void_p],
+    "pdfcore_lines": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_find": [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int],
+    "pdfcore_replace_all": [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.c_int],
     "pdfcore_add_text": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
     "pdfcore_set_field": [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_undo": [ctypes.c_void_p], "pdfcore_redo": [ctypes.c_void_p], "pdfcore_history": [ctypes.c_void_p],
@@ -269,4 +272,20 @@ def test_harder_forms_cross_the_boundary():
     assert [n for n, f in sorted(fields.items(), key=lambda kv: kv[1]["order"])][:3] == ["rfc", "notas", "importe"]
     assert "error" not in d.field("ramos", "Vida\nAuto")
     assert d.fields()["ramos"]["value"] == "Vida\nAuto"
+    d.close()
+
+
+def test_lines_search_and_replace_all_cross_the_boundary():
+    d = Doc("multi")
+    lines = call("pdfcore_lines", d.handle, 0)["lines"]
+    assert lines[0]["text"] == "Contrato 1 de la aseguradora Prudential"
+    assert [w["text"] for w in lines[0]["words"]][-1] == "Prudential"
+    # The run ids of a line are good for editing straight away.
+    assert "error" not in d.replace(lines[0]["runs"][0], "Contrato uno de la aseguradora Prudential")
+    hits = call("pdfcore_find", d.handle, b"nunez", 0)["matches"]
+    assert len(hits) == 3 and hits[0]["within_run"] is not None
+    done = call("pdfcore_replace_all", d.handle, b"Prudential", b"Metlife", 1, 0, 1)
+    assert done["ok"] and done["replaced"] == 9 and done["skipped"] == 0, done
+    assert call("pdfcore_find", d.handle, b"Prudential", 1)["matches"] == []
+    assert call("pdfcore_replace_all", d.handle, b"", b"x", 0, 0, 1)["kind"] == "rejected"
     d.close()

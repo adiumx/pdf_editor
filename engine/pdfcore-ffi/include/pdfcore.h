@@ -32,6 +32,10 @@ void pdfcore_free_bytes(uint8_t *p, size_t len);
 int pdfcore_page_count(PdfDoc *doc);
 char *pdfcore_page(PdfDoc *doc, int page);
 char *pdfcore_fields(PdfDoc *doc);
+char *pdfcore_lines(PdfDoc *doc, int page); /* {"lines":[{"text","display","runs","words":[{"text","display"}],"invisible"}]} */
+/* flags: 1 match case, 2 whole words, 4 accents matter */
+char *pdfcore_find(PdfDoc *doc, const char *query, int flags); /* {"matches":[{"page","text","line","display","run","within_run"}]} */
+char *pdfcore_replace_all(PdfDoc *doc, const char *find, const char *replacement, int flags, int allow_fallback, int reflow); /* {"ok":true,"replaced","skipped"} */
 char *pdfcore_signatures(PdfDoc *doc); /* {"signatures":[{"field","signer"}]} */
 
 /* Editing. */

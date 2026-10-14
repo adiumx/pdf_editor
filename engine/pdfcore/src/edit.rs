@@ -79,7 +79,7 @@ impl Document {
         self.transaction(|d| d.replace(page, run, new_text, options))
     }
 
-    fn replace(&mut self, page: usize, run: &TextRun, new_text: &str, options: ReplaceOptions) -> Result<Replaced> {
+    pub(crate) fn replace(&mut self, page: usize, run: &TextRun, new_text: &str, options: ReplaceOptions) -> Result<Replaced> {
         let allow_fallback = options.allow_fallback;
         if run.xobject.is_some() {
             return Err(Error::Unsupported(

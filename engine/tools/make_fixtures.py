@@ -198,6 +198,18 @@ for w in doc[0].widgets():
         doc.xref_set_key(w.xref, "AP", "null")
 doc.save(OUT / "form_hard_no_ap.pdf", garbage=0, deflate=False)
 
+# 13. Three pages that repeat a few words, for search and replace-all.
+doc = pymupdf.open()
+for i in range(3):
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 100), f"Contrato {i + 1} de la aseguradora Prudential", fontname="helv", fontsize=12)
+    page.insert_text((72, 130), "Prudential y Prudential Mexico, prudential", fontname="helv", fontsize=12)
+    page.insert_text((72, 160), "Polizas de vida: poliza numero 12345", fontname="helv", fontsize=12)
+    page.insert_text((72, 190), "Cliente: ", fontname="helv", fontsize=12)
+    page.insert_text((72 + pymupdf.get_text_length("Cliente: ", fontname="helv", fontsize=12), 190),
+                     "Pérez Núñez", fontname="hebo", fontsize=12)
+doc.save(OUT / "multi.pdf", garbage=0, deflate=False)
+
 # 11. Encrypted copies of the simple text page. Most producers write /Encrypt as
 #     an indirect object, which MuPDF does not; `indirect_encrypt` rewrites it
 #     that way with an incremental update. One file keeps MuPDF's inline form.

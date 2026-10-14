@@ -319,4 +319,37 @@ void main() {
       expect(ordered.take(3).map((f) => f.name), ['rfc', 'notas', 'importe']);
     });
   });
+
+  group('lines, search and replace-all', () {
+    test('lines hold the words of a line, search finds them, replace-all is one undo', () async {
+      final doc = PdfDocument.open(fixture('multi'), libraryPath: libraryPath);
+      addTearDown(doc.close);
+      final lines = doc.lines(0);
+      expect(lines.first.text, 'Contrato 1 de la aseguradora Prudential');
+      expect(lines.first.words.map((w) => w.text), ['Contrato', '1', 'de', 'la', 'aseguradora', 'Prudential']);
+      final cliente = lines.firstWhere((l) => l.text.startsWith('Cliente'));
+      expect(cliente.runIds, hasLength(2));
+
+      expect(doc.find('perez nunez'), hasLength(3));
+      final hit = doc.find('nunez').first;
+      expect(hit.withinRun, isNotNull);
+      expect(doc.find('prudential', options: const SearchOptions(caseSensitive: true)), hasLength(3));
+
+      final done = doc.replaceAll('Prudential', 'Metlife', options: const SearchOptions(caseSensitive: true));
+      expect([done.replaced, done.skipped], [9, 0]);
+      expect(doc.lines(2).first.text, 'Contrato 3 de la aseguradora Metlife');
+      expect(doc.undo(), isTrue);
+      expect(doc.lines(2).first.text, 'Contrato 3 de la aseguradora Prudential');
+      expect(doc.history.canUndo, isFalse);
+
+      final session = await PdfSession.open(fixture('multi'), libraryPath: libraryPath);
+      try {
+        expect((await session.find('poliza', options: const SearchOptions(wholeWord: true))), hasLength(3));
+        expect((await session.replaceAll('Zurich', 'x')).replaced, 0);
+        expect((await session.lines(0)).first.words, isNotEmpty);
+      } finally {
+        await session.close();
+      }
+    });
+  });
 }

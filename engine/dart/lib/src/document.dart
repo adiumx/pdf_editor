@@ -20,6 +20,10 @@ DynamicLibrary loadPdfCoreLibrary({String? path}) {
   throw UnsupportedError('Plataforma no soportada: ${Platform.operatingSystem}');
 }
 
+const _reflowCodes = {Reflow.none: 0, Reflow.following: 1, Reflow.centered: 2, Reflow.rightAligned: 3};
+
+List<double> _box(Object? raw) => (raw as List).map((v) => (v as num).toDouble()).toList();
+
 typedef _Str = Pointer<Utf8>;
 typedef _Handle = Pointer<Void>;
 
@@ -43,6 +47,10 @@ class _Native {
             _Str Function(_Handle, int, int, _Str, int)>('pdfcore_replace_text'),
         replaceTextEx = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int, Int),
             _Str Function(_Handle, int, int, _Str, int, int)>('pdfcore_replace_text_ex'),
+        lines = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_lines'),
+        find = lib.lookupFunction<_Str Function(_Handle, _Str, Int), _Str Function(_Handle, _Str, int)>('pdfcore_find'),
+        replaceAll = lib.lookupFunction<_Str Function(_Handle, _Str, _Str, Int, Int, Int),
+            _Str Function(_Handle, _Str, _Str, int, int, int)>('pdfcore_replace_all'),
         signatures = lib.lookupFunction<_Str Function(_Handle), _Str Function(_Handle)>('pdfcore_signatures'),
         addText = lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>(
             'pdfcore_add_text'),
@@ -67,6 +75,9 @@ class _Native {
   final _Str Function(_Handle) fields;
   final _Str Function(_Handle, int, int, _Str, int) replaceText;
   final _Str Function(_Handle, int, int, _Str, int, int) replaceTextEx;
+  final _Str Function(_Handle, int) lines;
+  final _Str Function(_Handle, _Str, int) find;
+  final _Str Function(_Handle, _Str, _Str, int, int, int) replaceAll;
   final _Str Function(_Handle) signatures;
   final _Str Function(_Handle, int, _Str) addText;
   final _Str Function(_Handle, _Str, _Str, int) setField;
@@ -172,7 +183,44 @@ class PdfDocument implements Finalizable {
       EditResult.fromJson(_withString(
           text,
           (t) => _json(_n.replaceTextEx(
-              _live, page, runId, t, allowFallback ? 1 : 0, const {Reflow.none: 0, Reflow.following: 1, Reflow.centered: 2, Reflow.rightAligned: 3}[reflow]!))));
+              _live, page, runId, t, allowFallback ? 1 : 0, _reflowCodes[reflow]!))));
+
+  /// The page as lines of words, top to bottom. Reads the page again, so the
+  /// run ids in each line are the current ones.
+  List<PdfLine> lines(int page) => (_json(_n.lines(_live, page))['lines'] as List).map((l) {
+        final m = l as Map<String, dynamic>;
+        return PdfLine(
+          m['text'] as String,
+          _box(m['display']),
+          (m['runs'] as List).map((r) => (r as num).toInt()).toList(),
+          (m['words'] as List).map((w) => PdfWord((w as Map)['text'] as String, _box(w['display']))).toList(),
+          m['invisible'] as bool,
+        );
+      }).toList();
+
+  /// Every occurrence of [query] in the document, page by page.
+  List<SearchMatch> find(String query, {SearchOptions options = const SearchOptions()}) =>
+      _withString(query, (q) => (_json(_n.find(_live, q, options.flags))['matches'] as List).map((m) {
+            final j = m as Map<String, dynamic>;
+            final range = j['within_run'] as List?;
+            return SearchMatch(
+              (j['page'] as num).toInt(),
+              j['text'] as String,
+              j['line'] as String,
+              _box(j['display']),
+              (j['run'] as num).toInt(),
+              range == null ? null : ((range[0] as num).toInt(), (range[1] as num).toInt()),
+            );
+          }).toList());
+
+  /// Replace every occurrence of [find] with [replacement] as one step that
+  /// [undo] takes back whole. Invalidates every run id.
+  ReplaceAllResult replaceAll(String find, String replacement,
+      {SearchOptions options = const SearchOptions(), bool allowFallback = false, Reflow reflow = Reflow.following}) {
+    final j = _withString(find, (f) => _withString(replacement, (r) => _json(_n.replaceAll(
+        _live, f, r, options.flags, allowFallback ? 1 : 0, _reflowCodes[reflow]!))));
+    return ReplaceAllResult((j['replaced'] as num).toInt(), (j['skipped'] as num).toInt());
+  }
 
   /// The completed digital signatures. Editing invalidates them: say so before
   /// the first edit.

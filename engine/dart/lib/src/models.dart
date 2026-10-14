@@ -229,6 +229,69 @@ class FieldWidget {
   final bool hasAppearance;
 }
 
+/// One word of a [PdfLine], with the box to highlight it.
+class PdfWord {
+  PdfWord(this.text, this.display);
+  final String text;
+
+  /// `[x0, y0, x1, y1]` as a reader shows it (top-left origin, y down).
+  final List<double> display;
+}
+
+/// Text as a person reads it: the strings on one baseline joined into a line of
+/// words (a bold label and the value after it are one line).
+class PdfLine {
+  PdfLine(this.text, this.display, this.runIds, this.words, this.invisible);
+  final String text;
+  final List<double> display;
+
+  /// The [TextRun.id]s that make up the line, valid like the page reading they come from.
+  final List<int> runIds;
+  final List<PdfWord> words;
+
+  /// The text layer of a scanned page.
+  final bool invisible;
+}
+
+/// How [PdfDocument.find] compares text. By default case and accents are ignored.
+class SearchOptions {
+  const SearchOptions({this.caseSensitive = false, this.wholeWord = false, this.accentSensitive = false});
+  final bool caseSensitive;
+  final bool wholeWord;
+  final bool accentSensitive;
+
+  int get flags => (caseSensitive ? 1 : 0) | (wholeWord ? 2 : 0) | (accentSensitive ? 4 : 0);
+}
+
+class SearchMatch {
+  SearchMatch(this.page, this.text, this.line, this.display, this.runId, this.withinRun);
+  final int page;
+
+  /// The text that matched, as the page has it.
+  final String text;
+
+  /// The line it was found in.
+  final String line;
+
+  /// Box to highlight, `[x0, y0, x1, y1]` as a reader shows it.
+  final List<double> display;
+
+  /// Id of the run it starts in (valid after reading [page]) and the character
+  /// range of that run it covers, or null if it runs on into the next string.
+  final int runId;
+  final (int, int)? withinRun;
+}
+
+class ReplaceAllResult {
+  ReplaceAllResult(this.replaced, this.skipped);
+
+  /// Occurrences changed.
+  final int replaced;
+
+  /// Occurrences left alone: the text crosses two strings or the font lacks a letter.
+  final int skipped;
+}
+
 /// A completed digital signature. Any edit invalidates it.
 class PdfSignature {
   PdfSignature(this.field, this.signer);
