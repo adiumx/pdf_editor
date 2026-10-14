@@ -40,14 +40,14 @@ impl Document {
     /// Fails with [`Error::MissingGlyphs`] when that font has no glyph for some
     /// character, and with nothing changed.
     pub fn replace_text(&mut self, page: usize, run: &TextRun, new_text: &str) -> Result<Replaced> {
-        self.replace(page, run, new_text, false)
+        self.transaction(|d| d.replace(page, run, new_text, false))
     }
 
     /// As [`replace_text`](Self::replace_text), but characters the original
     /// font lacks are drawn with a bundled font of the closest style. Fails
     /// only for characters neither font has, again with nothing changed.
     pub fn replace_text_with_fallback(&mut self, page: usize, run: &TextRun, new_text: &str) -> Result<Replaced> {
-        self.replace(page, run, new_text, true)
+        self.transaction(|d| d.replace(page, run, new_text, true))
     }
 
     fn replace(&mut self, page: usize, run: &TextRun, new_text: &str, allow_fallback: bool) -> Result<Replaced> {
@@ -164,12 +164,9 @@ impl Document {
         Ok(())
     }
 
-    /// The document as a PDF file, with the replaced content streams gone.
+    /// The document as a PDF file, without the objects nothing points to.
     pub fn save_to_bytes(&mut self) -> Result<Vec<u8>> {
-        self.pdf.prune_objects();
-        let mut out = Vec::new();
-        self.pdf.save_to(&mut out).map_err(lopdf::Error::from)?;
-        Ok(out)
+        self.pdf.to_bytes()
     }
 }
 

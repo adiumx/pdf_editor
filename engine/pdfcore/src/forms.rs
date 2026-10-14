@@ -336,6 +336,10 @@ impl Document {
     /// does), and every standards-following reader then refuses them. That is
     /// the person's call to make, not the engine's, so the caller asks first.
     pub fn set_field_value_with(&mut self, name: &str, value: &str, ignore_read_only: bool) -> Result<()> {
+        self.transaction(|d| d.fill_field(name, value, ignore_read_only))
+    }
+
+    fn fill_field(&mut self, name: &str, value: &str, ignore_read_only: bool) -> Result<()> {
         let field = self.field(name).ok_or_else(|| Error::NoSuchField(name.to_string()))?;
         if field.read_only && !ignore_read_only {
             return Err(Error::Rejected(format!("«{name}» es de solo lectura")));

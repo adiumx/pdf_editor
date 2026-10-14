@@ -31,7 +31,7 @@ como referencia y como oráculo de pruebas.
 | 2b. Carácter que el subconjunto no trae: se dibuja con una fuente de respaldo incluida (Liberation Sans/Serif, OFL) y se avisa cuáles | **hecho** |
 | 3a. Campos de formulario (AcroForm): leer y rellenar texto, casillas, radios, listas, con su apariencia | **hecho** |
 | 3b. Añadir texto nuevo en cualquier punto de la página (para PDF planos, sin campos) | **hecho** |
-| 4. Guardar, y modelo de deshacer | |
+| 4. Guardar, y deshacer/rehacer | **hecho** |
 | 5. Capa C ABI + plugin Flutter (`flutter_rust_bridge` o `dart:ffi`) | |
 | 6. Imágenes, anotaciones, firmas (aviso), OCR en el dispositivo | |
 
@@ -71,6 +71,28 @@ descubrió una prueba que decía que sí existían `X` y `Q`; ahora fallan limpi
 Comprobado en un formulario real de seguros: se cambió una línea en Arial
 (Type0/Identity-H, subconjunto), MuPDF abre el resultado, la dibuja con la
 misma fuente en el mismo sitio, y es la única diferencia de texto de la página.
+
+### Deshacer y guardar (hito 4)
+
+Cada operación pública (`replace_text*`, `add_text`, `set_field_value*`) es una
+**transacción**: si falla se revierte sola y no entra en el historial; si
+funciona es un paso que `undo()`/`redo()` deshacen y rehacen entero.
+
+El historial no copia el documento: mientras una transacción está abierta, se
+guarda el valor anterior de cada objeto la primera vez que se toca. Una edición
+casi siempre *añade* objetos (un flujo de contenido, una apariencia) y cambia
+unos pocos diccionarios pequeños (`/Contents` de la página, el `/V` de un
+campo), así que un paso ocupa unos cientos de bytes sea cual sea el tamaño del
+PDF. El mismo parche que deshace, al aplicarse, devuelve el que rehace.
+Deshacer vuelve a quitar también la fuente incrustada que trajo una edición.
+
+- Límite de 200 pasos; una edición nueva tras deshacer olvida lo rehacible.
+- `save_to_bytes` poda los objetos sin referencias **sobre una copia**: el
+  documento vivo los conserva, porque deshacer puede volver a necesitarlos.
+- El historial no se guarda en el archivo: al cerrarlo se pierde. Tras
+  `undo`/`redo` hay que volver a leer las páginas.
+- Lo medido: 50 ediciones seguidas se deshacen todas y dejan el texto original.
+  No se ha medido todavía el consumo de memoria en un PDF grande.
 
 ### Texto nuevo (hito 3b)
 

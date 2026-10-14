@@ -68,6 +68,10 @@ const LINE_HEIGHT: f32 = 1.2;
 
 impl Document {
     pub fn add_text(&mut self, page: usize, new: &NewText) -> Result<Added> {
+        self.transaction(|d| d.put_text(page, new))
+    }
+
+    fn put_text(&mut self, page: usize, new: &NewText) -> Result<Added> {
         if new.text.trim().is_empty() {
             return Err(Error::Unsupported("el texto nuevo está vacío".into()));
         }

@@ -11,7 +11,9 @@
 
 use std::collections::BTreeMap;
 
-use lopdf::{Dictionary, Document as Pdf, Object, ObjectId, Stream, StringFormat};
+use lopdf::{Dictionary, Object, ObjectId, Stream, StringFormat};
+
+use crate::journal::Tracked as Pdf;
 use ttf_parser::Face;
 
 use crate::error::{Error, Result};

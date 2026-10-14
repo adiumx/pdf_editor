@@ -10,10 +10,13 @@ mod error;
 mod fallback;
 mod font;
 mod forms;
+mod journal;
 mod standard_widths;
 mod text;
 
-use lopdf::{Dictionary, Document as Pdf, Object, ObjectId};
+use lopdf::{Dictionary, Document as Raw, Object, ObjectId};
+
+use journal::{Patch, Tracked};
 
 pub use error::{Error, Result};
 pub use font::{Font, FontKind, Glyph};
@@ -31,19 +34,31 @@ pub struct PageSize {
 }
 
 pub struct Document {
-    pdf: Pdf,
+    pdf: Tracked,
     pages: Vec<ObjectId>,
     /// Fallback fonts already written into this document, by style.
     fallbacks: std::collections::HashMap<&'static str, fallback::Embedded>,
     /// Pages whose own content is already wrapped in `q`/`Q` for added text.
     wrapped: std::collections::HashSet<ObjectId>,
+    undo: Vec<Patch>,
+    redo: Vec<Patch>,
 }
+
+/// How many steps can be undone.
+const UNDO_LIMIT: usize = 200;
 
 impl Document {
     pub fn open(bytes: &[u8]) -> Result<Document> {
-        let pdf = Pdf::load_mem(bytes)?;
+        let pdf = Raw::load_mem(bytes)?;
         let pages = pdf.get_pages().values().copied().collect();
-        Ok(Document { pdf, pages, fallbacks: Default::default(), wrapped: Default::default() })
+        Ok(Document {
+            pdf: Tracked::new(pdf),
+            pages,
+            fallbacks: Default::default(),
+            wrapped: Default::default(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+        })
     }
 
     pub fn page_count(&self) -> usize {
@@ -94,6 +109,59 @@ impl Document {
     /// A point of default user space as a reader shows it (top-left origin).
     pub fn to_display_point(&self, page: usize, point: (f32, f32)) -> Result<(f32, f32)> {
         Ok(text::apply(self.display_matrix(page)?, point.0, point.1))
+    }
+
+    /// Run one edit as a single undoable step: if it fails nothing is changed,
+    /// if it succeeds it can be undone as a whole.
+    pub(crate) fn transaction<T>(&mut self, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.pdf.begin();
+        match edit(self) {
+            Ok(value) => {
+                self.undo.push(self.pdf.commit());
+                if self.undo.len() > UNDO_LIMIT {
+                    self.undo.remove(0);
+                }
+                self.redo.clear();
+                Ok(value)
+            }
+            Err(error) => {
+                self.pdf.rollback();
+                self.forget_caches();
+                Err(error)
+            }
+        }
+    }
+
+    /// What the engine remembers about fonts it wrote and pages it wrapped can
+    /// no longer be trusted once objects come or go; it is rebuilt from the file.
+    fn forget_caches(&mut self) {
+        self.fallbacks.clear();
+        self.wrapped.clear();
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    /// Take back the last edit. Page runs read before it are stale afterwards.
+    pub fn undo(&mut self) -> bool {
+        let Some(patch) = self.undo.pop() else { return false };
+        let inverse = self.pdf.apply(patch);
+        self.redo.push(inverse);
+        self.forget_caches();
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(patch) = self.redo.pop() else { return false };
+        let inverse = self.pdf.apply(patch);
+        self.undo.push(inverse);
+        self.forget_caches();
+        true
     }
 
     /// Make the bundled font of this style available to write with: the copy
