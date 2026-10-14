@@ -37,6 +37,8 @@ for name, args in {
     "pdfcore_replace_text_ex": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_signatures": [ctypes.c_void_p],
     "pdfcore_lines": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
+    "pdfcore_replace_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_rotate_page": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_delete_page": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_move_page": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
@@ -395,4 +397,20 @@ def test_a_png_keeps_its_transparency():
     place(d, "img_alpha.png", 100, 300, 80)               # 80 x 80: left half green, right half see-through
     pix = render(d.save())
     assert near(pix.pixel(120, 340), GREEN) and near(pix.pixel(170, 340), WHITE)
+    d.close()
+
+
+def test_paragraphs_cross_the_boundary():
+    d = Doc("paragraph")
+    first = next(i for i, r in enumerate(d.page()["runs"]) if r["text"].startswith("El asegurado"))
+    title = next(i for i, r in enumerate(d.page()["runs"]) if r["text"].startswith("Condiciones"))
+    paragraph = call("pdfcore_paragraph", d.handle, 0, first)["paragraph"]
+    assert len(paragraph["runs"]) == 5 and paragraph["text"].startswith("El asegurado debe notificar")
+    assert call("pdfcore_paragraph", d.handle, 0, title)["paragraph"] is None
+    longer = (paragraph["text"] + " Ademas, debera entregar copia de cualquier documento que respalde el cambio.").encode()
+    done = call("pdfcore_replace_paragraph", d.handle, 0, first, longer, 0)
+    assert done["ok"] and done["added"] >= 1 and done["removed"] == 0 and done["warnings"] == [], done
+    # Ids are stale after the edit, like any edit.
+    assert call("pdfcore_replace_paragraph", d.handle, 0, first, b"x", 0)["kind"] == "stale_run"
+    assert call("pdfcore_replace_paragraph", d.handle, 0, 999, b"x", 0)["kind"] == "stale_run"
     d.close()

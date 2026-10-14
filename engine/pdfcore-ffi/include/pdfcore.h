@@ -46,6 +46,10 @@ char *pdfcore_insert_pages(PdfDoc *doc, const uint8_t *data, size_t len, const c
                            const int *pages, size_t n_pages, int at);
 /* NULL on failure (see pdfcore_last_error / _kind); free with pdfcore_free_bytes */
 uint8_t *pdfcore_extract_pages(PdfDoc *doc, const int *pages, size_t n_pages, size_t *len);
+/* {"paragraph":null} or {"paragraph":{"text","runs","display"}} */
+char *pdfcore_paragraph(PdfDoc *doc, int page, int run_id);
+/* new_text is the paragraph's whole text; {"ok":true,"lines","added","removed","fallback_chars","warnings"} */
+char *pdfcore_replace_paragraph(PdfDoc *doc, int page, int run_id, const char *new_text, int allow_fallback);
 char *pdfcore_signatures(PdfDoc *doc); /* {"signatures":[{"field","signer"}]} */
 
 /* Editing. */

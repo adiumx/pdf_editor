@@ -409,4 +409,41 @@ void main() {
       }
     });
   });
+
+  group('paragraphs', () {
+    test('a paragraph is found, re-laid out longer and shorter, and undone', () async {
+      final doc = open('paragraph');
+      addTearDown(doc.close);
+      var page = doc.page(0);
+      final line = page.runs.firstWhere((r) => r.text.startsWith('El asegurado'));
+      final paragraph = doc.paragraphOf(page, line)!;
+      expect(paragraph.runIds, hasLength(5));
+      expect(paragraph.text, startsWith('El asegurado debe notificar'));
+      expect(doc.paragraphOf(page, page.runs.firstWhere((r) => r.text.startsWith('Condiciones'))), isNull);
+
+      final longer = doc.replaceParagraph(page, line, '${paragraph.text} Ademas, debera entregar copia de cualquier documento que respalde el cambio.');
+      expect(longer.added, greaterThan(0));
+      expect(longer.warnings, isEmpty);
+      page = doc.page(0);
+      final again = page.runs.firstWhere((r) => r.text.startsWith('El asegurado'));
+      expect(doc.paragraphOf(page, again)!.runIds, hasLength(5 + longer.added));
+      expect(doc.undo(), isTrue);
+
+      page = doc.page(0);
+      final shorter = doc.replaceParagraph(page, page.runs.firstWhere((r) => r.text.startsWith('El asegurado')), 'El asegurado avisa.');
+      expect([shorter.lines, shorter.removed], [1, 4]);
+      expect(() => doc.replaceParagraph(doc.page(0), doc.page(0).runs.firstWhere((r) => r.text.startsWith('Condiciones')), 'x'),
+          throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'unsupported')));
+
+      final session = await PdfSession.open(fixture('paragraph'), libraryPath: libraryPath);
+      try {
+        final p = await session.page(0);
+        final r = p.runs.firstWhere((r) => r.text.startsWith('El asegurado'));
+        expect((await session.paragraphOf(p, r))!.runIds, hasLength(5));
+        expect((await session.replaceParagraph(p, r, 'Corto.')).removed, 4);
+      } finally {
+        await session.close();
+      }
+    });
+  });
 }

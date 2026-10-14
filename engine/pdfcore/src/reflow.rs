@@ -67,6 +67,11 @@ pub enum Warning {
     LineMayBeAligned { alignment: Alignment },
     /// The runs could not be put where they belong; they were left as written.
     ReflowFailed,
+    /// A paragraph grew by lines that now overlap text below it, which stayed
+    /// where it was.
+    OverlapsText { text: String },
+    /// A paragraph grew past the bottom of the page by this many points.
+    BelowPage { by: f32 },
 }
 
 pub(crate) struct Outcome {

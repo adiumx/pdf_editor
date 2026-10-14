@@ -131,45 +131,7 @@ impl Document {
             return Err(Error::Unsupported(format!("operación inesperada: {}", original.operator)));
         }
 
-        // Build the replacement operations.
-        let mut new_width = 0.0;
-        let mut ops: Vec<Operation> = Vec::new();
-        let mut in_fallback = false;
-        let mut used_fallback: Vec<char> = Vec::new();
-        let switch = |name: &str, size: f32| {
-            Operation::new("Tf", vec![Object::Name(name.as_bytes().to_vec()), Object::Real(size)])
-        };
-        let first_shows = |ops: &Vec<Operation>| !ops.iter().any(|o| o.operator != "Tf");
-
-        for (piece, bytes) in &segments {
-            let (shown, wants_fallback) = match bytes {
-                Some(b) => {
-                    new_width += font.advance_of(b, run.size);
-                    (Embedded::hex(b.clone()), false)
-                }
-                None => {
-                    self.ensure_fallback(key, data)?;
-                    let embedded = self.fallbacks.get_mut(key).expect("just ensured");
-                    let (b, advance) = embedded.write(&mut self.pdf, piece, run.size)?;
-                    new_width += advance;
-                    used_fallback.extend(piece.chars());
-                    (Embedded::hex(b), true)
-                }
-            };
-            if wants_fallback != in_fallback {
-                let name = if wants_fallback { self.fallbacks[key].resource.clone() } else { run.font.clone() };
-                ops.push(switch(&name, run.tf_size));
-                in_fallback = wants_fallback;
-            }
-            ops.push(if first_shows(&ops) { show_like(&original, shown) } else { Operation::new("Tj", vec![shown]) });
-        }
-        if in_fallback {
-            ops.push(switch(&run.font, run.tf_size)); // what follows expects the original font
-        }
-        if ops.iter().all(|o| o.operator == "Tf") {
-            return Err(Error::Unsupported("el texto nuevo está vacío".into()));
-        }
-
+        let (ops, new_width, used_fallback) = self.build_show_ops(font, run, &segments, key, data, Some(&original))?;
         let reread = ops.len() != 1;
         if !used_fallback.is_empty() {
             let resource = self.fallbacks[key].resource.clone();
@@ -195,6 +157,64 @@ impl Document {
             moved,
             warnings,
         })
+    }
+
+    /// The operations that draw `segments` (see `Font::segments`) the way `run`
+    /// was drawn: the document's own font for what it has, the bundled one of
+    /// `key` for the rest, switching back to the original afterwards. Returns
+    /// them with how wide the text comes out and the letters that needed the
+    /// bundled font. `original` is the operation being replaced, whose show
+    /// operator (`Tj`, `TJ`, `'`) the first piece keeps.
+    pub(crate) fn build_show_ops(
+        &mut self,
+        font: &crate::font::Font,
+        run: &TextRun,
+        segments: &[(String, Option<Vec<u8>>)],
+        key: &'static str,
+        data: &'static [u8],
+        original: Option<&Operation>,
+    ) -> Result<(Vec<Operation>, f32, Vec<char>)> {
+        let mut new_width = 0.0;
+        let mut ops: Vec<Operation> = Vec::new();
+        let mut in_fallback = false;
+        let mut used_fallback: Vec<char> = Vec::new();
+        let switch = |name: &str, size: f32| {
+            Operation::new("Tf", vec![Object::Name(name.as_bytes().to_vec()), Object::Real(size)])
+        };
+        let first_shows = |ops: &Vec<Operation>| !ops.iter().any(|o| o.operator != "Tf");
+
+        for (piece, bytes) in segments {
+            let (shown, wants_fallback) = match bytes {
+                Some(b) => {
+                    new_width += font.advance_of(b, run.size);
+                    (Embedded::hex(b.clone()), false)
+                }
+                None => {
+                    self.ensure_fallback(key, data)?;
+                    let embedded = self.fallbacks.get_mut(key).expect("just ensured");
+                    let (b, advance) = embedded.write(&mut self.pdf, piece, run.size)?;
+                    new_width += advance;
+                    used_fallback.extend(piece.chars());
+                    (Embedded::hex(b), true)
+                }
+            };
+            if wants_fallback != in_fallback {
+                let name = if wants_fallback { self.fallbacks[key].resource.clone() } else { run.font.clone() };
+                ops.push(switch(&name, run.tf_size));
+                in_fallback = wants_fallback;
+            }
+            ops.push(match (original, first_shows(&ops)) {
+                (Some(original), true) => show_like(original, shown),
+                _ => Operation::new("Tj", vec![shown]),
+            });
+        }
+        if in_fallback {
+            ops.push(switch(&run.font, run.tf_size)); // what follows expects the original font
+        }
+        if ops.iter().all(|o| o.operator == "Tf") {
+            return Err(Error::Unsupported("el texto nuevo está vacío".into()));
+        }
+        Ok((ops, new_width, used_fallback))
     }
 
     /// Make a font usable by name in one page's content.
@@ -228,7 +248,7 @@ impl Document {
 
 /// The operation that shows `string` the way `original` did (`'` and `"` also
 /// start a new line; `TJ` loses its kerning, which belonged to the old letters).
-fn show_like(original: &Operation, string: Object) -> Operation {
+pub(crate) fn show_like(original: &Operation, string: Object) -> Operation {
     match original.operator.as_str() {
         "TJ" => Operation::new("TJ", vec![Object::Array(vec![string])]),
         "\"" => {

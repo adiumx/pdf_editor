@@ -51,6 +51,9 @@ class _Native {
         find = lib.lookupFunction<_Str Function(_Handle, _Str, Int), _Str Function(_Handle, _Str, int)>('pdfcore_find'),
         replaceAll = lib.lookupFunction<_Str Function(_Handle, _Str, _Str, Int, Int, Int),
             _Str Function(_Handle, _Str, _Str, int, int, int)>('pdfcore_replace_all'),
+        paragraph = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_paragraph'),
+        replaceParagraph = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
+            _Str Function(_Handle, int, int, _Str, int)>('pdfcore_replace_paragraph'),
         addImage = lib.lookupFunction<_Str Function(_Handle, Int, Pointer<Uint8>, Size, _Str),
             _Str Function(_Handle, int, Pointer<Uint8>, int, _Str)>('pdfcore_add_image'),
         rotatePage = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_rotate_page'),
@@ -87,6 +90,8 @@ class _Native {
   final _Str Function(_Handle, int) lines;
   final _Str Function(_Handle, _Str, int) find;
   final _Str Function(_Handle, _Str, _Str, int, int, int) replaceAll;
+  final _Str Function(_Handle, int, int) paragraph;
+  final _Str Function(_Handle, int, int, _Str, int) replaceParagraph;
   final _Str Function(_Handle, int, Pointer<Uint8>, int, _Str) addImage;
   final _Str Function(_Handle, int, int) rotatePage;
   final _Str Function(_Handle, int) deletePage;
@@ -199,6 +204,33 @@ class PdfDocument implements Finalizable {
           text,
           (t) => _json(_n.replaceTextEx(
               _live, page, runId, t, allowFallback ? 1 : 0, _reflowCodes[reflow]!))));
+
+  /// The paragraph [run] is a line of (two lines or more of one font, evenly
+  /// spaced and left-aligned), or null. Read the page first.
+  PdfParagraph? paragraphOf(PageData page, TextRun run) => paragraphById(page.index, run.id);
+
+  PdfParagraph? paragraphById(int page, int runId) {
+    final p = _json(_n.paragraph(_live, page, runId))['paragraph'] as Map<String, dynamic>?;
+    if (p == null) return null;
+    return PdfParagraph(p['text'] as String, (p['runs'] as List).map((r) => (r as num).toInt()).toList(), _box(p['display']));
+  }
+
+  /// Lay the paragraph [run] belongs to out again with [text] as all of its text,
+  /// within the width it has: lines are added below or emptied at the end as
+  /// needed, in the paragraph's own font and colour. Invalidates every run id.
+  ParagraphResult replaceParagraph(PageData page, TextRun run, String text, {bool allowFallback = false}) =>
+      replaceParagraphById(page.index, run.id, text, allowFallback: allowFallback);
+
+  ParagraphResult replaceParagraphById(int page, int runId, String text, {bool allowFallback = false}) {
+    final j = _withString(text, (t) => _json(_n.replaceParagraph(_live, page, runId, t, allowFallback ? 1 : 0)));
+    return ParagraphResult(
+      (j['lines'] as num).toInt(),
+      (j['added'] as num).toInt(),
+      (j['removed'] as num).toInt(),
+      j['fallback_chars'] as String,
+      (j['warnings'] as List).map((w) => PdfWarning.fromJson(w as Map<String, dynamic>)).toList(),
+    );
+  }
 
   /// The page as lines of words, top to bottom. Reads the page again, so the
   /// run ids in each line are the current ones.

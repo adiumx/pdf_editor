@@ -57,7 +57,7 @@ impl Document {
 /// Does the run read horizontally as a reader shows the page? Judged from its
 /// box on screen, so text turned by the page's `/Rotate` (a scan turned upright)
 /// counts, and text running sideways on screen does not.
-fn is_upright(run: &TextRun) -> bool {
+pub(crate) fn is_upright(run: &TextRun) -> bool {
     let (w, h) = (run.display[2] - run.display[0], run.display[3] - run.display[1]);
     run.text.chars().count() < 2 || w >= 0.9 * h
 }

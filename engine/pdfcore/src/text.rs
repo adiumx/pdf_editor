@@ -65,6 +65,10 @@ pub struct TextRun {
     /// movement on the page.
     pub text_linear: [f32; 4],
     pub glyphs: Vec<Glyph>,
+    /// The operations that set the fill colour the text is drawn in (`0 g`,
+    /// `0.2 0.2 0.8 rg`, or a `cs` with its `scn`): repeat them to draw more
+    /// text that matches.
+    pub fill: Vec<Operation>,
 }
 
 struct State {
@@ -77,11 +81,12 @@ struct State {
     mode: i64,
     size: f32,
     font: Option<String>,
+    fill: Vec<Operation>,
 }
 
 impl Default for State {
     fn default() -> Self {
-        State { ctm: IDENTITY, tc: 0.0, tw: 0.0, th: 1.0, tl: 0.0, rise: 0.0, mode: 0, size: 0.0, font: None }
+        State { ctm: IDENTITY, tc: 0.0, tw: 0.0, th: 1.0, tl: 0.0, rise: 0.0, mode: 0, size: 0.0, font: None, fill: Vec::new() }
     }
 }
 
@@ -125,10 +130,20 @@ fn interpret(
     for (index, op) in content.operations.iter().enumerate() {
         let n = |i: usize| op.operands.get(i).and_then(|o| num(doc, o)).unwrap_or(0.0);
         match op.operator.as_str() {
-            "q" => stack.push(State { font: state.font.clone(), ..copy_of(&state) }),
+            "q" => stack.push(State { font: state.font.clone(), fill: state.fill.clone(), ..copy_of(&state) }),
             "Q" => {
                 if let Some(previous) = stack.pop() {
                     state = previous;
+                }
+            }
+            "g" | "rg" | "k" | "cs" => state.fill = vec![op.clone()],
+            "sc" | "scn" => {
+                // `scn` follows the `cs` that names its space; keep the pair.
+                if state.fill.first().is_some_and(|o| o.operator == "cs") {
+                    state.fill.truncate(1);
+                    state.fill.push(op.clone());
+                } else {
+                    state.fill = vec![op.clone()];
                 }
             }
             "cm" => state.ctm = multiply([n(0), n(1), n(2), n(3), n(4), n(5)], state.ctm),
@@ -187,7 +202,7 @@ fn interpret(
 }
 
 fn copy_of(s: &State) -> State {
-    State { ctm: s.ctm, tc: s.tc, tw: s.tw, th: s.th, tl: s.tl, rise: s.rise, mode: s.mode, size: s.size, font: None }
+    State { ctm: s.ctm, tc: s.tc, tw: s.tw, th: s.th, tl: s.tl, rise: s.rise, mode: s.mode, size: s.size, font: None, fill: Vec::new() }
 }
 
 fn next_line(state: &State, tm: &mut Matrix, tlm: &mut Matrix) {
@@ -323,6 +338,7 @@ fn show(
         xobject: xobject.map(str::to_string),
         text_linear: [linear[0], linear[1], linear[2], linear[3]],
         glyphs,
+        fill: state.fill.clone(),
     });
 }
 

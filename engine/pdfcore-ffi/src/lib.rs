@@ -236,6 +236,60 @@ pub unsafe extern "C" fn pdfcore_lines(doc: *mut PdfDoc, page: c_int) -> *mut c_
     })
 }
 
+/// The paragraph a run is a line of: `{"paragraph":null}` or
+/// `{"paragraph":{"text","runs":[ids],"display"}}`. The text is the lines joined by spaces.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_paragraph(doc: *mut PdfDoc, page: c_int, run_id: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let Some(run) = d.reading.get(&page).and_then(|r| r.get(run_id.max(0) as usize)).cloned() else {
+            return json!({ "error": "ese texto ya no está donde se leyó: vuelve a leer la página", "kind": "stale_run" });
+        };
+        match d.doc.paragraph_of(page, &run) {
+            Ok(Some(p)) => json!({ "paragraph": { "text": p.text, "runs": p.runs, "display": p.display } }),
+            Ok(None) => json!({ "paragraph": null }),
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// Lay the paragraph a run belongs to out again with `new_text` as its whole text,
+/// within the width it has: `{"ok":true,"lines","added","removed","fallback_chars","warnings"}`.
+///
+/// # Safety
+/// `doc` must be a live handle; `new_text` a NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_replace_paragraph(
+    doc: *mut PdfDoc,
+    page: c_int,
+    run_id: c_int,
+    new_text: *const c_char,
+    allow_fallback: c_int,
+) -> *mut c_char {
+    let (Some(d), Some(new_text)) = (handle(doc), string_arg(new_text)) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let Some(run) = d.reading.get(&page).and_then(|r| r.get(run_id.max(0) as usize)).cloned() else {
+            return json!({ "error": "ese texto ya no está donde se leyó: vuelve a leer la página", "kind": "stale_run" });
+        };
+        match d.doc.replace_paragraph(page, &run, new_text, allow_fallback != 0) {
+            Ok(done) => {
+                edited(d);
+                json!({
+                    "ok": true, "lines": done.lines, "added": done.added, "removed": done.removed,
+                    "fallback_chars": done.fallback_chars.iter().collect::<String>(),
+                    "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>(),
+                })
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
 /// Search flags: 1 match case, 2 whole words only, 4 accents matter.
 fn search_options(flags: c_int) -> SearchOptions {
     SearchOptions { case_sensitive: flags & 1 != 0, whole_word: flags & 2 != 0, accent_sensitive: flags & 4 != 0 }
@@ -348,6 +402,8 @@ fn warning_json(w: &Warning) -> Value {
             "alignment": match alignment { Alignment::Centered => "centered", Alignment::Right => "right" },
         }),
         Warning::ReflowFailed => json!({ "kind": "reflow_failed" }),
+        Warning::OverlapsText { text } => json!({ "kind": "overlaps_text", "text": text }),
+        Warning::BelowPage { by } => json!({ "kind": "below_page", "by": by }),
     }
 }
 

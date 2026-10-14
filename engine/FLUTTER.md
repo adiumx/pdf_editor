@@ -6,9 +6,9 @@ Guía para llevar `pdfcore` a una app Flutter (Android ahora, iOS después).
 
 | Pieza | Estado |
 |---|---|
-| Motor Rust (`pdfcore`) | Probado: 60 pruebas, y contra PDF reales de seguros |
+| Motor Rust (`pdfcore`) | Probado: 125 pruebas, fuzz con ~25 mil archivos dañados, y contra PDF reales de seguros |
 | Capa C (`pdfcore-ffi`) | Probada llamándola desde Python (`ctypes`) y desde Dart |
-| Paquete Dart (`engine/dart`) | **Probado**: 20 pruebas con `dart test` contra la librería real, en Linux. Una versión anterior ya se integró y probó en una app Flutter en Windows y en un emulador Android (lectura, edición, formularios, guardado) |
+| Paquete Dart (`engine/dart`) | **Probado**: 26 pruebas con `dart test` contra la librería real, en Linux. Una versión anterior ya se integró y probó en una app Flutter en Windows y en un emulador Android (lectura, edición, formularios, guardado) |
 | Compilar para Android/iOS | `cargo check` pasa; **el enlazado y la ejecución en un teléfono no se han probado** (no hay NDK, Xcode ni Flutter donde se escribió) |
 | La interfaz Flutter de abajo | **Boceto sin compilar**: muestra cómo se usa la API, no es una app terminada |
 
@@ -195,7 +195,53 @@ El reajuste es parte de la misma operación: es atómico, `undo()`/`redo()` lo d
 junto con la edición, y los `run.id` caducan como siempre (`r.reread` dice si hubo
 que insertar operaciones).
 
-## 5. Boceto de pantalla de edición (sin compilar)
+## 5. Más operaciones del motor
+
+Todas están en `PdfDocument` y `PdfSession`, devuelven errores como `PdfException`
+(con `kind`) y las que cambian el documento se deshacen con `undo()` en un solo paso.
+
+```dart
+// PDF con contraseña: 'password_required' si hace falta, 'wrong_password' si está mal.
+final session = await PdfSession.open(bytes, password: clave);
+
+// Formularios: orden de relleno para «siguiente campo»; listas con varias filas.
+final campos = (await session.fields())..sort((a, b) => a.order.compareTo(b.order));
+await session.setField('ramos', 'Vida\nAuto');          // una opción por línea
+
+// Texto como la persona lo lee, y buscarlo.
+final lineas = await session.lines(0);                  // líneas → palabras con su caja
+final hallazgos = await session.find('prudential');     // sin distinguir mayúsculas ni acentos
+final r = await session.replaceAll('Prudential', 'Metlife');   // un solo deshacer
+// r.replaced, r.skipped (cruzan dos cadenas de texto y no se tocaron)
+
+// Páginas.
+await session.rotatePage(0, 90);
+await session.movePage(0, 2);
+await session.deletePage(1);
+await session.insertPages(otroPdf, at: 1, pages: [0, 3]);     // trae sus campos
+final parte = await session.extractPages([2, 0]);             // PDF nuevo
+
+// Imágenes (JPEG se incrusta tal cual; PNG conserva su transparencia).
+await session.addImage(0, fotoBytes, x: 72, y: 600, width: 120);
+
+// Párrafos: muestra todo el texto en un cuadro y devuélvelo completo.
+final p = await session.paragraphOf(page, run);         // null si es una línea suelta
+if (p != null) {
+  final res = await session.replaceParagraph(page, run, textoEditado);
+  // res.added / res.removed líneas; res.warnings: overlaps_text, below_page
+}
+```
+
+Qué hay que tener presente:
+
+- `replaceParagraph` **no empuja** lo que hay debajo: si el párrafo crece sobre otro
+  texto, avisa con `overlaps_text` y la persona decide (puede deshacer).
+- Un PDF cifrado se guarda sin protección.
+- `insertPages` no hace únicos los nombres de campo: dos formularios con un campo
+  `nombre` comparten el valor al rellenarlo.
+- Tras cualquier operación de las anteriores, los `run.id` caducan: vuelve a leer la página.
+
+## 6. Boceto de pantalla de edición (sin compilar)
 
 Muestra la idea: imagen de fondo + un `Positioned` por texto, con `display * zoom`.
 
@@ -249,7 +295,8 @@ tiene resueltos esos tres casos y sirve de referencia.
 ## Limitaciones del motor a tener presentes
 
 - Texto dentro de formularios XObject: se lee, no se edita.
-- Fuentes simples incrustadas: solo se escriben los códigos que el documento ya dibuja o que se verifican en el programa de fuente (TrueType); los demás van a la fuente de respaldo. Antes se adivinaban con la codificación y salía el cuadrito de «glifo ausente».
+- Fuentes incrustadas: los glifos se verifican en el programa de fuente (TrueType, OpenType, CFF y Type 1); lo que no tiene va a la fuente de respaldo. Una fuente cuyo programa no se puede leer es la excepción: ahí solo se escribe lo que la página ya dibujaba.
 - Con texto justificado, el reajuste solo puede mover tramos enteros (no reparte el espacio entre palabras): si hay un `exceeds_margin`, revisa la línea.
-- Faltan imágenes y anotaciones (resaltar, notas).
-- PDF cifrados con contraseña: no soportados todavía.
+- Faltan las anotaciones (resaltar, notas).
+- PDF cifrados con el diccionario `/Encrypt` escrito en línea (lo hace MuPDF): se informa, no se abre.
+- Párrafos: no se reconoce texto justificado ni con sangría de primera línea, y no se empuja lo que hay debajo.

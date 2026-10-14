@@ -35,9 +35,16 @@ como referencia y como oráculo de pruebas.
 | 3d. Aviso de firma digital; los campos informan si tienen apariencia | **hecho** |
 | 4. Guardar, y deshacer/rehacer | **hecho** |
 | 5a. Capa C (`pdfcore-ffi`): cabecera, JSON, probada llamándola desde Python | **hecho** |
-| 5b. Paquete Dart (`dart/`): `PdfDocument` y `PdfSession` (isolate), 15 pruebas contra la librería real | **hecho** — guía en [FLUTTER.md](FLUTTER.md) |
+| 5b. Paquete Dart (`dart/`): `PdfDocument` y `PdfSession` (isolate), 26 pruebas contra la librería real | **hecho** — guía en [FLUTTER.md](FLUTTER.md) |
 | 5c. Enlazar para Android/iOS y la app Flutter | **pendiente**: necesita NDK/Xcode/Flutter, que no hay donde se escribió |
-| 6. Imágenes, anotaciones, firmas (aviso), OCR en el dispositivo | |
+| 6a. Robustez: archivos dañados (fuzz), PDF cifrados (contraseña de dueño o de usuario), medición de tiempo y memoria | **hecho** |
+| 6b. Formularios difíciles: casillas sin apariencia, listas con varias filas, texto multilínea con tamaño automático, orden de relleno | **hecho** |
+| 6c. Texto como líneas y palabras; buscar en todo el documento; reemplazar todo en un solo paso de deshacer | **hecho** |
+| 6d. Páginas: rotar, borrar, mover, extraer, traer de otro PDF | **hecho** |
+| 6e. Imágenes JPEG y PNG (con transparencia) en cualquier punto de la página | **hecho** |
+| 6f. Glifos verificados también en fuentes CFF, OpenType-CFF y Type 1 | **hecho** |
+| 6g. Párrafos de varias líneas: se vuelven a repartir al editar, con la misma fuente y color | **hecho** |
+| 7. Anotaciones (resaltar, notas), OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee
 
@@ -226,12 +233,83 @@ la fuente.
 - Licencia: las fuentes son SIL OFL 1.1 (`pdfcore/fonts/LICENSE-Liberation-OFL.txt`),
   que permite incluirlas e incrustarlas en un producto de pago.
 
+### Robustez, rendimiento y PDF cifrados (hito 6a)
+
+- **Archivos dañados**: `tests/robustness.rs` trunca y altera al azar los PDF de prueba
+  (unos 25 000 archivos por pasada) y llama a toda la API; ningún caso entra en pánico ni
+  se cuelga. Encontró dos fallos reales del lector de CMap (un `>` suelto en bucle
+  infinito y un `bfrange` dañado que creaba millones de entradas), ya corregidos.
+- **Cifrados**: un PDF con contraseña de *dueño* (protegido contra edición o impresión,
+  pero que cualquiera puede leer) se abre como cualquier otro. Uno que pide contraseña
+  falla con `password_required`; con `open_with_password`, una contraseña mala da
+  `wrong_password`. Al guardar se escribe **sin** protección. Un `/Encrypt` escrito como
+  diccionario en línea (lo hace MuPDF) lo lee mal la biblioteca de PDF que usamos: se
+  informa con un error claro (`unsupported`) en vez de abrir un documento vacío.
+- **Medido** (release, Linux x86-64, `cargo run --release --example bench -- archivo.pdf`):
+
+  | Documento | Abrir | Leer 1 página | Una edición | Guardar | Memoria máxima |
+  |---|---|---|---|---|---|
+  | 400 páginas de texto (4 MB) | 68 ms | 2 ms | 3 ms | 278 ms | 57 MB |
+  | 30 páginas escaneadas (32 MB) | 28 ms | 0,1 ms | 0,3 ms | 50 ms | 125 MB |
+
+  En un teléfono será más lento; no se ha medido ahí.
+
+### Formularios difíciles (hito 6b)
+
+Una casilla o radio sin apariencia (hay productores que no la escriben) recibe una:
+✔, ✘, ● , ■ o ◆ según `/MK /CA`. Una lista con varias filas se rellena con una opción
+por línea (`Field.multi_select`), y la selección se resalta. El texto multilínea sin
+tamaño fijo reduce la letra hasta que cabe. Cada campo trae `order`: su posición al
+rellenar (página, de arriba abajo, de izquierda a derecha), para un botón «siguiente».
+
+### Líneas, búsqueda y reemplazo (hito 6c)
+
+`text_lines(page)` junta los tramos de una misma línea base (con un hueco de hasta 1,5
+em) en líneas de palabras, con la caja de cada palabra, y reconoce texto girado por la
+rotación de la página. `find_text` busca ignorando mayúsculas y acentos (opciones: distinguir
+mayúsculas, palabras completas, distinguir acentos) y devuelve la caja para resaltar.
+`replace_all` cambia todas las apariciones en un solo paso que `undo` deshace entero;
+una aparición que cruza dos cadenas de texto se deja como está y se cuenta en `skipped`.
+
+### Páginas (hito 6d)
+
+`rotate_page`, `delete_page`, `move_page`, `extract_pages` e `insert_pages` (desde otro
+PDF, con sus campos de formulario; los nombres de campo no se hacen únicos). El árbol de
+páginas se reescribe plano tras copiar a cada página lo que heredaba (recursos, tamaño,
+rotación); un `null` explícito cuenta como «sin valor». Cada operación es un paso de deshacer.
+
+### Imágenes (hito 6e)
+
+`add_image` coloca un JPEG o PNG en una caja de la página. El JPEG se incrusta tal cual
+(no se decodifica; la orientación EXIF, que los lectores de PDF ignoran, se aplica en la
+colocación); el PNG se decodifica y su canal alfa pasa a una máscara suave. Se comprobó
+renderizando con PyMuPDF (posición, orientación, páginas giradas, transparencia). Límite:
+64 megapíxeles.
+
+### Fuentes CFF y Type 1 (hito 6f)
+
+El programa de fuente incrustado se lee para saber qué letras dibuja de verdad:
+TrueType y OpenType con ttf-parser; CFF desnudo (`Type1C`, `CIDFontType0C`) con su tabla
+de nombres/CID; Type 1 descifrando su sección `eexec`. Así una fuente incrustada
+conserva su tipo de letra para todas las letras que tiene, no solo las que la página ya
+dibujaba, y un glifo que el ToUnicode declara pero que no dibuja nada ya no se escribe.
+
+### Párrafos (hito 6g)
+
+`paragraph_of` reconoce un párrafo (dos o más líneas de una fuente y tamaño, a margen
+izquierdo común, con interlineado parejo, cada una en una sola cadena) y
+`replace_paragraph(texto completo)` lo reparte de nuevo con el ancho de su línea más
+larga: reescribe las líneas que hay, vacía las que sobran y añade líneas debajo con la misma
+fuente y color. No mueve lo que hay debajo: si el párrafo crece sobre otro texto, avisa
+(`overlaps_text`, `below_page`). No reconoce texto justificado, sangría de primera línea ni
+líneas con varias fuentes. Todo es un solo paso de deshacer.
+
 ### Huecos conocidos (aún no implementados)
 
-verificación de glifos en fuentes CFF/Type1 (sólo se comprueban TrueType), editar texto dentro de formularios XObject, un cambio de longitud no desplaza lo que sigue en la línea, escritura vertical, fuentes Type3, PDFs
-cifrados con contraseña, codificaciones MacRoman/Standard sin `ToUnicode`,
-nombres de glifo fuera de una lista corta (la lista completa de Adobe se añadirá
-con el hito 2).
+editar texto dentro de formularios XObject, escritura vertical, fuentes Type3,
+`/Encrypt` en línea, codificaciones MacRoman/Standard sin `ToUnicode`, nombres de glifo
+fuera de la lista corta de `program.rs`, anotaciones (resaltar, notas), y que un
+párrafo empuje hacia abajo lo que tiene debajo.
 
 ## Comandos
 

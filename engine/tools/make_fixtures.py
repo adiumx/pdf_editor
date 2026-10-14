@@ -323,6 +323,37 @@ loma = pymupdf.Font(fontfile=LOMA)
     "charter " + "".join(c for c in "ŽžŠšÿ€Ðð" if not charter.has_glyph(ord(c))) + "\n"
     "loma " + "".join(c for c in "ŽžŠšÿ€Ðð" if not loma.has_glyph(ord(c))) + "\n")
 
+# 18. Paragraphs: a title, a four-line paragraph in dark blue (each line its own
+#     string), a second paragraph further down, and a paragraph in a second column
+#     whose lines sit at the same heights as the first one's.
+PARAGRAPH = ("El asegurado debe notificar a la compania cualquier cambio en los datos declarados dentro de "
+             "los quince dias siguientes a que ocurra, para que la poliza continue vigente con las "
+             "condiciones pactadas desde el inicio.")
+
+
+def wrap(text, width, font="helv", size=12):
+    lines, current = [], ""
+    for word in text.split():
+        trial = f"{current} {word}".strip()
+        if current and pymupdf.get_text_length(trial, fontname=font, fontsize=size) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = trial
+    return lines + [current]
+
+
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_text((72, 80), "Condiciones generales", fontname="hebo", fontsize=14)
+for i, line in enumerate(wrap(PARAGRAPH, 300)):
+    page.insert_text((72, 110 + 15 * i), line, fontname="helv", fontsize=12, color=(0, 0, 0.5))
+for i, line in enumerate(wrap("Segundo parrafo, mas abajo, que no debe moverse cuando el primero crece o se acorta.", 300)):
+    page.insert_text((72, 230 + 15 * i), line, fontname="helv", fontsize=12)
+for i, line in enumerate(wrap("Columna aparte con sus propias lineas a la misma altura que las del primer parrafo.", 130)):
+    page.insert_text((430, 110 + 15 * i), line, fontname="helv", fontsize=12)
+doc.save(OUT / "paragraph.pdf", garbage=0, deflate=False)
+
 # 11. Encrypted copies of the simple text page. Most producers write /Encrypt as
 #     an indirect object, which MuPDF does not; `indirect_encrypt` rewrites it
 #     that way with an incremental update. One file keeps MuPDF's inline form.

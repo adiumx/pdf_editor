@@ -27,6 +27,8 @@ fn exercise(doc: &mut Document) {
         let _ = doc.page_size(page);
         if let Ok(runs) = doc.text_runs(page) {
             if let Some(run) = runs.first() {
+                let _ = doc.paragraph_of(page, run);
+                let _ = doc.replace_paragraph(page, run, "Texto nuevo para el parrafo, bastante mas largo que el que habia antes en esas lineas.", true);
                 let _ = doc.replace_text_with(page, run, "Prueba", ReplaceOptions { allow_fallback: true, reflow: Reflow::Following });
             }
         }

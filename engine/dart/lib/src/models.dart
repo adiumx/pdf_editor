@@ -106,7 +106,9 @@ enum Reflow {
 /// edge), `follower_not_moved` (`text`: a run inside a form XObject, which can
 /// be read but not edited, stayed where it was), `line_may_be_aligned`
 /// (`alignment`: `centered` or `right`; consider [Reflow.centered] or
-/// [Reflow.rightAligned]) and `reflow_failed`.
+/// [Reflow.rightAligned]), `reflow_failed`, and, for a re-laid paragraph,
+/// `overlaps_text` (`text`: what the new lines now cover) and `below_page`
+/// (`by`: points past the page's bottom edge).
 class PdfWarning {
   PdfWarning(this.kind, {this.by, this.text, this.alignment});
   final String kind;
@@ -227,6 +229,30 @@ class FieldWidget {
 
   /// It carries an appearance stream, which is what a reader draws.
   final bool hasAppearance;
+}
+
+/// Several lines that read as one block of text. [text] is all of it: show it
+/// in one editing box and hand the result to `replaceParagraph`.
+class PdfParagraph {
+  PdfParagraph(this.text, this.runIds, this.display);
+  final String text;
+
+  /// The [TextRun.id] of each line, top to bottom.
+  final List<int> runIds;
+  final List<double> display;
+}
+
+class ParagraphResult {
+  ParagraphResult(this.lines, this.added, this.removed, this.fallbackChars, this.warnings);
+
+  /// Lines the paragraph has now.
+  final int lines;
+
+  /// Lines added below the old last one, and lines at the end emptied.
+  final int added;
+  final int removed;
+  final String fallbackChars;
+  final List<PdfWarning> warnings;
 }
 
 /// Where a picture ended up.
