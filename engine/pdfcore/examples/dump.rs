@@ -12,9 +12,9 @@ fn main() {
         }
         for run in doc.text_runs(page).unwrap() {
             println!(
-                "{page}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{}\t{}",
+                "{page}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{}\t{}\t{}",
                 run.display[0], run.display[1], run.display[2], run.display[3],
-                run.size, run.base_font, run.text.replace('\t', " ")
+                run.size, run.base_font, run.text.replace('\t', " "), run.xobject.as_deref().unwrap_or("-")
             );
         }
     }
