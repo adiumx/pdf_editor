@@ -33,7 +33,8 @@ como referencia y como oráculo de pruebas.
 | 3b. Añadir texto nuevo en cualquier punto de la página (para PDF planos, sin campos) | **hecho** |
 | 4. Guardar, y deshacer/rehacer | **hecho** |
 | 5a. Capa C (`pdfcore-ffi`): cabecera, JSON, probada llamándola desde Python | **hecho** |
-| 5b. Compilar y enlazar para Android/iOS; enlaces Dart; app Flutter | siguiente (necesita NDK/Xcode/Flutter, no hay aquí) |
+| 5b. Paquete Dart (`dart/`): `PdfDocument` y `PdfSession` (isolate), 15 pruebas contra la librería real | **hecho** — guía en [FLUTTER.md](FLUTTER.md) |
+| 5c. Enlazar para Android/iOS y la app Flutter | **pendiente**: necesita NDK/Xcode/Flutter, que no hay donde se escribió |
 | 6. Imágenes, anotaciones, firmas (aviso), OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee

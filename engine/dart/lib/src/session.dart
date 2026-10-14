@@ -1,0 +1,177 @@
+import 'dart:async';
+import 'dart:isolate';
+import 'dart:typed_data';
+
+import 'document.dart';
+import 'models.dart';
+
+/// A PDF open in the engine, which runs in an isolate of its own.
+///
+/// Reading a big page or saving a long document takes long enough to drop
+/// frames if done on the UI isolate. Here every call is a message and returns a
+/// [Future], so the screen stays smooth. Calls are answered in the order made.
+///
+/// Same rules as [PdfDocument]: run ids come from the last [page] reading and
+/// any edit, [undo] or [redo] invalidates them.
+class PdfSession {
+  PdfSession._(this._isolate, this._commands, this._replies) {
+    _subscription = _replies.listen(_onReply);
+  }
+
+  final Isolate _isolate;
+  final SendPort _commands;
+  final ReceivePort _replies;
+  late final StreamSubscription<dynamic> _subscription;
+  final _pending = <int, Completer<Object?>>{};
+  var _next = 0;
+  var _closed = false;
+
+  static Future<PdfSession> open(Uint8List bytes, {String? libraryPath}) async {
+    final inbox = ReceivePort();
+    final isolate = await Isolate.spawn(
+      _engineMain,
+      _Start(inbox.sendPort, TransferableTypedData.fromList([bytes]), libraryPath),
+      errorsAreFatal: false,
+    );
+    final first = await inbox.first;
+    inbox.close();
+    if (first is SendPort) {
+      // `first` consumed the port's stream; a new port carries the replies.
+      final replies = ReceivePort();
+      first.send(replies.sendPort);
+      return PdfSession._(isolate, first, replies);
+    }
+    isolate.kill(priority: Isolate.immediate);
+    throw _exception(first as Map<Object?, Object?>);
+  }
+
+  void _onReply(dynamic message) {
+    final reply = message as List<Object?>;
+    final completer = _pending.remove(reply[0] as int);
+    if (completer == null) return;
+    if (reply[1] as bool) {
+      completer.complete(reply[2]);
+    } else {
+      completer.completeError(_exception(reply[2] as Map<Object?, Object?>));
+    }
+  }
+
+  Future<T> _call<T>(String op, [List<Object?> args = const []]) {
+    if (_closed) return Future.error(StateError('La sesión ya se cerró'));
+    final id = _next++;
+    final completer = Completer<Object?>();
+    _pending[id] = completer;
+    _commands.send([id, op, args]);
+    return completer.future.then((v) => v as T);
+  }
+
+  Future<int> pageCount() => _call<int>('pageCount');
+  Future<PageData> page(int index) => _call<PageData>('page', [index]);
+  Future<List<FormField>> fields() => _call<List<FormField>>('fields');
+
+  Future<EditResult> replaceText(PageData page, TextRun run, String text, {bool allowFallback = false}) =>
+      _call<EditResult>('replaceText', [page.index, run.id, text, allowFallback]);
+
+  Future<AddedText> addText(int page, NewText text) => _call<AddedText>('addText', [page, text]);
+
+  Future<void> setField(String name, String value, {bool ignoreReadOnly = false}) =>
+      _call<void>('setField', [name, value, ignoreReadOnly]);
+
+  Future<bool> undo() => _call<bool>('undo');
+  Future<bool> redo() => _call<bool>('redo');
+  Future<History> history() => _call<History>('history');
+
+  Future<Uint8List> save() async {
+    final data = await _call<TransferableTypedData>('save');
+    return data.materialize().asUint8List();
+  }
+
+  /// Release the document and stop the isolate. The session is unusable after.
+  Future<void> close() async {
+    if (_closed) return;
+    await _call<void>('close');
+    _closed = true;
+    await _subscription.cancel();
+    _replies.close();
+    _isolate.kill(priority: Isolate.beforeNextEvent);
+  }
+}
+
+PdfException _exception(Map<Object?, Object?> m) =>
+    PdfException(m['kind'] as String, m['error'] as String, chars: (m['chars'] as String?) ?? '');
+
+Map<String, Object?> _describe(PdfException e) => {'kind': e.kind, 'error': e.message, 'chars': e.chars};
+
+class _Start {
+  _Start(this.reply, this.bytes, this.libraryPath);
+  final SendPort reply;
+  final TransferableTypedData bytes;
+  final String? libraryPath;
+}
+
+/// Entry point of the engine's isolate.
+void _engineMain(_Start start) {
+  final PdfDocument doc;
+  try {
+    doc = PdfDocument.open(start.bytes.materialize().asUint8List(), libraryPath: start.libraryPath);
+  } on PdfException catch (e) {
+    start.reply.send(_describe(e));
+    return;
+  } catch (e) {
+    start.reply.send({'kind': 'panic', 'error': '$e'});
+    return;
+  }
+
+  final commands = ReceivePort();
+  late final SendPort replies;
+  var wired = false;
+  start.reply.send(commands.sendPort);
+
+  commands.listen((message) {
+    if (!wired) {
+      replies = message as SendPort; // the first message is where to answer
+      wired = true;
+      return;
+    }
+    final [id as int, op as String, args as List<Object?>] = message as List<Object?>;
+    try {
+      final result = _run(doc, op, args);
+      replies.send([id, true, result]);
+    } on PdfException catch (e) {
+      replies.send([id, false, _describe(e)]);
+    } catch (e) {
+      replies.send([id, false, {'kind': 'panic', 'error': '$e'}]);
+    }
+    if (op == 'close') commands.close();
+  });
+}
+
+Object? _run(PdfDocument doc, String op, List<Object?> a) {
+  switch (op) {
+    case 'pageCount':
+      return doc.pageCount;
+    case 'page':
+      return doc.page(a[0] as int);
+    case 'fields':
+      return doc.fields();
+    case 'replaceText':
+      return doc.replaceTextById(a[0] as int, a[1] as int, a[2] as String, allowFallback: a[3] as bool);
+    case 'addText':
+      return doc.addText(a[0] as int, a[1] as NewText);
+    case 'setField':
+      doc.setField(a[0] as String, a[1] as String, ignoreReadOnly: a[2] as bool);
+      return null;
+    case 'undo':
+      return doc.undo();
+    case 'redo':
+      return doc.redo();
+    case 'history':
+      return doc.history;
+    case 'save':
+      return TransferableTypedData.fromList([doc.save()]);
+    case 'close':
+      doc.close();
+      return null;
+  }
+  throw PdfException('bad_argument', 'operación desconocida: $op');
+}

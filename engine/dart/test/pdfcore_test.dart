@@ -1,0 +1,210 @@
+// Run with the library built first:
+//   cargo build -p pdfcore-ffi && cd dart && dart test
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:pdfcore/pdfcore.dart';
+import 'package:test/test.dart';
+
+final engine = Directory.current.parent;
+final libraryPath = Platform.environment['PDFCORE_LIB'] ?? '${engine.path}/target/debug/libpdfcore_ffi.so';
+
+Uint8List fixture(String name) => File('${engine.path}/pdfcore/tests/fixtures/$name.pdf').readAsBytesSync();
+
+PdfDocument open(String name) => PdfDocument.open(fixture(name), libraryPath: libraryPath);
+
+void main() {
+  group('PdfDocument', () {
+    late PdfDocument doc;
+    setUp(() => doc = open('standard'));
+    tearDown(() => doc.close());
+
+    test('reads pages and runs', () {
+      expect(doc.pageCount, 1);
+      final page = doc.page(0);
+      expect([page.width, page.height, page.rotation], [595.0, 842.0, 0]);
+      expect(page.runs.first.text, 'Hola mundo');
+      expect(page.runs.first.baseFont, 'Helvetica');
+      expect(page.runs.first.display, hasLength(4));
+      expect(page.runs.first.invisible, isFalse);
+    });
+
+    test('a file that is not a PDF throws with a reason', () {
+      expect(
+        () => PdfDocument.open(Uint8List.fromList('esto no es un pdf'.codeUnits), libraryPath: libraryPath),
+        throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'pdf')),
+      );
+    });
+
+    test('replaces text and the old run ids stop meaning anything', () {
+      final page = doc.page(0);
+      final done = doc.replaceText(page, page.runs[0], 'Adiós');
+      expect(done.newWidth, lessThan(done.oldWidth));
+      expect(
+        () => doc.replaceText(page, page.runs[0], 'otra vez'),
+        throwsA(isA<PdfException>().having((e) => e.isStaleRun, 'stale', isTrue)),
+      );
+      final again = doc.page(0);
+      expect(again.runs[0].text, 'Adiós');
+      doc.replaceText(again, again.runs[0], 'otra vez');
+    });
+
+    test('adds text with options and refuses what no font can draw', () {
+      final added = doc.addText(0, NewText('Nombre completo', 72, 300, size: 14, bold: true, color: [0, 0, 1]));
+      expect(added.lines, 1);
+      final runs = doc.page(0).runs;
+      expect(runs.last.text, 'Nombre completo');
+      expect(runs.last.baseFont, 'LiberationSans-Bold');
+      expect(
+        () => doc.addText(0, NewText('世界', 1, 1)),
+        throwsA(isA<PdfException>()
+            .having((e) => e.isMissingGlyphs, 'missing', isTrue)
+            .having((e) => e.chars, 'chars', '世界')),
+      );
+    });
+
+    test('undo and redo walk the history', () {
+      expect(doc.history.canUndo, isFalse);
+      final page = doc.page(0);
+      doc.replaceText(page, page.runs[0], 'Cambiado');
+      expect(doc.history.canUndo, isTrue);
+      expect(doc.undo(), isTrue);
+      expect(doc.page(0).runs[0].text, 'Hola mundo');
+      expect(doc.undo(), isFalse);
+      expect(doc.redo(), isTrue);
+      expect(doc.page(0).runs[0].text, 'Cambiado');
+    });
+
+    test('saves bytes that open again with the edits', () {
+      final page = doc.page(0);
+      doc.replaceText(page, page.runs[0], 'Guardado');
+      final bytes = doc.save();
+      expect(String.fromCharCodes(bytes.sublist(0, 5)), '%PDF-');
+      final again = PdfDocument.open(bytes, libraryPath: libraryPath);
+      addTearDown(again.close);
+      expect(again.page(0).runs[0].text, 'Guardado');
+    });
+
+    test('a closed document says so instead of crashing', () {
+      final other = open('standard')..close();
+      expect(() => other.page(0), throwsStateError);
+      other.close(); // closing twice is harmless
+    });
+  });
+
+  test('a subset font lacking a letter: refused, then drawn with the fallback', () {
+    final doc = open('embedded');
+    addTearDown(doc.close);
+    var page = doc.page(0);
+    expect(
+      () => doc.replaceText(page, page.runs[0], 'Póliza XQ'),
+      throwsA(isA<PdfException>().having((e) => e.chars, 'chars', 'XQ')),
+    );
+    final done = doc.replaceText(page, page.runs[0], 'Póliza XQ', allowFallback: true);
+    expect(done.fallbackChars, 'XQ');
+    expect(done.reread, isTrue);
+    page = doc.page(0);
+    expect(page.runs.map((r) => r.text).join(), 'Póliza XQ');
+  });
+
+  test('form fields: read, fill, refuse, force', () {
+    final doc = open('form');
+    addTearDown(doc.close);
+    final fields = {for (final f in doc.fields()) f.name: f};
+    expect(fields['nombre']!.value, 'Ana');
+    expect(fields['fijo']!.readOnly, isTrue);
+    expect(fields['pais']!.kind, FieldKind.combo);
+    expect(fields['pais']!.options.map((o) => o.export), ['España', 'Francia', 'Portugal']);
+    expect(fields['respuesta']!.widgets.map((w) => w.onState), ['Si', 'No', 'NS']);
+
+    doc.setField('nombre', 'María José');
+    doc.setField('respuesta', 'No');
+    doc.setField('acepto', 'true');
+    expect(() => doc.setField('corto', 'demasiado largo'), throwsA(isA<PdfException>()));
+    expect(() => doc.setField('fijo', 'x'), throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'rejected')));
+    doc.setField('fijo', 'x', ignoreReadOnly: true);
+    expect(() => doc.setField('nada', 'x'), throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'no_such_field')));
+
+    final after = {for (final f in doc.fields()) f.name: f};
+    expect(after['nombre']!.value, 'María José');
+    expect(after['respuesta']!.value, 'No');
+    expect(after['acepto']!.checked, isTrue);
+    expect(after['fijo']!.value, 'x');
+  });
+
+  test('opening and closing many times does not fall over', () {
+    for (var i = 0; i < 100; i++) {
+      final d = open('standard');
+      d.page(0);
+      d.close();
+    }
+  });
+
+  group('PdfSession (own isolate)', () {
+    test('every call is a Future and results come back intact', () async {
+      final session = await PdfSession.open(fixture('standard'), libraryPath: libraryPath);
+      try {
+        expect(await session.pageCount(), 1);
+        final page = await session.page(0);
+        expect(page.runs.first.text, 'Hola mundo');
+        final done = await session.replaceText(page, page.runs[0], 'Desde otro isolate');
+        expect(done.fallbackChars, '');
+        expect((await session.page(0)).runs[0].text, 'Desde otro isolate');
+
+        await session.addText(0, NewText('añadido', 72, 300));
+        expect((await session.history()).canUndo, isTrue);
+        expect(await session.undo(), isTrue);
+
+        final bytes = await session.save();
+        expect(String.fromCharCodes(bytes.sublist(0, 5)), '%PDF-');
+      } finally {
+        await session.close();
+      }
+    });
+
+    test('errors cross the isolate boundary with their kind and characters', () async {
+      final session = await PdfSession.open(fixture('embedded'), libraryPath: libraryPath);
+      try {
+        final page = await session.page(0);
+        await expectLater(
+          session.replaceText(page, page.runs[0], 'Póliza XQ'),
+          throwsA(isA<PdfException>().having((e) => e.chars, 'chars', 'XQ')),
+        );
+        await expectLater(session.setField('nada', 'x'), throwsA(isA<PdfException>()));
+        // The session survives an error.
+        expect(await session.pageCount(), 1);
+      } finally {
+        await session.close();
+      }
+    });
+
+    test('a bad file fails to open', () async {
+      await expectLater(
+        PdfSession.open(Uint8List.fromList([1, 2, 3]), libraryPath: libraryPath),
+        throwsA(isA<PdfException>()),
+      );
+    });
+
+    test('calls made together are answered in order', () async {
+      final session = await PdfSession.open(fixture('form'), libraryPath: libraryPath);
+      try {
+        final results = await Future.wait([
+          session.pageCount(),
+          session.fields(),
+          session.page(0),
+        ]);
+        expect(results[0], 1);
+        expect((results[1] as List<FormField>).length, 8);
+        expect((results[2] as PageData).runs, isNotEmpty);
+      } finally {
+        await session.close();
+      }
+    });
+
+    test('a closed session refuses further calls', () async {
+      final session = await PdfSession.open(fixture('standard'), libraryPath: libraryPath);
+      await session.close();
+      await expectLater(session.pageCount(), throwsStateError);
+    });
+  });
+}

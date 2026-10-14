@@ -1,0 +1,13 @@
+name: pdfcore
+description: Dart bindings for the pdfcore PDF engine (dart:ffi). Edit PDF text keeping its font, fill forms, add text, undo.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.3.0
+
+dependencies:
+  ffi: ^2.1.0
+
+dev_dependencies:
+  test: ^1.25.0
