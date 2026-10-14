@@ -13,6 +13,7 @@ mod forms;
 mod image;
 mod journal;
 mod pages;
+mod program;
 mod lines;
 mod reflow;
 mod search;

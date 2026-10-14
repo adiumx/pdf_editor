@@ -10,4 +10,4 @@ publish = false
 lopdf = { version = "0.45", default-features = false }
 png = { version = "0.17", default-features = false }
 thiserror = "2"
-ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
+ttf-parser = { version = "0.25", default-features = false, features = ["std", "glyph-names"] }

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use lopdf::{Dictionary, Document, Object};
 
 use crate::cmap::CMap;
+use crate::program;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontKind {
@@ -166,50 +167,110 @@ impl Font {
 
     /// A subset font keeps a slot for glyphs it dropped, and a ToUnicode that
     /// still names them. Writing with such a code draws nothing, silently, so
-    /// find them in the font program itself and refuse them later.
+    /// find them in the font program itself and refuse them later. Programs of
+    /// every kind producers embed are read: TrueType, OpenType, bare CFF, Type 1.
     fn find_blank_glyphs(&mut self, doc: &Document, dict: &Dictionary) {
+        let descendant = (self.kind == FontKind::Type0).then(|| first_descendant(doc, dict)).flatten();
         let descriptor = match self.kind {
-            FontKind::Type0 => first_descendant(doc, dict).and_then(|d| dict_of(doc, d, b"FontDescriptor")),
+            FontKind::Type0 => descendant.and_then(|d| dict_of(doc, d, b"FontDescriptor")),
             FontKind::Simple => dict_of(doc, dict, b"FontDescriptor"),
         };
-        let Some(program) = descriptor.and_then(|d| stream_of(doc, d, b"FontFile2")) else { return };
-        let Ok(face) = ttf_parser::Face::parse(&program, 0) else { return };
+        let Some(program) = descriptor.and_then(|d| embedded_program(doc, d)) else { return };
+        let to_gid: Option<Vec<u8>> = descendant.and_then(|d| stream_of(doc, d, b"CIDToGIDMap"));
 
-        let to_gid: Option<Vec<u8>> = (self.kind == FontKind::Type0)
-            .then(|| first_descendant(doc, dict))
-            .flatten()
-            .and_then(|d| stream_of(doc, d, b"CIDToGIDMap"));
-
-        let draws = |gid: u16| {
-            let id = ttf_parser::GlyphId(gid);
-            face.glyph_bounding_box(id).is_some()
-        };
         let candidates: Vec<(u32, String)> = match self.kind {
             FontKind::Type0 => self.to_unicode.as_ref().map(|m| m.entries()).unwrap_or_default(),
             FontKind::Simple => (0..256u32)
                 .filter_map(|c| self.simple_text.get(c as usize).cloned().flatten().map(|t| (c, t)))
                 .collect(),
         };
-        for (code, text) in candidates {
-            if text.chars().all(char::is_whitespace) {
-                continue; // a space has an advance and no outline, by design
+        let differences = if self.kind == FontKind::Simple { difference_names(doc, dict) } else { Vec::new() };
+        // Names a simple font's code may go by: the document's own, then the Adobe ones.
+        let names_for = |code: u32, text: &str| -> Vec<String> {
+            let mut names: Vec<String> = differences.get(code as usize).cloned().flatten().into_iter().collect();
+            if let Some(c) = text.chars().next() {
+                names.extend(program::glyph_names(c));
             }
-            let gid = match self.kind {
-                FontKind::Type0 => Some(match &to_gid {
-                    Some(map) => map
-                        .get(code as usize * 2..code as usize * 2 + 2)
-                        .map(|b| u16::from_be_bytes([b[0], b[1]]))
-                        .unwrap_or(0),
-                    None => code as u16,
-                }),
-                FontKind::Simple => simple_gid(&face, code, &text),
-            };
-            if let Some(gid) = gid {
-                if draws(gid) {
+            names
+        };
+
+        let mut verdicts: Vec<(u32, Option<bool>)> = Vec::new();
+        let mut judge = |program: &Program| match program {
+            Program::Sfnt(data) => {
+                let Ok(face) = ttf_parser::Face::parse(data, 0) else { return false };
+                // A CID-keyed CFF inside an OpenType wrapper numbers glyphs by CID.
+                let cid_to_gid: Option<HashMap<u16, u16>> = face.tables().cff.as_ref().and_then(|t| {
+                    let map: HashMap<u16, u16> =
+                        (0..t.number_of_glyphs()).filter_map(|g| t.glyph_cid(ttf_parser::GlyphId(g)).map(|c| (c, g))).collect();
+                    (!map.is_empty()).then_some(map)
+                });
+                for (code, text) in &candidates {
+                    if text.chars().all(char::is_whitespace) {
+                        continue; // a space has an advance and no outline, by design
+                    }
+                    let gid = match self.kind {
+                        FontKind::Type0 => Some(match (&to_gid, &cid_to_gid) {
+                            (Some(map), _) => map
+                                .get(*code as usize * 2..*code as usize * 2 + 2)
+                                .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                                .unwrap_or(0),
+                            (None, Some(cids)) => cids.get(&(*code as u16)).copied().unwrap_or(u16::MAX),
+                            (None, None) => *code as u16,
+                        }),
+                        FontKind::Simple => simple_gid(&face, *code, text).or_else(|| {
+                            names_for(*code, text).iter().find_map(|n| face.glyph_index_by_name(n)).map(|g| g.0)
+                        }),
+                    };
+                    verdicts.push((*code, gid.map(|g| face.glyph_bounding_box(ttf_parser::GlyphId(g)).is_some())));
+                }
+                true
+            }
+            Program::Cff(data) => {
+                let Some(glyphs) = program::CffGlyphs::parse(data) else { return false };
+                for (code, text) in &candidates {
+                    if text.chars().all(char::is_whitespace) {
+                        continue;
+                    }
+                    verdicts.push((
+                        *code,
+                        match self.kind {
+                            FontKind::Type0 => Some(glyphs.cid_draws(*code)),
+                            FontKind::Simple => glyphs.code_draws(*code as u8, &names_for(*code, text), !dict.has(b"Encoding")),
+                        },
+                    ));
+                }
+                true
+            }
+            Program::Type1(data) => {
+                // Names only exist for simple fonts; a composite one is left unjudged.
+                if self.kind != FontKind::Simple {
+                    return true;
+                }
+                let Some(defined) = program::type1_glyph_names(data) else { return false };
+                for (code, text) in &candidates {
+                    if text.chars().all(char::is_whitespace) {
+                        continue;
+                    }
+                    verdicts.push((*code, Some(names_for(*code, text).iter().any(|n| defined.contains(n)))));
+                }
+                true
+            }
+        };
+        // A program mislabelled by its producer (bare CFF under OpenType) gets a second look.
+        if !judge(&program) {
+            if let Program::Sfnt(data) = &program {
+                judge(&Program::Cff(data.clone()));
+            }
+        }
+        for (code, verdict) in verdicts {
+            match verdict {
+                Some(true) => {
                     self.verified.insert(code);
-                } else {
+                }
+                Some(false) => {
                     self.blank.insert(code);
                 }
+                None => {}
             }
         }
     }
@@ -475,6 +536,52 @@ fn stream_of(doc: &Document, dict: &Dictionary, key: &[u8]) -> Option<Vec<u8>> {
     stream.decompressed_content().ok().or_else(|| Some(stream.content.clone()))
 }
 
+enum Program {
+    /// TrueType or OpenType (whichever outlines it holds).
+    Sfnt(Vec<u8>),
+    /// A bare CFF table, as `Type1C` and `CIDFontType0C` streams are.
+    Cff(Vec<u8>),
+    Type1(Vec<u8>),
+}
+
+fn embedded_program(doc: &Document, descriptor: &Dictionary) -> Option<Program> {
+    if let Some(data) = stream_of(doc, descriptor, b"FontFile2") {
+        return Some(Program::Sfnt(data));
+    }
+    if let Some(stream) = descriptor.get(b"FontFile3").ok().and_then(|o| resolve(doc, o).as_stream().ok()) {
+        let data = stream.decompressed_content().ok().unwrap_or_else(|| stream.content.clone());
+        return match stream.dict.get(b"Subtype").and_then(|o| o.as_name()).ok()? {
+            b"OpenType" => Some(Program::Sfnt(data)),
+            b"Type1C" | b"CIDFontType0C" => Some(Program::Cff(data)),
+            _ => None,
+        };
+    }
+    stream_of(doc, descriptor, b"FontFile").map(Program::Type1)
+}
+
+/// The glyph names a simple font's `/Encoding /Differences` assigns, by code.
+fn difference_names(doc: &Document, dict: &Dictionary) -> Vec<Option<String>> {
+    let mut names = vec![None; 256];
+    if let Some(Object::Dictionary(encoding)) = dict.get(b"Encoding").ok().map(|o| resolve(doc, o)) {
+        if let Some(list) = array_of(doc, encoding, b"Differences") {
+            let mut code = 0usize;
+            for item in &list {
+                match resolve(doc, item) {
+                    Object::Integer(n) => code = *n as usize,
+                    Object::Name(name) => {
+                        if let Some(slot) = names.get_mut(code) {
+                            *slot = Some(String::from_utf8_lossy(name).into_owned());
+                        }
+                        code += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    names
+}
+
 fn first_descendant<'a>(doc: &'a Document, dict: &'a Dictionary) -> Option<&'a Dictionary> {
     let list = resolve(doc, dict.get(b"DescendantFonts").ok()?).as_array().ok()?;
     resolve(doc, list.first()?).as_dict().ok()
@@ -487,7 +594,18 @@ fn simple_gid(face: &ttf_parser::Face, code: u32, text: &str) -> Option<u16> {
     let cmap = face.tables().cmap?;
     let unicode = text.chars().next().map(|c| c as u32);
     for subtable in cmap.subtables {
-        for probe in [Some(code), Some(0xF000 + code), unicode].into_iter().flatten() {
+        // A Unicode cmap is asked for the character; only a symbolic one (Windows,
+        // encoding 0) is addressed by the code itself, as it is or at 0xF000 + code.
+        // Probing a raw code as if it were Unicode would find unrelated letters.
+        let symbolic = subtable.platform_id == ttf_parser::PlatformId::Windows && subtable.encoding_id == 0;
+        let probes: Vec<u32> = if symbolic {
+            vec![code, 0xF000 + code]
+        } else if subtable.is_unicode() {
+            unicode.into_iter().collect()
+        } else {
+            Vec::new()
+        };
+        for probe in probes {
             if let Some(gid) = subtable.glyph_index(probe) {
                 return Some(gid.0);
             }

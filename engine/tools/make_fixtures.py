@@ -278,6 +278,51 @@ def png_rgba(w, h, pixels):
 cells = b"".join((bytes((0, 160, 0, 255)) if x < 20 else bytes((0, 0, 0, 0))) for y in range(40) for x in range(40))
 (OUT / "img_alpha.png").write_bytes(png_rgba(40, 40, cells))
 
+# 17. Embedded fonts that are not TrueType: OpenType with CFF outlines (composite
+#     and simple), a bare CFF table (`Type1C`), and Type 1. Loma is a Thai font with
+#     Latin letters but no Ž or €; the composite one also gets a ToUnicode that lies,
+#     claiming an empty glyph (en space) draws Ž.
+import struct as _struct
+LOMA = "/usr/share/fonts/opentype/tlwg/Loma.otf"
+CHARTER = "/usr/share/fonts/X11/Type1/c0648bt_.pfb"
+
+
+def font_page(path, simple, text="Hola ñandú"):
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_font(fontname="F0", fontfile=path, set_simple=simple)
+    page.insert_text((72, 200), text, fontname="F0", fontsize=14)
+    return doc, doc[0].get_fonts(full=True)[0][0]
+
+
+doc, font_xref = font_page(LOMA, False)
+tounicode = int(doc.xref_get_key(font_xref, "ToUnicode")[1].split()[0])
+cmap = doc.xref_stream(tounicode).decode().replace("endcmap", "1 beginbfchar\n<0124> <017D>\nendbfchar\nendcmap", 1)
+doc.update_stream(tounicode, cmap.encode())
+doc.save(OUT / "cff_type0.pdf", garbage=0, deflate=False)
+
+doc, font_xref = font_page(LOMA, True)
+doc.save(OUT / "cff_simple.pdf", garbage=0, deflate=False)
+
+# The same font with its bare CFF table (no sfnt wrapper), as `Type1C`.
+data = open(LOMA, "rb").read()
+count = _struct.unpack(">H", data[4:6])[0]
+cff = next(data[o:o + n] for tag, _, o, n in (_struct.unpack(">4sIII", data[12 + 16 * i:28 + 16 * i]) for i in range(count)) if tag == b"CFF ")
+doc, font_xref = font_page(LOMA, True)
+descriptor = int(doc.xref_get_key(font_xref, "FontDescriptor")[1].split()[0])
+program = int(doc.xref_get_key(descriptor, "FontFile3")[1].split()[0])
+doc.update_stream(program, cff)
+doc.xref_set_key(program, "Subtype", "/Type1C")
+doc.save(OUT / "cff_bare.pdf", garbage=0, deflate=False)
+
+doc, _ = font_page(CHARTER, True)
+doc.save(OUT / "type1_simple.pdf", garbage=0, deflate=False)
+charter = pymupdf.Font(fontfile=CHARTER)
+loma = pymupdf.Font(fontfile=LOMA)
+(OUT / "fonts_missing.txt").write_text(
+    "charter " + "".join(c for c in "ŽžŠšÿ€Ðð" if not charter.has_glyph(ord(c))) + "\n"
+    "loma " + "".join(c for c in "ŽžŠšÿ€Ðð" if not loma.has_glyph(ord(c))) + "\n")
+
 # 11. Encrypted copies of the simple text page. Most producers write /Encrypt as
 #     an indirect object, which MuPDF does not; `indirect_encrypt` rewrites it
 #     that way with an incremental update. One file keeps MuPDF's inline form.
