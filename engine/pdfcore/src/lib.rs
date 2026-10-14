@@ -4,6 +4,7 @@
 //! text as runs that know their font and where they sit.
 
 mod cmap;
+mod edit;
 mod error;
 mod font;
 mod standard_widths;
@@ -13,6 +14,7 @@ use lopdf::{Dictionary, Document as Pdf, Object, ObjectId};
 
 pub use error::{Error, Result};
 pub use font::{Font, FontKind, Glyph};
+pub use edit::Replaced;
 pub use text::{Matrix, TextRun};
 
 /// A page's size as a reader shows it: rotation applied, origin top-left.

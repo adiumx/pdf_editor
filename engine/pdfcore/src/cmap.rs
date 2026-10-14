@@ -86,8 +86,9 @@ impl CMap {
         self.to_code.get(text).copied()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.to_text.is_empty()
+    /// Every `(code, text)` the map defines.
+    pub fn entries(&self) -> Vec<(u32, String)> {
+        self.to_text.iter().map(|(c, t)| (*c, t.clone())).collect()
     }
 }
 

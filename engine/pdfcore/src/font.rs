@@ -44,6 +44,9 @@ pub struct Font {
     missing_width: f32,
     cid_default_width: f32,
     cid_widths: HashMap<u32, f32>,
+    /// Codes the embedded font program has no drawing for, whatever the
+    /// document's ToUnicode claims. Empty when the program could not be read.
+    blank: std::collections::HashSet<u32>,
 }
 
 impl Font {
@@ -69,12 +72,14 @@ impl Font {
             missing_width: 0.0,
             cid_default_width: 1000.0,
             cid_widths: HashMap::new(),
+            blank: Default::default(),
         };
 
         match kind {
             FontKind::Type0 => font.read_composite(doc, dict),
             FontKind::Simple => font.read_simple(doc, dict),
         }
+        font.find_blank_glyphs(doc, dict);
         font
     }
 
@@ -155,6 +160,54 @@ impl Font {
         }
     }
 
+    /// A subset font keeps a slot for glyphs it dropped, and a ToUnicode that
+    /// still names them. Writing with such a code draws nothing, silently, so
+    /// find them in the font program itself and refuse them later.
+    fn find_blank_glyphs(&mut self, doc: &Document, dict: &Dictionary) {
+        let descriptor = match self.kind {
+            FontKind::Type0 => first_descendant(doc, dict).and_then(|d| dict_of(doc, d, b"FontDescriptor")),
+            FontKind::Simple => dict_of(doc, dict, b"FontDescriptor"),
+        };
+        let Some(program) = descriptor.and_then(|d| stream_of(doc, d, b"FontFile2")) else { return };
+        let Ok(face) = ttf_parser::Face::parse(&program, 0) else { return };
+
+        let to_gid: Option<Vec<u8>> = (self.kind == FontKind::Type0)
+            .then(|| first_descendant(doc, dict))
+            .flatten()
+            .and_then(|d| stream_of(doc, d, b"CIDToGIDMap"));
+
+        let draws = |gid: u16| {
+            let id = ttf_parser::GlyphId(gid);
+            face.glyph_bounding_box(id).is_some()
+        };
+        let candidates: Vec<(u32, String)> = match self.kind {
+            FontKind::Type0 => self.to_unicode.as_ref().map(|m| m.entries()).unwrap_or_default(),
+            FontKind::Simple => (0..256u32)
+                .filter_map(|c| self.simple_text.get(c as usize).cloned().flatten().map(|t| (c, t)))
+                .collect(),
+        };
+        for (code, text) in candidates {
+            if text.chars().all(char::is_whitespace) {
+                continue; // a space has an advance and no outline, by design
+            }
+            let gid = match self.kind {
+                FontKind::Type0 => Some(match &to_gid {
+                    Some(map) => map
+                        .get(code as usize * 2..code as usize * 2 + 2)
+                        .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                        .unwrap_or(0),
+                    None => code as u16,
+                }),
+                FontKind::Simple => simple_gid(&face, code, &text),
+            };
+            if let Some(gid) = gid {
+                if !draws(gid) {
+                    self.blank.insert(code);
+                }
+            }
+        }
+    }
+
     pub fn code_bytes(&self) -> usize {
         self.code_bytes
     }
@@ -211,17 +264,51 @@ impl Font {
         }
     }
 
+    /// The bytes that make this font draw `text`, or the characters it has no
+    /// glyph for. A ligature the font keeps as one glyph ("fi") is found as
+    /// such: the longest run of characters with a code wins.
+    pub fn encode(&self, text: &str) -> std::result::Result<Vec<u8>, Vec<char>> {
+        let chars: Vec<char> = text.chars().collect();
+        let (mut bytes, mut missing, mut i) = (Vec::new(), Vec::new(), 0);
+        while i < chars.len() {
+            let found = (1..=chars.len().min(i + 4) - i).rev().find_map(|len| {
+                let piece: String = chars[i..i + len].iter().collect();
+                self.code_for(&piece).map(|code| (code, len))
+            });
+            match found {
+                Some((code, len)) => {
+                    let width = self.code_bytes.max(1);
+                    bytes.extend((0..width).rev().map(|b| (code >> (8 * b)) as u8));
+                    i += len;
+                }
+                None => {
+                    missing.push(chars[i]);
+                    i += 1;
+                }
+            }
+        }
+        if missing.is_empty() { Ok(bytes) } else { Err(missing) }
+    }
+
+    /// How far `bytes` advance the pen at `size`, in points (no spacing params).
+    pub fn advance_of(&self, bytes: &[u8], size: f32) -> f32 {
+        self.decode(bytes).iter().map(|g| g.width).sum::<f32>() / 1000.0 * size
+    }
+
     /// The code that draws `text` in this font, if the font has such a glyph.
     pub fn code_for(&self, text: &str) -> Option<u32> {
         if let Some(code) = self.to_unicode.as_ref().and_then(|m| m.code_of(text)) {
-            return Some(code);
+            if !self.blank.contains(&code) {
+                return Some(code);
+            }
         }
         if self.kind == FontKind::Simple {
             return self
                 .simple_text
                 .iter()
                 .position(|t| t.as_deref() == Some(text))
-                .map(|i| i as u32);
+                .map(|i| i as u32)
+                .filter(|code| !self.blank.contains(code));
         }
         None
     }
@@ -351,4 +438,20 @@ fn stream_of(doc: &Document, dict: &Dictionary, key: &[u8]) -> Option<Vec<u8>> {
 fn first_descendant<'a>(doc: &'a Document, dict: &'a Dictionary) -> Option<&'a Dictionary> {
     let list = resolve(doc, dict.get(b"DescendantFonts").ok()?).as_array().ok()?;
     resolve(doc, list.first()?).as_dict().ok()
+}
+
+/// The glyph a simple TrueType font draws for `code`: through whichever cmap
+/// the producer left (Word's subsets often keep only a symbol one, where codes
+/// sit at 0xF000 + code), and only when one of them answers.
+fn simple_gid(face: &ttf_parser::Face, code: u32, text: &str) -> Option<u16> {
+    let cmap = face.tables().cmap?;
+    let unicode = text.chars().next().map(|c| c as u32);
+    for subtable in cmap.subtables {
+        for probe in [Some(code), Some(0xF000 + code), unicode].into_iter().flatten() {
+            if let Some(gid) = subtable.glyph_index(probe) {
+                return Some(gid.0);
+            }
+        }
+    }
+    None
 }

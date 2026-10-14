@@ -27,8 +27,8 @@ como referencia y como oráculo de pruebas.
 | Hito | Estado |
 |---|---|
 | 1. Leer: páginas, tamaño y rotación, tramos de texto con fuente, tamaño y caja | **hecho** |
-| 2. Reemplazar un tramo conservando la fuente (código de cada carácter por `ToUnicode` inverso) | siguiente |
-| 2b. Carácter que el subconjunto no trae: incrustar una fuente de respaldo (Liberation Sans, OFL) y avisar | |
+| 2. Reemplazar un tramo conservando la fuente, con la que ya trae el PDF | **hecho** |
+| 2b. Carácter que el subconjunto no trae: incrustar una fuente de respaldo (Liberation Sans, OFL) y avisar. Hoy se rechaza con `MissingGlyphs` y no cambia nada | siguiente |
 | 3. Añadir texto nuevo; campos de formulario (AcroForm) con su apariencia | |
 | 4. Guardar, y modelo de deshacer | |
 | 5. Capa C ABI + plugin Flutter (`flutter_rust_bridge` o `dart:ffi`) | |
@@ -53,9 +53,27 @@ diferencias conocidas:
 - PyMuPDF une un espacio inicial al tramo siguiente; aquí es un tramo aparte.
 - MuPDF descarta glifos idénticos sobreimpresos; aquí se leen los dos.
 
+### Lo que el hito 2 hace, y cómo se comprobó
+
+`Document::replace_text` cambia el operando de la única operación de dibujo que
+mostró el tramo, **en su sitio**: el número de operaciones no cambia, así que
+las lecturas siguen valiendo y se pueden encadenar varias ediciones. El
+carácter se busca en el `ToUnicode` al revés (o en la codificación, en fuentes
+simples) y se escribe con el código de la propia fuente.
+
+Un `ToUnicode` no garantiza que el glifo exista: un subconjunto conserva el
+hueco y el mapa de un glifo que ya no dibuja nada, y escribir con ese código
+daría texto en blanco sin aviso. Por eso se mira el programa de fuente
+(`FontFile2`, con `ttf-parser`) y un código sin contorno se rechaza. Lo
+descubrió una prueba que decía que sí existían `X` y `Q`; ahora fallan limpio.
+
+Comprobado en un formulario real de seguros: se cambió una línea en Arial
+(Type0/Identity-H, subconjunto), MuPDF abre el resultado, la dibuja con la
+misma fuente en el mismo sitio, y es la única diferencia de texto de la página.
+
 ### Huecos conocidos (aún no implementados)
 
-`CIDToGIDMap` distinto de Identity, escritura vertical, fuentes Type3, PDFs
+verificación de glifos en fuentes CFF/Type1 (sólo se comprueban TrueType), editar texto dentro de formularios XObject, un cambio de longitud no desplaza lo que sigue en la línea, escritura vertical, fuentes Type3, PDFs
 cifrados con contraseña, codificaciones MacRoman/Standard sin `ToUnicode`,
 nombres de glifo fuera de una lista corta (la lista completa de Adobe se añadirá
 con el hito 2).
