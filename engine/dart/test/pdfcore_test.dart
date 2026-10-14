@@ -207,4 +207,82 @@ void main() {
       await expectLater(session.pageCount(), throwsStateError);
     });
   });
+
+  group('reflow, warnings and signatures', () {
+    TextRun named(PageData page, String text) => page.runs.firstWhere((r) => r.text.trim() == text);
+
+    test('a longer run moves the rest of its line and says how many', () {
+      final doc = open('line_absolute');
+      addTearDown(doc.close);
+      var page = doc.page(0);
+      final after = named(page, 'de 9 a 14 horas').origin[0];
+      final done = doc.replaceText(page, named(page, 'lunes a viernes'), 'de lunes a viernes inclusive');
+      expect(done.moved, 1);
+      expect(done.warnings, isEmpty);
+      expect(done.reread, isTrue);
+      page = doc.page(0);
+      expect(named(page, 'de 9 a 14 horas').origin[0] - after, closeTo(done.newWidth - done.oldWidth, 0.05));
+      expect(named(page, 'Segunda linea del documento').origin, [72.0, 680.0]);
+    });
+
+    test('Reflow.none leaves everything where it was', () {
+      final doc = open('line_absolute');
+      addTearDown(doc.close);
+      var page = doc.page(0);
+      final before = named(page, 'de 9 a 14 horas').origin[0];
+      final done = doc.replaceText(page, named(page, 'lunes a viernes'), 'de lunes a viernes inclusive',
+          reflow: Reflow.none);
+      expect(done.moved, 0);
+      expect(named(doc.page(0), 'de 9 a 14 horas').origin[0], before);
+    });
+
+    test('warnings cross the boundary with their details', () {
+      var doc = open('line_absolute');
+      addTearDown(doc.close);
+      var page = doc.page(0);
+      var done = doc.replaceText(page, named(page, 'lunes a viernes'), 'lunes a viernes y tambien ' * 6);
+      expect(done.warnings.map((w) => w.kind), contains('exceeds_page'));
+      expect(done.warnings.firstWhere((w) => w.kind == 'exceeds_page').by, greaterThan(0));
+
+      doc = open('line_xobject');
+      addTearDown(doc.close);
+      page = doc.page(0);
+      done = doc.replaceText(page, named(page, 'El resto de las oficinas de'), 'El resto de todas las oficinas de pasaportes de');
+      expect(done.warnings.single.kind, 'follower_not_moved');
+      expect(done.warnings.single.text, 'lunes a viernes');
+    });
+
+    test('signatures, and which widgets carry an appearance', () {
+      final signed = open('signed');
+      addTearDown(signed.close);
+      expect(signed.signatures().single.field, 'firma');
+      expect(signed.signatures().single.signer, 'Cesar Ruiz');
+      expect(signed.fields().firstWhere((f) => f.name == 'firma').signed, isTrue);
+
+      final bare = open('form_no_appearance');
+      addTearDown(bare.close);
+      expect(bare.fields().firstWhere((f) => f.name == 'nombre').widgets.first.hasAppearance, isFalse);
+      bare.setField('nombre', 'Con apariencia');
+      expect(bare.fields().firstWhere((f) => f.name == 'nombre').widgets.first.hasAppearance, isTrue);
+      expect(open('form')..close(), isNotNull);
+    });
+
+    test('the session passes the reflow mode and returns signatures', () async {
+      final session = await PdfSession.open(fixture('signed'), libraryPath: libraryPath);
+      try {
+        expect((await session.signatures()).single.signer, 'Cesar Ruiz');
+      } finally {
+        await session.close();
+      }
+      final lines = await PdfSession.open(fixture('line_absolute'), libraryPath: libraryPath);
+      try {
+        final page = await lines.page(0);
+        final done = await lines.replaceText(page, named(page, 'lunes a viernes'), 'de lunes a viernes inclusive',
+            reflow: Reflow.centered);
+        expect(done.moved, greaterThan(0));
+      } finally {
+        await lines.close();
+      }
+    });
+  });
 }

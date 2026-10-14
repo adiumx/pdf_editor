@@ -67,3 +67,31 @@ fn several_edits_from_one_reading_all_land() {
     let again = reopen(&mut doc).text_runs(0).unwrap();
     assert_eq!((again[0].text.as_str(), again[1].text.as_str()), ("Uno", "Dos"));
 }
+
+#[test]
+fn a_simple_embedded_subset_font_does_not_get_codes_it_cannot_draw() {
+    // The encoding has a code for every letter, but the subset kept only the
+    // glyphs its text used. Guessing a letter's code from the encoding drew the
+    // font's missing-glyph box in a real CV (a "y" in a bold label).
+    let mut doc = open("simple_subset");
+    let run = doc.text_runs(0).unwrap().remove(0);
+    assert_eq!(run.text, "Poliza numero 12345");
+    // Letters the text already used are fine...
+    doc.replace_text(0, &run, "Poliza 54321 numero").unwrap();
+    // ...letters it never used are not in the font.
+    let run = doc.text_runs(0).unwrap().remove(0);
+    match doc.replace_text(0, &run, "Poliza y") {
+        Err(Error::MissingGlyphs(chars)) => assert_eq!(chars, vec!['y']),
+        other => panic!("esperaba MissingGlyphs, salió {other:?}"),
+    }
+}
+
+#[test]
+fn the_fallback_draws_what_a_simple_subset_font_lacks() {
+    let mut doc = open("simple_subset");
+    let run = doc.text_runs(0).unwrap().remove(0);
+    let done = doc.replace_text_with_fallback(0, &run, "Poliza y Ñ").unwrap();
+    assert_eq!(done.fallback_chars.iter().collect::<String>(), "yÑ");
+    let texts: String = reopen(&mut doc).text_runs(0).unwrap().iter().filter(|r| r.origin.1 > 600.0).map(|r| r.text.clone()).collect();
+    assert!(texts.contains("Poliza y Ñ") || texts.replace(' ', "").contains("PolizayÑ"), "{texts:?}");
+}

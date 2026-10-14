@@ -118,3 +118,43 @@ fn filling_leaves_the_pages_text_alone() {
     let after: Vec<String> = reopen(&mut doc).text_runs(0).unwrap().into_iter().map(|r| r.text).collect();
     assert_eq!(before, after);
 }
+
+#[test]
+fn a_signed_document_reports_its_signature_and_an_unsigned_one_does_not() {
+    assert!(open().signatures().is_empty());
+    assert!(!open().field("firma").unwrap().signed);
+
+    let path = format!("{}/tests/fixtures/signed.pdf", env!("CARGO_MANIFEST_DIR"));
+    let signed = Document::open(&std::fs::read(path).unwrap()).unwrap();
+    let signatures = signed.signatures();
+    assert_eq!(signatures.len(), 1);
+    assert_eq!(signatures[0].field, "firma");
+    assert_eq!(signatures[0].signer.as_deref(), Some("Cesar Ruiz"));
+    assert!(signed.field("firma").unwrap().signed);
+}
+
+#[test]
+fn a_filled_text_field_ends_up_with_an_appearance_the_readers_can_draw() {
+    // Many real forms ship text widgets with no appearance stream at all.
+    let path = format!("{}/tests/fixtures/form_no_appearance.pdf", env!("CARGO_MANIFEST_DIR"));
+    let mut doc = Document::open(&std::fs::read(path).unwrap()).unwrap();
+    assert!(!doc.field("nombre").unwrap().widgets[0].has_appearance, "el fixture debería no traerla");
+    doc.set_field_value("nombre", "María José").unwrap();
+    let again = reopen(&mut doc);
+    assert!(again.field("nombre").unwrap().widgets[0].has_appearance);
+    // Every other widget in the form had one all along, and still does.
+    assert!(again.field("acepto").unwrap().widgets[0].has_appearance);
+}
+
+#[test]
+fn every_text_widget_filled_gets_an_appearance() {
+    let mut doc = open();
+    for name in ["nombre", "corto"] {
+        doc.set_field_value(name, "ok").unwrap();
+    }
+    doc.set_field_value("pais", "Francia").unwrap();
+    let after = reopen(&mut doc);
+    for name in ["nombre", "corto", "pais"] {
+        assert!(after.field(name).unwrap().widgets.iter().all(|w| w.has_appearance), "{name}");
+    }
+}

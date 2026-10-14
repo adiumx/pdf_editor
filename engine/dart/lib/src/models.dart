@@ -85,10 +85,58 @@ class PageData {
       );
 }
 
+/// What happens to the rest of the line when a replacement changes its length.
+enum Reflow {
+  /// Nothing moves: a longer text may overlap what follows.
+  none,
+
+  /// What follows on the line moves by the difference. For left-aligned text.
+  following,
+
+  /// The line keeps its centre.
+  centered,
+
+  /// The line keeps its right edge.
+  rightAligned,
+}
+
+/// Something about an edit's result that the person may want to know.
+///
+/// `kind` is one of `exceeds_page` and `exceeds_margin` (`by`: points past the
+/// edge), `follower_not_moved` (`text`: a run inside a form XObject, which can
+/// be read but not edited, stayed where it was), `line_may_be_aligned`
+/// (`alignment`: `centered` or `right`; consider [Reflow.centered] or
+/// [Reflow.rightAligned]) and `reflow_failed`.
+class PdfWarning {
+  PdfWarning(this.kind, {this.by, this.text, this.alignment});
+  final String kind;
+  final double? by;
+  final String? text;
+  final String? alignment;
+
+  factory PdfWarning.fromJson(Map<String, dynamic> j) => PdfWarning(
+        j['kind'] as String,
+        by: (j['by'] as num?)?.toDouble(),
+        text: j['text'] as String?,
+        alignment: j['alignment'] as String?,
+      );
+
+  @override
+  String toString() => 'PdfWarning($kind${by != null ? ', by: $by' : ''}${text != null ? ', text: $text' : ''})';
+}
+
 class EditResult {
-  EditResult(this.oldWidth, this.newWidth, this.fallbackChars, this.reread);
+  EditResult(this.oldWidth, this.newWidth, this.fallbackChars, this.reread,
+      {this.moved = 0, this.warnings = const []});
   final double oldWidth;
   final double newWidth;
+
+  /// How many other runs of the line were moved to make room (or close the gap).
+  final int moved;
+
+  /// Things worth telling the person: the line now runs past the margin, a run
+  /// that could not be moved, a line that looks centred...
+  final List<PdfWarning> warnings;
 
   /// Characters drawn with the bundled font because the document's own could
   /// not: worth telling the person.
@@ -102,6 +150,10 @@ class EditResult {
         (j['new_width'] as num).toDouble(),
         j['fallback_chars'] as String,
         j['reread'] as bool,
+        moved: (j['moved'] as int?) ?? 0,
+        warnings: ((j['warnings'] as List?) ?? const [])
+            .map((w) => PdfWarning.fromJson(w as Map<String, dynamic>))
+            .toList(),
       );
 }
 
@@ -168,10 +220,20 @@ class FieldOption {
 }
 
 class FieldWidget {
-  FieldWidget(this.page, this.display, this.onState);
+  FieldWidget(this.page, this.display, this.onState, {this.hasAppearance = true});
   final int? page;
   final List<double> display;
   final String? onState;
+
+  /// It carries an appearance stream, which is what a reader draws.
+  final bool hasAppearance;
+}
+
+/// A completed digital signature. Any edit invalidates it.
+class PdfSignature {
+  PdfSignature(this.field, this.signer);
+  final String field;
+  final String? signer;
 }
 
 class FormField {
@@ -189,6 +251,8 @@ class FormField {
     required this.maxLen,
     required this.options,
     required this.widgets,
+    this.signed = false,
+    this.signer,
   });
 
   final String name;
@@ -208,6 +272,10 @@ class FormField {
   final List<FieldOption> options;
   final List<FieldWidget> widgets;
 
+  /// A signature field holding a completed signature.
+  final bool signed;
+  final String? signer;
+
   factory FormField.fromJson(Map<String, dynamic> j) => FormField(
         name: j['name'] as String,
         kind: FieldKind.values.firstWhere((k) => k.name == j['kind'], orElse: () => FieldKind.text),
@@ -224,8 +292,11 @@ class FormField {
             .map((o) => FieldOption((o as Map)['export'] as String, o['label'] as String))
             .toList(),
         widgets: (j['widgets'] as List)
-            .map((w) => FieldWidget((w as Map)['page'] as int?, _box(w['display']), w['on_state'] as String?))
+            .map((w) => FieldWidget((w as Map)['page'] as int?, _box(w['display']), w['on_state'] as String?,
+                hasAppearance: (w['has_appearance'] as bool?) ?? true))
             .toList(),
+        signed: (j['signed'] as bool?) ?? false,
+        signer: j['signer'] as String?,
       );
 }
 

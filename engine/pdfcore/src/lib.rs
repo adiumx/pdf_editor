@@ -11,6 +11,7 @@ mod fallback;
 mod font;
 mod forms;
 mod journal;
+mod reflow;
 mod standard_widths;
 mod text;
 
@@ -21,8 +22,9 @@ use journal::{Patch, Tracked};
 pub use error::{Error, Result};
 pub use font::{Font, FontKind, Glyph};
 pub use add::{Added, Align, Anchor, NewText};
-pub use edit::Replaced;
-pub use forms::{Field, FieldKind, Widget};
+pub use edit::{ReplaceOptions, Replaced};
+pub use reflow::{Alignment, Reflow, Warning};
+pub use forms::{Field, FieldKind, Signature, Widget};
 pub use text::{Matrix, TextRun};
 
 /// A page's size as a reader shows it: rotation applied, origin top-left.

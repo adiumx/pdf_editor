@@ -42,6 +42,9 @@ pub struct Widget {
     pub display: [f32; 4],
     /// For checkboxes and radio buttons: the name of this widget's "on" state.
     pub on_state: Option<String>,
+    /// It carries an appearance stream, which is what a reader draws. A widget
+    /// without one shows as an empty box in readers that do not build their own.
+    pub has_appearance: bool,
     id: ObjectId,
 }
 
@@ -64,6 +67,11 @@ pub struct Field {
     /// `(export value, label)` of a choice field's options.
     pub options: Vec<(String, String)>,
     pub widgets: Vec<Widget>,
+    /// A signature field that holds a completed signature. Editing the document
+    /// invalidates it.
+    pub signed: bool,
+    /// Who signed, when the signature says (`/Name`).
+    pub signer: Option<String>,
     id: ObjectId,
     /// Default appearance string and alignment (0 left, 1 centre, 2 right).
     da: Vec<u8>,
@@ -215,7 +223,14 @@ impl Document {
                 let w = self.pdf.get_dictionary(wid).ok()?;
                 let rect = rect_of(&self.pdf, w)?;
                 let page = pages.get(&wid).copied();
-                Some(Widget { page, rect, display: to_display(page, rect), on_state: on_state(&self.pdf, w), id: wid })
+                Some(Widget {
+                    page,
+                    rect,
+                    display: to_display(page, rect),
+                    on_state: on_state(&self.pdf, w),
+                    has_appearance: has_appearance(&self.pdf, w),
+                    id: wid,
+                })
             })
             .collect();
 
@@ -224,6 +239,15 @@ impl Document {
             Some(Object::Name(n)) => String::from_utf8_lossy(n).into_owned(),
             Some(Object::Array(a)) => a.first().and_then(|o| o.as_str().ok()).map(text_string).unwrap_or_default(),
             _ => String::new(),
+        };
+        // A signature's value is a dictionary; one with contents or a byte range is
+        // a completed signature, an empty field is not.
+        let (signed, signer) = match (&here.v, kind) {
+            (Some(Object::Dictionary(v)), FieldKind::Signature) if v.has(b"Contents") || v.has(b"ByteRange") => (
+                true,
+                v.get(b"Name").ok().and_then(|o| resolve(&self.pdf, o).as_str().ok()).map(text_string),
+            ),
+            _ => (false, None),
         };
         let checked = matches!(kind, FieldKind::Checkbox | FieldKind::Radio) && !value.is_empty() && value != "Off";
         out.push(Field {
@@ -240,6 +264,8 @@ impl Document {
             max_len: here.max_len,
             options: options_of(&self.pdf, here.opt.as_ref()),
             widgets,
+            signed,
+            signer,
             id,
             da: here.da.clone().unwrap_or_default(),
             q: here.q,
@@ -275,6 +301,14 @@ fn on_state(pdf: &lopdf::Document, widget: &Dictionary) -> Option<String> {
         .iter()
         .map(|(k, _)| String::from_utf8_lossy(k).into_owned())
         .find(|k| k != "Off")
+}
+
+fn has_appearance(pdf: &lopdf::Document, widget: &Dictionary) -> bool {
+    widget
+        .get(b"AP")
+        .ok()
+        .and_then(|o| resolve(pdf, o).as_dict().ok())
+        .is_some_and(|ap| ap.has(b"N"))
 }
 
 fn options_of(pdf: &lopdf::Document, opt: Option<&Object>) -> Vec<(String, String)> {
@@ -621,4 +655,24 @@ fn color_ops(pdf: &lopdf::Document, array: Option<&Object>, stroke: bool) -> Opt
         _ => return None,
     };
     Some(format!("{} {op}", v.join(" ")))
+}
+
+/// A completed digital signature in the document.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Signature {
+    /// The signature field's name.
+    pub field: String,
+    pub signer: Option<String>,
+}
+
+impl Document {
+    /// The signatures the document carries. Any edit invalidates them, so a
+    /// caller should say so before the first one.
+    pub fn signatures(&self) -> Vec<Signature> {
+        self.fields()
+            .into_iter()
+            .filter(|f| f.signed)
+            .map(|f| Signature { field: f.name, signer: f.signer })
+            .collect()
+    }
 }

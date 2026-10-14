@@ -15,6 +15,7 @@ use lopdf::{Dictionary, Object, Stream};
 
 use crate::error::{Error, Result};
 use crate::fallback::{self, Embedded};
+use crate::reflow::{Reflow, Warning};
 use crate::text::{fonts_of, TextRun};
 use crate::Document;
 
@@ -32,6 +33,27 @@ pub struct Replaced {
     /// The page's operations were renumbered: read its runs again before the
     /// next edit on it.
     pub reread: bool,
+    /// How many runs after (or before) the edited one were moved so the line
+    /// still reads, see [`Reflow`].
+    pub moved: usize,
+    /// Things worth telling the person: the line now runs past the margin, a
+    /// run that could not be moved, a line that looks centred...
+    pub warnings: Vec<Warning>,
+}
+
+/// What an edit may do besides replacing the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplaceOptions {
+    /// Draw characters the document's font lacks with a bundled one.
+    pub allow_fallback: bool,
+    /// What happens to the rest of the line when the length changes.
+    pub reflow: Reflow,
+}
+
+impl Default for ReplaceOptions {
+    fn default() -> Self {
+        ReplaceOptions { allow_fallback: false, reflow: Reflow::Following }
+    }
 }
 
 impl Document {
@@ -40,27 +62,44 @@ impl Document {
     /// Fails with [`Error::MissingGlyphs`] when that font has no glyph for some
     /// character, and with nothing changed.
     pub fn replace_text(&mut self, page: usize, run: &TextRun, new_text: &str) -> Result<Replaced> {
-        self.transaction(|d| d.replace(page, run, new_text, false))
+        self.replace_text_with(page, run, new_text, ReplaceOptions::default())
     }
 
     /// As [`replace_text`](Self::replace_text), but characters the original
     /// font lacks are drawn with a bundled font of the closest style. Fails
     /// only for characters neither font has, again with nothing changed.
     pub fn replace_text_with_fallback(&mut self, page: usize, run: &TextRun, new_text: &str) -> Result<Replaced> {
-        self.transaction(|d| d.replace(page, run, new_text, true))
+        self.replace_text_with(page, run, new_text, ReplaceOptions { allow_fallback: true, ..Default::default() })
     }
 
-    fn replace(&mut self, page: usize, run: &TextRun, new_text: &str, allow_fallback: bool) -> Result<Replaced> {
+    /// The general form: [`replace_text`](Self::replace_text) and
+    /// [`replace_text_with_fallback`](Self::replace_text_with_fallback) with the
+    /// options spelled out, including [`Reflow`].
+    pub fn replace_text_with(&mut self, page: usize, run: &TextRun, new_text: &str, options: ReplaceOptions) -> Result<Replaced> {
+        self.transaction(|d| d.replace(page, run, new_text, options))
+    }
+
+    fn replace(&mut self, page: usize, run: &TextRun, new_text: &str, options: ReplaceOptions) -> Result<Replaced> {
+        let allow_fallback = options.allow_fallback;
         if run.xobject.is_some() {
             return Err(Error::Unsupported(
                 "editar texto dentro de un formulario XObject aún no está soportado".into(),
             ));
         }
         let id = self.page_id(page)?;
-        let fonts = fonts_of(&self.pdf, &self.resources(id));
+        let mut fonts = fonts_of(&self.pdf, &self.resources(id));
+        let page_runs = self.text_runs(page).ok();
         let font = fonts
-            .get(&run.font)
+            .get_mut(&run.font)
             .ok_or_else(|| Error::Unsupported(format!("no se encontró la fuente {}", run.font)))?;
+        // What this font already draws on the page is certainly in the font.
+        font.allow_seen(
+            run.glyphs
+                .iter()
+                .map(|g| g.code)
+                .chain(page_runs.iter().flatten().filter(|r| r.font == run.font).flat_map(|r| r.glyphs.iter().map(|g| g.code))),
+        );
+        let font = &*font;
 
         let segments = font.segments(new_text);
         let (key, data) = fallback::choose(&run.base_font);
@@ -81,6 +120,7 @@ impl Document {
             .collect();
         let old_width = font.advance_of(&old, run.size);
 
+        let before_edit = if options.reflow != Reflow::None { page_runs } else { None };
         let mut content = Content::decode(&self.pdf.get_page_content(id))?;
         let original = content
             .operations
@@ -136,9 +176,25 @@ impl Document {
             let font_id = self.fallbacks[key].font_id;
             self.register_font(id, &resource, font_id)?;
         }
+        let pieces = ops.len();
         content.operations.splice(run.op_index..=run.op_index, ops);
+
+        // What follows on the line keeps pace with the new length.
+        let delta = new_width - old_width;
+        let (mut moved, mut corrections, mut warnings) = (0, 0, Vec::new());
+        if let (Some(before), true) = (&before_edit, delta.abs() > 0.01 && options.reflow != Reflow::None) {
+            let outcome = self.reflow_line(page, id, before, run.op_index, pieces, delta, options.reflow, &mut content)?;
+            (moved, corrections, warnings) = (outcome.moved, outcome.corrections, outcome.warnings);
+        }
         self.set_page_content(id, &content)?;
-        Ok(Replaced { old_width, new_width, fallback_chars: used_fallback, reread })
+        Ok(Replaced {
+            old_width,
+            new_width,
+            fallback_chars: used_fallback,
+            reread: reread || corrections > 0,
+            moved,
+            warnings,
+        })
     }
 
     /// Make a font usable by name in one page's content.
@@ -156,7 +212,7 @@ impl Document {
         Ok(())
     }
 
-    fn set_page_content(&mut self, page: lopdf::ObjectId, content: &Content) -> Result<()> {
+    pub(crate) fn set_page_content(&mut self, page: lopdf::ObjectId, content: &Content) -> Result<()> {
         let mut stream = Stream::new(Dictionary::new(), content.encode()?);
         let _ = stream.compress();
         let stream_id = self.pdf.add_object(stream);

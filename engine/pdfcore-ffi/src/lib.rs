@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{Align, Anchor, Document, Error, NewText, TextRun};
+use pdfcore::{Align, Alignment, Anchor, Document, Error, NewText, Reflow, ReplaceOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -201,9 +201,11 @@ pub unsafe extern "C" fn pdfcore_fields(doc: *mut PdfDoc) -> *mut c_char {
                     "read_only": f.read_only, "required": f.required,
                     "multiline": f.multiline, "password": f.password, "comb": f.comb,
                     "editable": f.editable, "max_len": f.max_len,
+                    "signed": f.signed, "signer": f.signer,
                     "options": f.options.iter().map(|(e, l)| json!({"export": e, "label": l})).collect::<Vec<_>>(),
                     "widgets": f.widgets.iter().map(|w| json!({
                         "page": w.page, "display": w.display, "on_state": w.on_state,
+                        "has_appearance": w.has_appearance,
                     })).collect::<Vec<_>>(),
                 })
             })
@@ -218,8 +220,48 @@ fn edited(d: &mut PdfDoc) {
     d.reading.clear();
 }
 
-/// Replace a run's text. `allow_fallback` != 0 draws characters the document's
-/// font lacks with a bundled font. Invalidates every run id.
+fn warning_json(w: &Warning) -> Value {
+    match w {
+        Warning::ExceedsPage { by } => json!({ "kind": "exceeds_page", "by": by }),
+        Warning::ExceedsMargin { by } => json!({ "kind": "exceeds_margin", "by": by }),
+        Warning::FollowerNotMoved { text } => json!({ "kind": "follower_not_moved", "text": text }),
+        Warning::LineMayBeAligned { alignment } => json!({
+            "kind": "line_may_be_aligned",
+            "alignment": match alignment { Alignment::Centered => "centered", Alignment::Right => "right" },
+        }),
+        Warning::ReflowFailed => json!({ "kind": "reflow_failed" }),
+    }
+}
+
+fn replace(d: &mut PdfDoc, page: c_int, run_id: c_int, new_text: &str, allow_fallback: c_int, reflow: c_int) -> Value {
+    let page = page.max(0) as usize;
+    let Some(run) = d.reading.get(&page).and_then(|r| r.get(run_id.max(0) as usize)).cloned() else {
+        return json!({ "error": "ese texto ya no está donde se leyó: vuelve a leer la página", "kind": "stale_run" });
+    };
+    let reflow = match reflow {
+        0 => Reflow::None,
+        2 => Reflow::Centered,
+        3 => Reflow::RightAligned,
+        _ => Reflow::Following,
+    };
+    let options = ReplaceOptions { allow_fallback: allow_fallback != 0, reflow };
+    match d.doc.replace_text_with(page, &run, new_text, options) {
+        Ok(done) => {
+            edited(d);
+            json!({
+                "ok": true, "old_width": done.old_width, "new_width": done.new_width,
+                "fallback_chars": done.fallback_chars.iter().collect::<String>(),
+                "reread": done.reread, "moved": done.moved,
+                "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>(),
+            })
+        }
+        Err(e) => failure(&e),
+    }
+}
+
+/// Replace a run's text, moving what follows on its line (`reflow` 1). The
+/// original entry point, kept so that existing callers keep working; see
+/// `pdfcore_replace_text_ex`.
 ///
 /// # Safety
 /// `doc` must be a live handle; `new_text` a NUL-terminated UTF-8 string.
@@ -231,28 +273,40 @@ pub unsafe extern "C" fn pdfcore_replace_text(
     new_text: *const c_char,
     allow_fallback: c_int,
 ) -> *mut c_char {
+    pdfcore_replace_text_ex(doc, page, run_id, new_text, allow_fallback, 1)
+}
+
+/// Replace a run's text. `allow_fallback` != 0 draws characters the document's
+/// font lacks with a bundled font. `reflow` says what happens to the rest of
+/// the line: 0 nothing, 1 what follows moves (default), 2 the line keeps its
+/// centre, 3 the line keeps its right edge. Invalidates every run id.
+///
+/// # Safety
+/// `doc` must be a live handle; `new_text` a NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_replace_text_ex(
+    doc: *mut PdfDoc,
+    page: c_int,
+    run_id: c_int,
+    new_text: *const c_char,
+    allow_fallback: c_int,
+    reflow: c_int,
+) -> *mut c_char {
     let (Some(d), Some(new_text)) = (handle(doc), string_arg(new_text)) else { return bad_argument() };
+    guard(|| replace(d, page, run_id, new_text, allow_fallback, reflow))
+}
+
+/// The completed digital signatures: `{"signatures":[{"field","signer"}]}`.
+/// Editing invalidates them, so say so before the first edit.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_signatures(doc: *mut PdfDoc) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
     guard(|| {
-        let page = page.max(0) as usize;
-        let Some(run) = d.reading.get(&page).and_then(|r| r.get(run_id.max(0) as usize)).cloned() else {
-            return json!({ "error": "ese texto ya no está donde se leyó: vuelve a leer la página", "kind": "stale_run" });
-        };
-        let result = if allow_fallback != 0 {
-            d.doc.replace_text_with_fallback(page, &run, new_text)
-        } else {
-            d.doc.replace_text(page, &run, new_text)
-        };
-        match result {
-            Ok(done) => {
-                edited(d);
-                json!({
-                    "ok": true, "old_width": done.old_width, "new_width": done.new_width,
-                    "fallback_chars": done.fallback_chars.iter().collect::<String>(),
-                    "reread": done.reread,
-                })
-            }
-            Err(e) => failure(&e),
-        }
+        let list: Vec<Value> = d.doc.signatures().iter().map(|s| json!({ "field": s.field, "signer": s.signer })).collect();
+        json!({ "signatures": list })
     })
 }
 

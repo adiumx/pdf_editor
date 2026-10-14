@@ -69,8 +69,11 @@ class PdfSession {
   Future<PageData> page(int index) => _call<PageData>('page', [index]);
   Future<List<FormField>> fields() => _call<List<FormField>>('fields');
 
-  Future<EditResult> replaceText(PageData page, TextRun run, String text, {bool allowFallback = false}) =>
-      _call<EditResult>('replaceText', [page.index, run.id, text, allowFallback]);
+  Future<EditResult> replaceText(PageData page, TextRun run, String text,
+          {bool allowFallback = false, Reflow reflow = Reflow.following}) =>
+      _call<EditResult>('replaceText', [page.index, run.id, text, allowFallback, reflow]);
+
+  Future<List<PdfSignature>> signatures() => _call<List<PdfSignature>>('signatures');
 
   Future<AddedText> addText(int page, NewText text) => _call<AddedText>('addText', [page, text]);
 
@@ -155,7 +158,10 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
     case 'fields':
       return doc.fields();
     case 'replaceText':
-      return doc.replaceTextById(a[0] as int, a[1] as int, a[2] as String, allowFallback: a[3] as bool);
+      return doc.replaceTextById(a[0] as int, a[1] as int, a[2] as String,
+          allowFallback: a[3] as bool, reflow: a[4] as Reflow);
+    case 'signatures':
+      return doc.signatures();
     case 'addText':
       return doc.addText(a[0] as int, a[1] as NewText);
     case 'setField':

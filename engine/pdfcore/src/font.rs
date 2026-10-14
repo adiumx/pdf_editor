@@ -47,6 +47,9 @@ pub struct Font {
     /// Codes the embedded font program has no drawing for, whatever the
     /// document's ToUnicode claims. Empty when the program could not be read.
     blank: std::collections::HashSet<u32>,
+    /// Codes of an embedded simple font known to be drawn: checked in the font
+    /// program, or seen drawn on the page. Nothing else may be written with it.
+    verified: std::collections::HashSet<u32>,
 }
 
 impl Font {
@@ -73,6 +76,7 @@ impl Font {
             cid_default_width: 1000.0,
             cid_widths: HashMap::new(),
             blank: Default::default(),
+            verified: Default::default(),
         };
 
         match kind {
@@ -201,10 +205,21 @@ impl Font {
                 FontKind::Simple => simple_gid(&face, code, &text),
             };
             if let Some(gid) = gid {
-                if !draws(gid) {
+                if draws(gid) {
+                    self.verified.insert(code);
+                } else {
                     self.blank.insert(code);
                 }
             }
+        }
+    }
+
+    /// Say that these codes are drawn: they appear in text this font is
+    /// already showing. For an embedded font whose program cannot be read, that
+    /// is the only proof a glyph is there.
+    pub fn allow_seen(&mut self, codes: impl IntoIterator<Item = u32>) {
+        if self.kind == FontKind::Simple {
+            self.verified.extend(codes);
         }
     }
 
@@ -323,12 +338,17 @@ impl Font {
             }
         }
         if self.kind == FontKind::Simple {
+            // The encoding has a code for every letter; an embedded subset has a
+            // glyph for few of them, and writing a code with no glyph draws the
+            // font's missing-glyph box. So an embedded font only offers codes it
+            // is known to draw. A font that is not embedded (the standard ones)
+            // is drawn by the reader, which has every letter.
             return self
                 .simple_text
                 .iter()
                 .position(|t| t.as_deref() == Some(text))
                 .map(|i| i as u32)
-                .filter(|code| !self.blank.contains(code));
+                .filter(|code| !self.blank.contains(code) && (!self.embedded || self.verified.contains(code)));
         }
         None
     }

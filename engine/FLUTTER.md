@@ -8,7 +8,7 @@ Guía para llevar `pdfcore` a una app Flutter (Android ahora, iOS después).
 |---|---|
 | Motor Rust (`pdfcore`) | Probado: 60 pruebas, y contra PDF reales de seguros |
 | Capa C (`pdfcore-ffi`) | Probada llamándola desde Python (`ctypes`) y desde Dart |
-| Paquete Dart (`engine/dart`) | **Probado**: 15 pruebas con `dart test` contra la librería real, en Linux |
+| Paquete Dart (`engine/dart`) | **Probado**: 20 pruebas con `dart test` contra la librería real, en Linux. Una versión anterior ya se integró y probó en una app Flutter en Windows y en un emulador Android (lectura, edición, formularios, guardado) |
 | Compilar para Android/iOS | `cargo check` pasa; **el enlazado y la ejecución en un teléfono no se han probado** (no hay NDK, Xcode ni Flutter donde se escribió) |
 | La interfaz Flutter de abajo | **Boceto sin compilar**: muestra cómo se usa la API, no es una app terminada |
 
@@ -129,21 +129,73 @@ await session.close();
    `e.chars` dice cuáles. Pregunta a la persona («la fuente del documento no
    tiene Ñ, ¿uso una parecida?») y reintenta con `allowFallback: true`. `done.fallbackChars`
    dice qué letras usaron respaldo.
-3. **Campos de solo lectura.** `setField` los rechaza (`kind == 'rejected'`). Muchos
-   formularios marcan así por error campos que sí se deben rellenar (las 28 casillas
-   del formato de Prudential lo están). Pregunta a la persona y reintenta con
-   `ignoreReadOnly: true`.
+3. **Campos de solo lectura.** `setField` devuelve `void` y **avisa de un rechazo
+   lanzando `PdfException`** (nunca devuelve un resultado que leer). Muchos formularios
+   marcan por error como solo lectura campos que sí se deben rellenar (las 28 casillas
+   del formato de Prudential). Pregunta a la persona y reintenta con
+   `ignoreReadOnly: true`:
+
+   ```dart
+   try {
+     await session.setField('chk_cambio_contratante', 'true');
+   } on PdfException catch (e) {
+     // e.kind: 'rejected' (solo lectura, demasiado largo, opción inválida),
+     //         'no_such_field', 'unsupported' (firma, botón)...  e.message dice por qué
+     if (e.kind == 'rejected' && await confirmarConLaPersona(e.message)) {
+       await session.setField('chk_cambio_contratante', 'true', ignoreReadOnly: true);
+     }
+   }
+   ```
 4. **Texto largo en un campo.** El motor rechaza lo que pase de `maxLen` o meta un
    salto de línea en un campo de una línea; el mensaje dice por qué.
 5. **Cada operación es atómica**: si falla, nada cambió y no hay nada que deshacer.
 6. **Guardar y volver a dibujar.** El visor del sistema dibuja un archivo, no el
    estado interno: tras cada edición, `session.save()` y vuelve a abrir esa página
    en el visor. Con PDF grandes conviene redibujar solo la página editada.
-7. **Firmas digitales.** Editar invalida una firma. El motor todavía no avisa de
-   ello (está en la lista de pendientes): hazlo tú comprobando
-   `fields()` con `kind == FieldKind.signature`.
+7. **Firmas digitales.** Editar invalida una firma. Antes de la primera edición,
+   `final firmas = await session.signatures();` y, si no está vacía, avisa a la
+   persona (`firmas.first.signer` dice quién firmó, si la firma lo indica).
+   `fields()` también marca `signed` y `signer` en cada campo de firma.
+8. **Los espacios finales importan.** Los tramos de un PDF suelen llevar el espacio
+   que los separa del siguiente (`"Desarrollo Full Stack: "`). Si el texto nuevo no
+   lo conserva, queda «Cloud:Java» sin hueco. Al abrir un tramo para editar,
+   conserva sus espacios iniciales y finales.
 
-## 4. Boceto de pantalla de edición (sin compilar)
+## 4. Cambiar la longitud de un texto
+
+Cada cambio de estilo dentro de una línea es un `TextRun` aparte (por ejemplo una
+etiqueta en negrita seguida de texto normal). Si el texto nuevo mide distinto, lo
+que sigue en la misma línea **se desplaza solo**: así no se empalma ni queda un hueco.
+
+```dart
+final r = await session.replaceText(page, run, nuevo);        // Reflow.following por defecto
+// r.moved     → cuántos tramos se movieron para hacer sitio
+// r.warnings  → cosas que la persona debería saber
+```
+
+`reflow:` elige qué se mantiene fijo: `Reflow.following` (lo que sigue se mueve; para
+texto alineado a la izquierda), `Reflow.centered` (la línea conserva su centro),
+`Reflow.rightAligned` (conserva el borde derecho) y `Reflow.none`.
+
+Qué se mueve y qué no: solo los tramos de **la misma línea base**, a la derecha,
+con un hueco de hasta 1,5 veces el tamaño de letra (unos pocos espacios). Las celdas
+de una tabla, más separadas, no se arrastran; las otras líneas, tampoco.
+
+`r.warnings` (cada uno con `kind`):
+
+| `kind` | Qué significa |
+|---|---|
+| `exceeds_page` (`by`) | la línea ahora se sale de la página por `by` puntos |
+| `exceeds_margin` (`by`) | pasa del punto donde terminan las demás líneas |
+| `follower_not_moved` (`text`) | un tramo que debía moverse está en un formulario XObject (se lee pero no se edita) y se quedó donde estaba |
+| `line_may_be_aligned` (`alignment`) | la línea parece centrada o a la derecha: quizá convenga `Reflow.centered` / `rightAligned` |
+| `reflow_failed` | no se pudo recolocar; el texto quedó como se escribió |
+
+El reajuste es parte de la misma operación: es atómico, `undo()`/`redo()` lo deshacen
+junto con la edición, y los `run.id` caducan como siempre (`r.reread` dice si hubo
+que insertar operaciones).
+
+## 5. Boceto de pantalla de edición (sin compilar)
 
 Muestra la idea: imagen de fondo + un `Positioned` por texto, con `display * zoom`.
 
@@ -197,7 +249,7 @@ tiene resueltos esos tres casos y sirve de referencia.
 ## Limitaciones del motor a tener presentes
 
 - Texto dentro de formularios XObject: se lee, no se edita.
-- Verificación de glifos solo en fuentes TrueType (CFF/Type1 se asumen completas).
-- Cambiar la longitud de un texto no desplaza lo que sigue en la misma línea.
-- Faltan imágenes, anotaciones (resaltar, notas) y el aviso de firma.
+- Fuentes simples incrustadas: solo se escriben los códigos que el documento ya dibuja o que se verifican en el programa de fuente (TrueType); los demás van a la fuente de respaldo. Antes se adivinaban con la codificación y salía el cuadrito de «glifo ausente».
+- Con texto justificado, el reajuste solo puede mover tramos enteros (no reparte el espacio entre palabras): si hay un `exceeds_margin`, revisa la línea.
+- Faltan imágenes y anotaciones (resaltar, notas).
 - PDF cifrados con contraseña: no soportados todavía.

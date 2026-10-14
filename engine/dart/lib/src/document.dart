@@ -38,6 +38,9 @@ class _Native {
         fields = lib.lookupFunction<_Str Function(_Handle), _Str Function(_Handle)>('pdfcore_fields'),
         replaceText = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
             _Str Function(_Handle, int, int, _Str, int)>('pdfcore_replace_text'),
+        replaceTextEx = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int, Int),
+            _Str Function(_Handle, int, int, _Str, int, int)>('pdfcore_replace_text_ex'),
+        signatures = lib.lookupFunction<_Str Function(_Handle), _Str Function(_Handle)>('pdfcore_signatures'),
         addText = lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>(
             'pdfcore_add_text'),
         setField = lib.lookupFunction<_Str Function(_Handle, _Str, _Str, Int), _Str Function(_Handle, _Str, _Str, int)>(
@@ -58,6 +61,8 @@ class _Native {
   final _Str Function(_Handle, int) page;
   final _Str Function(_Handle) fields;
   final _Str Function(_Handle, int, int, _Str, int) replaceText;
+  final _Str Function(_Handle, int, int, _Str, int, int) replaceTextEx;
+  final _Str Function(_Handle) signatures;
   final _Str Function(_Handle, int, _Str) addText;
   final _Str Function(_Handle, _Str, _Str, int) setField;
   final _Str Function(_Handle) undo;
@@ -135,15 +140,29 @@ class PdfDocument implements Finalizable {
   /// Replace a run's text with the font it already uses.
   ///
   /// With [allowFallback], characters that font lacks are drawn with a bundled
-  /// one; otherwise they throw a `missing_glyphs` [PdfException]. Invalidates
+  /// one; otherwise they throw a `missing_glyphs` [PdfException].
+  ///
+  /// A different length would leave a gap or an overlap on the line, so by
+  /// default what follows on the line moves with it ([Reflow.following]); the
+  /// result's `warnings` say if that pushed the line past the margin. Invalidates
   /// every run id: read the page again.
-  EditResult replaceText(PageData page, TextRun run, String text, {bool allowFallback = false}) =>
-      replaceTextById(page.index, run.id, text, allowFallback: allowFallback);
+  EditResult replaceText(PageData page, TextRun run, String text,
+          {bool allowFallback = false, Reflow reflow = Reflow.following}) =>
+      replaceTextById(page.index, run.id, text, allowFallback: allowFallback, reflow: reflow);
 
   /// As [replaceText], naming the run by its page and id.
-  EditResult replaceTextById(int page, int runId, String text, {bool allowFallback = false}) =>
-      EditResult.fromJson(
-          _withString(text, (t) => _json(_n.replaceText(_live, page, runId, t, allowFallback ? 1 : 0))));
+  EditResult replaceTextById(int page, int runId, String text,
+          {bool allowFallback = false, Reflow reflow = Reflow.following}) =>
+      EditResult.fromJson(_withString(
+          text,
+          (t) => _json(_n.replaceTextEx(
+              _live, page, runId, t, allowFallback ? 1 : 0, const {Reflow.none: 0, Reflow.following: 1, Reflow.centered: 2, Reflow.rightAligned: 3}[reflow]!))));
+
+  /// The completed digital signatures. Editing invalidates them: say so before
+  /// the first edit.
+  List<PdfSignature> signatures() => (_json(_n.signatures(_live))['signatures'] as List)
+      .map((s) => PdfSignature((s as Map)['field'] as String, s['signer'] as String?))
+      .toList();
 
   AddedText addText(int page, NewText text) {
     final j = _withString(jsonEncode(text.toJson()), (p) => _json(_n.addText(_live, page, p)));

@@ -24,6 +24,8 @@ for name, args in {
     "pdfcore_page": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_fields": [ctypes.c_void_p],
     "pdfcore_replace_text": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
+    "pdfcore_replace_text_ex": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int],
+    "pdfcore_signatures": [ctypes.c_void_p],
     "pdfcore_add_text": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
     "pdfcore_set_field": [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_undo": [ctypes.c_void_p], "pdfcore_redo": [ctypes.c_void_p], "pdfcore_history": [ctypes.c_void_p],
@@ -51,6 +53,8 @@ class Doc:
     def page(self, n=0): return call("pdfcore_page", self.handle, n)
     def texts(self, n=0): return [r["text"] for r in self.page(n)["runs"]]
     def replace(self, run, text, fallback=0, page=0): return call("pdfcore_replace_text", self.handle, page, run, text.encode(), fallback)
+    def replace_ex(self, run, text, reflow, fallback=0, page=0): return call("pdfcore_replace_text_ex", self.handle, page, run, text.encode(), fallback, reflow)
+    def signatures(self): return call("pdfcore_signatures", self.handle)["signatures"]
     def add(self, params, page=0): return call("pdfcore_add_text", self.handle, page, json.dumps(params).encode())
     def field(self, name, value, force=0): return call("pdfcore_set_field", self.handle, name.encode(), value.encode(), force)
     def fields(self): return {f["name"]: f for f in call("pdfcore_fields", self.handle)["fields"]}
@@ -174,4 +178,67 @@ def test_a_document_can_be_opened_many_times_and_closed():
     for _ in range(50):
         d = Doc("standard")
         d.page()
+        d.close()
+
+
+def run_named(d, text):
+    return next(r for r in d.page()["runs"] if r["text"].strip() == text)
+
+
+def test_a_longer_run_moves_the_rest_of_its_line_and_says_how_many():
+    d = Doc("line_absolute")
+    try:
+        after = run_named(d, "de 9 a 14 horas")["origin"][0]
+        first = run_named(d, "lunes a viernes")
+        done = d.replace(first["id"], "de lunes a viernes inclusive")
+        assert done["ok"] and done["moved"] == 1 and done["warnings"] == []
+        assert done["reread"] is True          # a move was inserted: ids renumbered
+        shifted = run_named(d, "de 9 a 14 horas")["origin"][0] - after
+        assert abs(shifted - (done["new_width"] - done["old_width"])) < 0.05
+        assert run_named(d, "Segunda linea del documento")["origin"] == [72.0, 680.0]
+    finally:
+        d.close()
+
+
+def test_reflow_modes_and_warnings_cross_the_boundary():
+    d = Doc("line_absolute")
+    try:
+        before = run_named(d, "de 9 a 14 horas")["origin"][0]
+        done = d.replace_ex(run_named(d, "lunes a viernes")["id"], "de lunes a viernes inclusive", reflow=0)
+        assert done["moved"] == 0
+        assert run_named(d, "de 9 a 14 horas")["origin"][0] == before     # nothing moved
+        d.undo()
+        far = d.replace(run_named(d, "lunes a viernes")["id"], "lunes a viernes y tambien " * 6)
+        assert any(w["kind"] == "exceeds_page" and w["by"] > 0 for w in far["warnings"])
+    finally:
+        d.close()
+
+
+def test_a_follower_in_an_xobject_is_reported_not_moved():
+    d = Doc("line_xobject")
+    try:
+        done = d.replace(run_named(d, "El resto de las oficinas de")["id"], "El resto de todas las oficinas de pasaportes de")
+        assert {"kind": "follower_not_moved", "text": "lunes a viernes"} in done["warnings"]
+    finally:
+        d.close()
+
+
+def test_signatures_and_appearance_flags():
+    d = Doc("signed")
+    try:
+        assert d.signatures() == [{"field": "firma", "signer": "Cesar Ruiz"}]
+        assert d.fields()["firma"]["signed"] is True
+    finally:
+        d.close()
+    d = Doc("form_no_appearance")
+    try:
+        assert d.fields()["nombre"]["widgets"][0]["has_appearance"] is False
+        d.field("nombre", "Con apariencia")
+        assert d.fields()["nombre"]["widgets"][0]["has_appearance"] is True
+    finally:
+        d.close()
+    d = Doc("form")
+    try:
+        assert d.signatures() == []
+    finally:
         d.close()

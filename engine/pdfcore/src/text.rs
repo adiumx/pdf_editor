@@ -60,6 +60,10 @@ pub struct TextRun {
     /// inside a form XObject, which one (`None` for the page itself).
     pub op_index: usize,
     pub xobject: Option<String>,
+    /// Linear part `[a, b, c, d]` of text space → user space (the text matrix
+    /// times the CTM, without the font size): what turns a `Td` offset into a
+    /// movement on the page.
+    pub text_linear: [f32; 4],
     pub glyphs: Vec<Glyph>,
 }
 
@@ -257,6 +261,7 @@ fn show(
 
     let to_page = |tm: Matrix| multiply([state.size * state.th, 0.0, 0.0, state.size, 0.0, state.rise], multiply(tm, state.ctm));
     let start = to_page(*tm);
+    let linear = multiply(*tm, state.ctm);
     let mut text = String::new();
     let mut glyphs = Vec::new();
 
@@ -316,6 +321,7 @@ fn show(
         render_mode: state.mode,
         op_index,
         xobject: xobject.map(str::to_string),
+        text_linear: [linear[0], linear[1], linear[2], linear[3]],
         glyphs,
     });
 }

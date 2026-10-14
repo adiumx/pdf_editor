@@ -31,6 +31,8 @@ como referencia y como oráculo de pruebas.
 | 2b. Carácter que el subconjunto no trae: se dibuja con una fuente de respaldo incluida (Liberation Sans/Serif, OFL) y se avisa cuáles | **hecho** |
 | 3a. Campos de formulario (AcroForm): leer y rellenar texto, casillas, radios, listas, con su apariencia | **hecho** |
 | 3b. Añadir texto nuevo en cualquier punto de la página (para PDF planos, sin campos) | **hecho** |
+| 3c. Reajuste de línea: lo que sigue en la línea se mueve al cambiar la longitud de un texto; avisos | **hecho** |
+| 3d. Aviso de firma digital; los campos informan si tienen apariencia | **hecho** |
 | 4. Guardar, y deshacer/rehacer | **hecho** |
 | 5a. Capa C (`pdfcore-ffi`): cabecera, JSON, probada llamándola desde Python | **hecho** |
 | 5b. Paquete Dart (`dart/`): `PdfDocument` y `PdfSession` (isolate), 15 pruebas contra la librería real | **hecho** — guía en [FLUTTER.md](FLUTTER.md) |
@@ -163,6 +165,44 @@ valida antes de tocar nada y cada rechazo dice por qué.
   compara primero con los nombres exactos (lo encontró una prueba).
 - Aún no: dibujar la fila resaltada de una lista, rotación `/MK /R`, firmas,
   cálculos y JavaScript de los campos.
+
+### Reajuste de línea (hito 3c)
+
+Cada cambio de estilo dentro de una línea es un `TextRun` aparte, y nada ata un
+tramo al anterior: un productor puede dar a cada uno su propia matriz, dejar que
+el cursor siga solo o usar `Td` relativos. Por eso la diferencia de ancho **no se
+suma a ciegas** (movería dos veces los que siguen al cursor). Se hace la edición,
+se lee la página otra vez y se compara cada tramo con dónde *debería* estar
+(donde estaba, más el desplazamiento que le toca por su sitio en la línea); el que
+está en otro sitio recibe un `Td` antes de su operación de dibujo. `Td` mueve todo
+lo que viene después, que es lo que quiere el resto de la línea y lo que no quiere
+la línea siguiente, así que la siguiente se comprueba igual y se devuelve a su
+sitio. Sea cual sea la forma en que el productor posicionó el texto, lo que queda
+en la página es lo pedido.
+
+- Modos: `Reflow::Following` (por defecto), `Centered`, `RightAligned`, `None`.
+- Se mueven los tramos de la misma línea base, a la derecha, con un hueco de hasta
+  1,5 em: las celdas de una tabla, más separadas, no se arrastran.
+- `Replaced` informa `moved` y `warnings` (`ExceedsPage`, `ExceedsMargin`,
+  `FollowerNotMoved` para un tramo en un XObject, `LineMayBeAligned`, `ReflowFailed`).
+- Es parte de la transacción: atómico, y `undo`/`redo` lo deshacen con la edición.
+- Probado con una línea de tres tramos (normal + negrita + normal) colocada de
+  tres maneras (posición propia, cursor continuo, `Td` relativos) más una con el
+  seguidor en un XObject; sin el reajuste, 9 de esas pruebas fallan.
+- Comprobado en un CV real: al alargar una etiqueta en negrita, el texto normal
+  que le sigue se corre lo justo; en un formulario real, las celdas vecinas de una
+  tabla no se mueven.
+- Límite: no reparte el espacio de un texto justificado; si se pasa del margen,
+  avisa.
+
+**Un defecto que se vio al dibujar el resultado real**: en un CV, un tramo en
+negrita con fuente TrueType simple (códigos 0..57, sin `/Encoding`) salía con el
+cuadrito de «glifo ausente» donde iba una `y`. Un subconjunto solo trae los glifos
+que su texto usó, y el motor adivinaba el código de la letra con la codificación
+estándar (121), que en esa fuente no existe, y como no podía comprobar el glifo lo
+daba por bueno. Ahora una fuente simple incrustada solo ofrece los códigos que
+**el `ToUnicode` declara, el programa de fuente confirma, o la página ya dibuja con
+esa fuente**; lo demás va a la fuente de respaldo. Hay un fixture y dos pruebas.
 
 ### Fuente de respaldo (hito 2b)
 

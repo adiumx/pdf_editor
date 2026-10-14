@@ -28,9 +28,13 @@ void pdfcore_free_bytes(uint8_t *p, size_t len);
 int pdfcore_page_count(PdfDoc *doc);
 char *pdfcore_page(PdfDoc *doc, int page);
 char *pdfcore_fields(PdfDoc *doc);
+char *pdfcore_signatures(PdfDoc *doc); /* {"signatures":[{"field","signer"}]} */
 
 /* Editing. */
 char *pdfcore_replace_text(PdfDoc *doc, int page, int run_id, const char *new_text, int allow_fallback);
+/* reflow: 0 nothing moves, 1 what follows on the line moves (default),
+ * 2 the line keeps its centre, 3 the line keeps its right edge. */
+char *pdfcore_replace_text_ex(PdfDoc *doc, int page, int run_id, const char *new_text, int allow_fallback, int reflow);
 char *pdfcore_add_text(PdfDoc *doc, int page, const char *params_json);
 char *pdfcore_set_field(PdfDoc *doc, const char *name, const char *value, int ignore_read_only);
 
