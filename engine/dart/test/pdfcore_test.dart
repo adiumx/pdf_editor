@@ -385,4 +385,28 @@ void main() {
       }
     });
   });
+
+  group('pictures', () {
+    test('a JPEG and a PNG are placed, and bad data is refused', () async {
+      final doc = open('standard');
+      addTearDown(doc.close);
+      final jpeg = File('${engine.path}/pdfcore/tests/fixtures/img_rgb.jpg').readAsBytesSync();
+      final added = doc.addImage(0, jpeg, x: 100, y: 200, width: 160);
+      expect(added.display, [100, 200, 260, 280]);
+      expect([added.pixelWidth, added.pixelHeight], [80, 40]);
+      final png = File('${engine.path}/pdfcore/tests/fixtures/img_alpha.png').readAsBytesSync();
+      expect(doc.addImage(0, png, x: 10, y: 10, width: 30, height: 30).display, [10, 10, 40, 40]);
+      expect(() => doc.addImage(0, Uint8List.fromList([1, 2, 3]), x: 0, y: 0, width: 10),
+          throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'unsupported')));
+      expect(doc.history.canUndo, isTrue);
+      expect(doc.undo() && doc.undo() && !doc.history.canUndo, isTrue);
+
+      final session = await PdfSession.open(fixture('standard'), libraryPath: libraryPath);
+      try {
+        expect((await session.addImage(0, jpeg, x: 0, y: 0, width: 80)).pixelHeight, 40);
+      } finally {
+        await session.close();
+      }
+    });
+  });
 }

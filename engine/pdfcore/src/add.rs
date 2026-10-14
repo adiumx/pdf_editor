@@ -163,7 +163,7 @@ impl Document {
 
     /// Add content after what the page draws, once the page's own content is
     /// wrapped in `q`/`Q` so that nothing it leaves behind reaches ours.
-    fn append_to_page(&mut self, page: lopdf::ObjectId, content: &Content) -> Result<()> {
+    pub(crate) fn append_to_page(&mut self, page: lopdf::ObjectId, content: &Content) -> Result<()> {
         let mut streams: Vec<Object> = self.pdf.get_page_contents(page).into_iter().map(Object::Reference).collect();
         if self.wrapped.insert(page) {
             // A page may leave `q`s open (and a `cm` outside any of them), so

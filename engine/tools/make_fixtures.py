@@ -238,6 +238,46 @@ page.insert_text((130, 700), "Linea girada dos", fontname="helv", fontsize=12, r
 page.set_rotation(270)
 doc.save(OUT / "turned_upright.pdf", garbage=0, deflate=False)
 
+# 16. Pictures to place: left half red, right half blue (so orientation and
+#     placement can be told apart), the same with an EXIF orientation of 6, and a
+#     PNG whose right half is transparent.
+import struct
+
+
+def halves(w, h, left, right, alpha=None):
+    row = bytes(left) * (w // 2) + bytes(right) * (w - w // 2)
+    return row * h
+
+
+rgb = pymupdf.Pixmap(pymupdf.csRGB, 80, 40, halves(80, 40, (255, 0, 0), (0, 0, 255)), False)
+jpeg = rgb.tobytes("jpeg", jpg_quality=95)
+(OUT / "img_rgb.jpg").write_bytes(jpeg)
+
+
+def with_exif_orientation(data, orientation):
+    tiff = b"MM\x00\x2a\x00\x00\x00\x08" + struct.pack(">H", 1) + struct.pack(">HHIHH", 0x0112, 3, 1, orientation, 0) + b"\x00\x00\x00\x00"
+    body = b"Exif\x00\x00" + tiff
+    segment = b"\xff\xe1" + struct.pack(">H", len(body) + 2) + body
+    return data[:2] + segment + data[2:]
+
+
+for n in (3, 6, 8):
+    (OUT / f"img_exif{n}.jpg").write_bytes(with_exif_orientation(jpeg, n))
+import zlib
+
+
+def png_rgba(w, h, pixels):
+    """A PNG with an alpha channel (PyMuPDF has no way to write one)."""
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    raw = b"".join(b"\x00" + pixels[y * w * 4:(y + 1) * w * 4] for y in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+cells = b"".join((bytes((0, 160, 0, 255)) if x < 20 else bytes((0, 0, 0, 0))) for y in range(40) for x in range(40))
+(OUT / "img_alpha.png").write_bytes(png_rgba(40, 40, cells))
+
 # 11. Encrypted copies of the simple text page. Most producers write /Encrypt as
 #     an indirect object, which MuPDF does not; `indirect_encrypt` rewrites it
 #     that way with an incremental update. One file keeps MuPDF's inline form.

@@ -229,6 +229,18 @@ class FieldWidget {
   final bool hasAppearance;
 }
 
+/// Where a picture ended up.
+class AddedImage {
+  AddedImage(this.display, this.pixelWidth, this.pixelHeight);
+
+  /// The box it occupies, `[x0, y0, x1, y1]` as a reader shows the page.
+  final List<double> display;
+
+  /// Size in pixels as the picture is meant to be seen (a photo's EXIF turn applied).
+  final int pixelWidth;
+  final int pixelHeight;
+}
+
 /// One word of a [PdfLine], with the box to highlight it.
 class PdfWord {
   PdfWord(this.text, this.display);

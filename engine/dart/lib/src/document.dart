@@ -51,6 +51,8 @@ class _Native {
         find = lib.lookupFunction<_Str Function(_Handle, _Str, Int), _Str Function(_Handle, _Str, int)>('pdfcore_find'),
         replaceAll = lib.lookupFunction<_Str Function(_Handle, _Str, _Str, Int, Int, Int),
             _Str Function(_Handle, _Str, _Str, int, int, int)>('pdfcore_replace_all'),
+        addImage = lib.lookupFunction<_Str Function(_Handle, Int, Pointer<Uint8>, Size, _Str),
+            _Str Function(_Handle, int, Pointer<Uint8>, int, _Str)>('pdfcore_add_image'),
         rotatePage = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_rotate_page'),
         deletePage = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_delete_page'),
         movePage = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_move_page'),
@@ -85,6 +87,7 @@ class _Native {
   final _Str Function(_Handle, int) lines;
   final _Str Function(_Handle, _Str, int) find;
   final _Str Function(_Handle, _Str, _Str, int, int, int) replaceAll;
+  final _Str Function(_Handle, int, Pointer<Uint8>, int, _Str) addImage;
   final _Str Function(_Handle, int, int) rotatePage;
   final _Str Function(_Handle, int) deletePage;
   final _Str Function(_Handle, int, int) movePage;
@@ -258,6 +261,22 @@ class PdfDocument implements Finalizable {
   History get history {
     final j = _json(_n.history(_live));
     return History(j['can_undo'] as bool, j['can_redo'] as bool);
+  }
+
+  /// Draw a JPEG or PNG on [page] in the box at ([x], [y]) [width] wide, in the
+  /// page as a reader shows it (origin top-left, y down). Without [height] the
+  /// picture keeps its proportions. A JPEG goes in as it is; a PNG keeps its transparency.
+  AddedImage addImage(int page, Uint8List picture, {required double x, required double y, required double width, double? height}) {
+    final buffer = malloc<Uint8>(picture.isEmpty ? 1 : picture.length);
+    try {
+      buffer.asTypedList(picture.length).setAll(0, picture);
+      final params = jsonEncode({'x': x, 'y': y, 'width': width, if (height != null) 'height': height});
+      final j = _withString(params, (p) => _json(_n.addImage(_live, page, buffer, picture.length, p)));
+      final pixels = j['pixels'] as List;
+      return AddedImage(_box(j['display']), (pixels[0] as num).toInt(), (pixels[1] as num).toInt());
+    } finally {
+      malloc.free(buffer);
+    }
   }
 
   /// Turn a page by [degrees] (a multiple of 90, clockwise as a reader shows it).

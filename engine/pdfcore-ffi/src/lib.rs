@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{Align, Alignment, Anchor, Document, Error, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
+use pdfcore::{Align, Alignment, Anchor, Document, Error, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -527,6 +527,39 @@ pub unsafe extern "C" fn pdfcore_redo(doc: *mut PdfDoc) -> *mut c_char {
 pub unsafe extern "C" fn pdfcore_history(doc: *mut PdfDoc) -> *mut c_char {
     let Some(d) = handle(doc) else { return bad_argument() };
     guard(|| json!({ "can_undo": d.doc.can_undo(), "can_redo": d.doc.can_redo() }))
+}
+
+/// Draw a JPEG or PNG on a page. `params` is JSON: `{"x","y","width","height"?}`, a
+/// box in the page as a reader shows it (origin top-left); without `height` the
+/// picture keeps its proportions. Returns `{"ok":true,"display":[..],"pixels":[w,h]}`.
+///
+/// # Safety
+/// `doc` must be a live handle; `data` must point to `len` bytes; `params` a
+/// NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_add_image(doc: *mut PdfDoc, page: c_int, data: *const u8, len: usize, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    if data.is_null() {
+        return bad_argument();
+    }
+    let picture = std::slice::from_raw_parts(data, len);
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else {
+            return json!({ "error": "parámetros no válidos", "kind": "bad_argument" });
+        };
+        let num = |key: &str| p.get(key).and_then(Value::as_f64).map(|v| v as f32);
+        let (Some(x), Some(y), Some(width)) = (num("x"), num("y"), num("width")) else {
+            return json!({ "error": "faltan x, y o width", "kind": "bad_argument" });
+        };
+        let new = NewImage { data: picture, x, y, width, height: num("height") };
+        match d.doc.add_image(page.max(0) as usize, &new) {
+            Ok(done) => {
+                edited(d);
+                json!({ "ok": true, "display": done.display, "pixels": [done.pixels.0, done.pixels.1] })
+            }
+            Err(e) => failure(&e),
+        }
+    })
 }
 
 // -- pages ------------------------------------------------------------------

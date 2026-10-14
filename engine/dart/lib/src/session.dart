@@ -82,6 +82,10 @@ class PdfSession {
           {SearchOptions options = const SearchOptions(), bool allowFallback = false, Reflow reflow = Reflow.following}) =>
       _call<ReplaceAllResult>('replaceAll', [find, replacement, options, allowFallback, reflow]);
 
+  Future<AddedImage> addImage(int page, Uint8List picture,
+          {required double x, required double y, required double width, double? height}) =>
+      _call<AddedImage>('addImage', [page, TransferableTypedData.fromList([picture]), x, y, width, height]);
+
   Future<void> rotatePage(int page, int degrees) => _call<void>('rotatePage', [page, degrees]);
   Future<void> deletePage(int page) => _call<void>('deletePage', [page]);
   Future<void> movePage(int from, int to) => _call<void>('movePage', [from, to]);
@@ -190,6 +194,9 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
     case 'replaceAll':
       return doc.replaceAll(a[0] as String, a[1] as String,
           options: a[2] as SearchOptions, allowFallback: a[3] as bool, reflow: a[4] as Reflow);
+    case 'addImage':
+      return doc.addImage(a[0] as int, (a[1] as TransferableTypedData).materialize().asUint8List(),
+          x: a[2] as double, y: a[3] as double, width: a[4] as double, height: a[5] as double?);
     case 'rotatePage':
       doc.rotatePage(a[0] as int, a[1] as int);
       return null;

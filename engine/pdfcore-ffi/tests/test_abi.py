@@ -24,6 +24,8 @@ lib.pdfcore_last_error_kind.restype = ctypes.c_char_p
 lib.pdfcore_insert_pages.restype = ctypes.c_void_p
 lib.pdfcore_insert_pages.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p,
                                      ctypes.POINTER(ctypes.c_int), ctypes.c_size_t, ctypes.c_int]
+lib.pdfcore_add_image.restype = ctypes.c_void_p
+lib.pdfcore_add_image.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p]
 lib.pdfcore_extract_pages.restype = ctypes.c_void_p
 lib.pdfcore_extract_pages.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
 lib.pdfcore_save.restype = ctypes.c_void_p
@@ -321,4 +323,76 @@ def test_page_operations_cross_the_boundary():
     bad = (ctypes.c_int * 1)(99)
     assert not lib.pdfcore_extract_pages(d.handle, bad, 1, ctypes.byref(size))
     assert lib.pdfcore_last_error_kind() == b"no_such_page"
+    d.close()
+
+
+# -- pictures, checked against a renderer ----------------------------------------
+
+def render(doc_bytes, page=0):
+    import pymupdf
+    return pymupdf.open(stream=doc_bytes, filetype="pdf")[page].get_pixmap(alpha=False)
+
+
+def place(d, picture, x, y, width, height=None, page=0):
+    data = (FIXTURES / picture).read_bytes()
+    params = {"x": x, "y": y, "width": width}
+    if height:
+        params["height"] = height
+    return call("pdfcore_add_image", d.handle, page, data, len(data), json.dumps(params).encode())
+
+
+def near(pixel, expected, tolerance=40):
+    return all(abs(a - b) <= tolerance for a, b in zip(pixel, expected))
+
+
+RED, BLUE, WHITE, GREEN = (255, 0, 0), (0, 0, 255), (255, 255, 255), (0, 160, 0)
+
+
+def test_a_jpeg_lands_where_it_was_placed():
+    d = Doc("standard")
+    done = place(d, "img_rgb.jpg", 100, 200, 160)          # 160 x 80
+    assert done["ok"] and done["display"] == [100, 200, 260, 280]
+    pix = render(d.save())
+    assert near(pix.pixel(110, 240), RED) and near(pix.pixel(250, 240), BLUE)
+    assert near(pix.pixel(180, 215), RED) or near(pix.pixel(150, 215), RED)
+    assert near(pix.pixel(95, 240), WHITE) and near(pix.pixel(265, 240), WHITE)
+    assert near(pix.pixel(150, 195), WHITE) and near(pix.pixel(150, 285), WHITE)
+    d.close()
+
+
+def test_exif_orientation_is_applied_to_the_placement():
+    # Stored 80x40, left half red, right half blue.
+    cases = {
+        "img_exif3.jpg": ("left blue, right red", (140, 220), BLUE, (140, 260), RED, 80, 40),   # 180 degrees
+        "img_exif6.jpg": ("red on top", (140, 230), RED, (140, 350), BLUE, 40, 80),             # rotate 90 clockwise
+        "img_exif8.jpg": ("red at the bottom", (140, 230), BLUE, (140, 350), RED, 40, 80),      # rotate 90 counter-clockwise
+    }
+    for name, (what, p1, c1, p2, c2, _, _) in cases.items():
+        d = Doc("standard")
+        done = place(d, name, 100, 200, 80)
+        pix = render(d.save())
+        if name == "img_exif3.jpg":
+            p1, p2 = (110, 220), (170, 220)        # left half and right half of an 80x40 box
+        assert near(pix.pixel(*p1), c1) and near(pix.pixel(*p2), c2), (name, what, done)
+        d.close()
+
+
+def test_pictures_land_right_on_a_turned_page_and_one_that_leaks_state():
+    for fixture, size in (("page_rotated", None), ("leaky", None), ("rotated", None)):
+        d = Doc(fixture)
+        shown = d.page()
+        # The box is given as a reader shows the page, whatever the page's own turn.
+        place(d, "img_rgb.jpg", 20, 20, 100)             # 100 x 50
+        pix = render(d.save())
+        assert (pix.width, pix.height) == (round(shown["width"]), round(shown["height"])), fixture
+        assert near(pix.pixel(40, 45), RED) and near(pix.pixel(100, 45), BLUE), fixture
+        assert near(pix.pixel(10, 45), WHITE) and near(pix.pixel(40, 80), WHITE), fixture
+        d.close()
+
+
+def test_a_png_keeps_its_transparency():
+    d = Doc("standard")
+    place(d, "img_alpha.png", 100, 300, 80)               # 80 x 80: left half green, right half see-through
+    pix = render(d.save())
+    assert near(pix.pixel(120, 340), GREEN) and near(pix.pixel(170, 340), WHITE)
     d.close()

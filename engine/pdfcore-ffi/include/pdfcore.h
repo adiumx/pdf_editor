@@ -36,6 +36,8 @@ char *pdfcore_lines(PdfDoc *doc, int page); /* {"lines":[{"text","display","runs
 /* flags: 1 match case, 2 whole words, 4 accents matter */
 char *pdfcore_find(PdfDoc *doc, const char *query, int flags); /* {"matches":[{"page","text","line","display","run","within_run"}]} */
 char *pdfcore_replace_all(PdfDoc *doc, const char *find, const char *replacement, int flags, int allow_fallback, int reflow); /* {"ok":true,"replaced","skipped"} */
+/* params: {"x","y","width","height"?} in the page as shown; {"ok":true,"display","pixels":[w,h]} */
+char *pdfcore_add_image(PdfDoc *doc, int page, const uint8_t *data, size_t len, const char *params);
 char *pdfcore_rotate_page(PdfDoc *doc, int page, int degrees);
 char *pdfcore_delete_page(PdfDoc *doc, int page);
 char *pdfcore_move_page(PdfDoc *doc, int from, int to);

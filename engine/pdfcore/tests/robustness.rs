@@ -100,3 +100,36 @@ fn garbage_is_an_error() {
     }
     assert!(Document::open(b"not a pdf at all").is_err());
 }
+
+#[test]
+fn damaged_pictures_are_refused_not_fatal() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let mut state = 0x9E3779B97F4A7C15u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for name in ["img_rgb.jpg", "img_exif6.jpg", "img_alpha.png"] {
+        let bytes = std::fs::read(format!("{dir}/{name}")).unwrap();
+        for round in 0..300 {
+            let mut copy = bytes.clone();
+            if round % 3 == 0 {
+                copy.truncate((next() as usize) % bytes.len());
+            }
+            for _ in 0..1 + round % 5 {
+                let at = (next() as usize) % copy.len().max(1);
+                if let Some(b) = copy.get_mut(at) {
+                    *b = next() as u8;
+                }
+            }
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                let mut doc = Document::open(&std::fs::read(format!("{dir}/standard.pdf")).unwrap()).unwrap();
+                let _ = doc.add_image(0, &pdfcore::NewImage::new(&copy, 10.0, 10.0, 50.0));
+                let _ = doc.save_to_bytes();
+            }));
+            assert!(outcome.is_ok(), "{name} round {round}: panicked");
+        }
+    }
+}
