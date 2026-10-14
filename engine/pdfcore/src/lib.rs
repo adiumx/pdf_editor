@@ -3,6 +3,7 @@
 //! Reading comes first: open a document, list its pages, and get each page's
 //! text as runs that know their font and where they sit.
 
+mod add;
 mod cmap;
 mod edit;
 mod error;
@@ -16,6 +17,7 @@ use lopdf::{Dictionary, Document as Pdf, Object, ObjectId};
 
 pub use error::{Error, Result};
 pub use font::{Font, FontKind, Glyph};
+pub use add::{Added, Align, Anchor, NewText};
 pub use edit::Replaced;
 pub use forms::{Field, FieldKind, Widget};
 pub use text::{Matrix, TextRun};
@@ -33,13 +35,15 @@ pub struct Document {
     pages: Vec<ObjectId>,
     /// Fallback fonts already written into this document, by style.
     fallbacks: std::collections::HashMap<&'static str, fallback::Embedded>,
+    /// Pages whose own content is already wrapped in `q`/`Q` for added text.
+    wrapped: std::collections::HashSet<ObjectId>,
 }
 
 impl Document {
     pub fn open(bytes: &[u8]) -> Result<Document> {
         let pdf = Pdf::load_mem(bytes)?;
         let pages = pdf.get_pages().values().copied().collect();
-        Ok(Document { pdf, pages, fallbacks: Default::default() })
+        Ok(Document { pdf, pages, fallbacks: Default::default(), wrapped: Default::default() })
     }
 
     pub fn page_count(&self) -> usize {
@@ -85,6 +89,24 @@ impl Document {
             270 => [0.0, -1.0, -1.0, 0.0, y1, x1],
             _ => [1.0, 0.0, 0.0, -1.0, -x0, y1],
         })
+    }
+
+    /// A point of default user space as a reader shows it (top-left origin).
+    pub fn to_display_point(&self, page: usize, point: (f32, f32)) -> Result<(f32, f32)> {
+        Ok(text::apply(self.display_matrix(page)?, point.0, point.1))
+    }
+
+    /// Make the bundled font of this style available to write with: the copy
+    /// an earlier session left in the file, or a fresh one.
+    pub(crate) fn ensure_fallback(&mut self, key: &'static str, data: &'static [u8]) -> Result<()> {
+        if !self.fallbacks.contains_key(key) {
+            let embedded = match fallback::Embedded::adopt(&self.pdf, key, data) {
+                Some(found) => found,
+                None => fallback::Embedded::embed(&mut self.pdf, key, data)?,
+            };
+            self.fallbacks.insert(key, embedded);
+        }
+        Ok(())
     }
 
     /// A page attribute, looked up the page tree the way the spec inherits it.

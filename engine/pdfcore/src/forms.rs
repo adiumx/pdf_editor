@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use lopdf::{Dictionary, Object, ObjectId, Stream, StringFormat};
 
 use crate::error::{Error, Result};
-use crate::fallback::{self, Embedded};
+use crate::fallback;
 use crate::font::{num, resolve, Font};
 use crate::Document;
 
@@ -489,11 +489,8 @@ impl Document {
             match &own {
                 Some((_, font)) => Ok(font.encode(text).unwrap_or_default()),
                 None => {
-                    if !this.fallbacks.contains_key(key) {
-                        let embedded = Embedded::embed(&mut this.pdf, key, data)?;
-                        this.fallbacks.insert(key, embedded);
-                    }
-                    let embedded = this.fallbacks.get_mut(key).expect("just inserted");
+                    this.ensure_fallback(key, data)?;
+                    let embedded = this.fallbacks.get_mut(key).expect("just ensured");
                     Ok(embedded.write(&mut this.pdf, text, size)?.0)
                 }
             }

@@ -108,11 +108,8 @@ impl Document {
                     (Embedded::hex(b.clone()), false)
                 }
                 None => {
-                    if !self.fallbacks.contains_key(key) {
-                        let embedded = Embedded::embed(&mut self.pdf, key, data)?;
-                        self.fallbacks.insert(key, embedded);
-                    }
-                    let embedded = self.fallbacks.get_mut(key).expect("just inserted");
+                    self.ensure_fallback(key, data)?;
+                    let embedded = self.fallbacks.get_mut(key).expect("just ensured");
                     let (b, advance) = embedded.write(&mut self.pdf, piece, run.size)?;
                     new_width += advance;
                     used_fallback.extend(piece.chars());
@@ -145,7 +142,7 @@ impl Document {
     }
 
     /// Make a font usable by name in one page's content.
-    fn register_font(&mut self, page: lopdf::ObjectId, resource: &str, font: lopdf::ObjectId) -> Result<()> {
+    pub(crate) fn register_font(&mut self, page: lopdf::ObjectId, resource: &str, font: lopdf::ObjectId) -> Result<()> {
         let mut resources = self.resources(page);
         let mut fonts = resources
             .get(b"Font")

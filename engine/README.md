@@ -30,7 +30,7 @@ como referencia y como oráculo de pruebas.
 | 2. Reemplazar un tramo conservando la fuente, con la que ya trae el PDF | **hecho** |
 | 2b. Carácter que el subconjunto no trae: se dibuja con una fuente de respaldo incluida (Liberation Sans/Serif, OFL) y se avisa cuáles | **hecho** |
 | 3a. Campos de formulario (AcroForm): leer y rellenar texto, casillas, radios, listas, con su apariencia | **hecho** |
-| 3b. Añadir texto nuevo en cualquier punto de la página (para PDF planos, sin campos) | siguiente |
+| 3b. Añadir texto nuevo en cualquier punto de la página (para PDF planos, sin campos) | **hecho** |
 | 4. Guardar, y modelo de deshacer | |
 | 5. Capa C ABI + plugin Flutter (`flutter_rust_bridge` o `dart:ffi`) | |
 | 6. Imágenes, anotaciones, firmas (aviso), OCR en el dispositivo | |
@@ -71,6 +71,27 @@ descubrió una prueba que decía que sí existían `X` y `Q`; ahora fallan limpi
 Comprobado en un formulario real de seguros: se cambió una línea en Arial
 (Type0/Identity-H, subconjunto), MuPDF abre el resultado, la dibuja con la
 misma fuente en el mismo sitio, y es la única diferencia de texto de la página.
+
+### Texto nuevo (hito 3b)
+
+`Document::add_text(página, &NewText)` escribe texto en cualquier punto, con
+las fuentes Liberation incluidas (sans/serif, negrita, cursiva), color, tamaño,
+alineación y ajuste de línea a un ancho. `x, y` están en coordenadas de lector
+(origen arriba a la izquierda): con `Anchor::TopLeft` son la esquina donde
+cayó el dedo; con `Anchor::Baseline` el arranque de la línea base, para
+escribir **sobre** una raya dibujada. En páginas giradas el texto sale derecho.
+
+- Se añade como contenido propio al final de la página, envuelto en `q`/`Q`.
+  Se cuentan los `q` que la página dejó abiertos y se cierran todos: una página
+  que no deshace su propia escala (`cm` suelto) encogía el texto nuevo a la
+  mitad (lo encontró una prueba).
+- **Una fuente por documento y estilo, entre sesiones.** Al reabrir un archivo,
+  cada sesión incrustaba su propia copia con el mismo nombre, que sustituía a la
+  anterior en los recursos de la página; la copia nueva sólo conocía las
+  anchuras de sus glifos y el texto antiguo salía con las letras separadas como
+  si todas midieran un cuadratín. Ahora se reconoce la ya incrustada (por su
+  `BaseFont`) y se reutiliza. Se vio al dibujar el resultado real, no en las
+  pruebas; ahora hay una que lo cubre y falla sin el arreglo.
 
 ### Formularios (hito 3a)
 

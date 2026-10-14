@@ -43,7 +43,16 @@ page = doc.new_page(width=400, height=600)
 page.insert_text((50, 80), "Pagina girada", fontname="helv", fontsize=12)
 page.set_rotation(90)
 doc.save(OUT / "page_rotated.pdf", garbage=0, deflate=False)
-# 5. A form with one of each kind of field (reuses the web app's test builder).
+# 5. A page whose content never undoes its own scaling: text added after it
+#    must still land where it was asked to.
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_text((72, 100), "Pagina con escala", fontname="helv", fontsize=12)
+xref = page.get_contents()[0]
+doc.update_stream(xref, b"0.5 0 0 0.5 100 100 cm\nq\n" + doc.xref_stream(xref))
+doc.save(OUT / "leaky.pdf", garbage=0, deflate=False)
+
+# 6. A form with one of each kind of field (reuses the web app's test builder).
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 from tests.conftest import build_pdf_with_every_kind_of_field

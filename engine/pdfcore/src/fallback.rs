@@ -37,6 +37,11 @@ pub(crate) fn choose(base_font: &str) -> (&'static str, &'static [u8]) {
         && !name.contains("sans");
     let bold = ["bold", "black", "heavy", "demi"].iter().any(|k| name.contains(k));
     let italic = name.contains("italic") || name.contains("oblique");
+    by_style(serif, bold, italic)
+}
+
+/// The bundled font of a given style.
+pub(crate) fn by_style(serif: bool, bold: bool, italic: bool) -> (&'static str, &'static [u8]) {
     let family = if serif { "LiberationSerif" } else { "LiberationSans" };
     let style = match (bold, italic) {
         (true, true) => "BoldItalic",
@@ -68,7 +73,6 @@ pub(crate) fn advance(data: &[u8], text: &str, size: f32) -> f32 {
 /// A fallback font that has been written into one document.
 pub(crate) struct Embedded {
     pub resource: String,
-    pub key: &'static str,
     pub font_id: ObjectId,
     descendant: ObjectId,
     to_unicode: ObjectId,
@@ -77,6 +81,39 @@ pub(crate) struct Embedded {
 }
 
 impl Embedded {
+    /// The fallback font of this style already written into the document, if
+    /// an earlier session put one there. Embedding a second copy under the same
+    /// resource name would replace the first in the pages' resources, and the
+    /// new copy only knows the widths of the glyphs *it* was used for, so text
+    /// written earlier would come out spaced as if every other glyph were 1 em.
+    pub fn adopt(pdf: &Pdf, key: &'static str, data: &'static [u8]) -> Option<Embedded> {
+        for (id, object) in pdf.objects.iter() {
+            let Object::Dictionary(dict) = object else { continue };
+            let named = |k: &[u8], v: &str| dict.get(k).ok().and_then(|o| o.as_name().ok()) == Some(v.as_bytes());
+            if !(named(b"Subtype", "Type0") && named(b"BaseFont", key)) {
+                continue;
+            }
+            let descendant = dict.get(b"DescendantFonts").ok()?.as_array().ok()?.first()?.as_reference().ok()?;
+            let to_unicode = dict.get(b"ToUnicode").ok()?.as_reference().ok()?;
+            let map = pdf.get_object(to_unicode).ok()?.as_stream().ok()?;
+            let map = map.decompressed_content().unwrap_or_else(|_| map.content.clone());
+            let used = crate::cmap::CMap::parse(&map)
+                .entries()
+                .into_iter()
+                .filter_map(|(code, text)| Some((u16::try_from(code).ok()?, text.chars().next()?)))
+                .collect();
+            return Some(Embedded {
+                resource: format!("PC{}", key.replace('-', "")),
+                font_id: *id,
+                descendant,
+                to_unicode,
+                data,
+                used,
+            });
+        }
+        None
+    }
+
     pub fn embed(pdf: &mut Pdf, key: &'static str, data: &'static [u8]) -> Result<Embedded> {
         let face = Face::parse(data, 0).map_err(|e| Error::Unsupported(format!("fuente de respaldo ilegible: {e}")))?;
         let scale = 1000.0 / face.units_per_em() as f32;
@@ -136,7 +173,7 @@ impl Embedded {
         let font = pdf.add_object(font);
 
         let resource = format!("PC{}", key.replace('-', ""));
-        Ok(Embedded { resource, key, font_id: font, descendant, to_unicode, data, used: BTreeMap::new() })
+        Ok(Embedded { resource, font_id: font, descendant, to_unicode, data, used: BTreeMap::new() })
     }
 
     /// The bytes that draw `text` in this font, and how far they advance at
