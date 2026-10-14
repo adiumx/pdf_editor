@@ -54,6 +54,17 @@ pub(crate) fn lacks(data: &[u8], text: &str) -> Vec<char> {
     text.chars().filter(|c| face.glyph_index(*c).is_none()).collect()
 }
 
+/// How far `text` advances in that font at `size` points, without touching any
+/// document. Characters the font lacks count as nothing.
+pub(crate) fn advance(data: &[u8], text: &str, size: f32) -> f32 {
+    let Ok(face) = Face::parse(data, 0) else { return 0.0 };
+    let scale = size / face.units_per_em() as f32;
+    text.chars()
+        .filter_map(|c| face.glyph_index(c))
+        .map(|g| face.glyph_hor_advance(g).unwrap_or(0) as f32 * scale)
+        .sum()
+}
+
 /// A fallback font that has been written into one document.
 pub(crate) struct Embedded {
     pub resource: String,

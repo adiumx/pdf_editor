@@ -8,6 +8,7 @@ mod edit;
 mod error;
 mod fallback;
 mod font;
+mod forms;
 mod standard_widths;
 mod text;
 
@@ -16,6 +17,7 @@ use lopdf::{Dictionary, Document as Pdf, Object, ObjectId};
 pub use error::{Error, Result};
 pub use font::{Font, FontKind, Glyph};
 pub use edit::Replaced;
+pub use forms::{Field, FieldKind, Widget};
 pub use text::{Matrix, TextRun};
 
 /// A page's size as a reader shows it: rotation applied, origin top-left.

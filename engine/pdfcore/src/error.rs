@@ -8,6 +8,10 @@ pub enum Error {
     NoSuchPage(usize),
     #[error("la fuente de ese texto no trae estos caracteres: {}", .0.iter().collect::<String>())]
     MissingGlyphs(Vec<char>),
+    #[error("no hay un campo llamado «{0}»")]
+    NoSuchField(String),
+    #[error("{0}")]
+    Rejected(String),
     #[error("{0}")]
     Unsupported(String),
 }

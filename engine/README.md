@@ -29,7 +29,8 @@ como referencia y como oráculo de pruebas.
 | 1. Leer: páginas, tamaño y rotación, tramos de texto con fuente, tamaño y caja | **hecho** |
 | 2. Reemplazar un tramo conservando la fuente, con la que ya trae el PDF | **hecho** |
 | 2b. Carácter que el subconjunto no trae: se dibuja con una fuente de respaldo incluida (Liberation Sans/Serif, OFL) y se avisa cuáles | **hecho** |
-| 3. Añadir texto nuevo; campos de formulario (AcroForm) con su apariencia | |
+| 3a. Campos de formulario (AcroForm): leer y rellenar texto, casillas, radios, listas, con su apariencia | **hecho** |
+| 3b. Añadir texto nuevo en cualquier punto de la página (para PDF planos, sin campos) | siguiente |
 | 4. Guardar, y modelo de deshacer | |
 | 5. Capa C ABI + plugin Flutter (`flutter_rust_bridge` o `dart:ffi`) | |
 | 6. Imágenes, anotaciones, firmas (aviso), OCR en el dispositivo | |
@@ -70,6 +71,30 @@ descubrió una prueba que decía que sí existían `X` y `Q`; ahora fallan limpi
 Comprobado en un formulario real de seguros: se cambió una línea en Arial
 (Type0/Identity-H, subconjunto), MuPDF abre el resultado, la dibuja con la
 misma fuente en el mismo sitio, y es la única diferencia de texto de la página.
+
+### Formularios (hito 3a)
+
+`Document::fields()` lee el árbol de campos: nombre completo (ruta de `/T`),
+tipo, valor y banderas heredados del padre, y los *widgets* (rectángulos) con su
+página y su caja ya en coordenadas de lector. `set_field_value(nombre, valor)`
+rellena texto (una línea, multilínea con salto de palabra, peine, contraseña,
+alineación), listas y desplegables (sólo opciones, salvo desplegable editable),
+casillas y radios, y respeta máximo de caracteres y solo lectura. Todo se
+valida antes de tocar nada y cada rechazo dice por qué.
+
+- **La apariencia se genera.** Muchos formularios (el de seguros con el que se
+  probó) traen campos de texto sin `/AP`: un visor que no la construye enseña una
+  caja vacía sobre un campo con valor. Se escribe un flujo de apariencia con la
+  fuente del propio campo (`/DA`) o, si no dibuja algún carácter, con la de
+  respaldo; también se pintan fondo y borde (`/MK`).
+- **Solo lectura marcado por error.** Las 28 casillas de ese formulario llevan
+  `/Ff 1` (solo lectura), por eso ningún lector que siga el estándar deja
+  marcarlas. `set_field_value` las rechaza; `set_field_value_with(.., true)`
+  rellena igualmente, para que la interfaz pregunte a la persona antes.
+- Un estado de radio llamado `No` es un estado, no la palabra «desmarcado»: se
+  compara primero con los nombres exactos (lo encontró una prueba).
+- Aún no: dibujar la fila resaltada de una lista, rotación `/MK /R`, firmas,
+  cálculos y JavaScript de los campos.
 
 ### Fuente de respaldo (hito 2b)
 

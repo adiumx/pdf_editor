@@ -43,4 +43,9 @@ page = doc.new_page(width=400, height=600)
 page.insert_text((50, 80), "Pagina girada", fontname="helv", fontsize=12)
 page.set_rotation(90)
 doc.save(OUT / "page_rotated.pdf", garbage=0, deflate=False)
+# 5. A form with one of each kind of field (reuses the web app's test builder).
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+from tests.conftest import build_pdf_with_every_kind_of_field
+(OUT / "form.pdf").write_bytes(build_pdf_with_every_kind_of_field())
 print("fixtures in", OUT)
