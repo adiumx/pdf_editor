@@ -32,7 +32,8 @@ como referencia y como oráculo de pruebas.
 | 3a. Campos de formulario (AcroForm): leer y rellenar texto, casillas, radios, listas, con su apariencia | **hecho** |
 | 3b. Añadir texto nuevo en cualquier punto de la página (para PDF planos, sin campos) | **hecho** |
 | 4. Guardar, y deshacer/rehacer | **hecho** |
-| 5. Capa C ABI + plugin Flutter (`flutter_rust_bridge` o `dart:ffi`) | |
+| 5a. Capa C (`pdfcore-ffi`): cabecera, JSON, probada llamándola desde Python | **hecho** |
+| 5b. Compilar y enlazar para Android/iOS; enlaces Dart; app Flutter | siguiente (necesita NDK/Xcode/Flutter, no hay aquí) |
 | 6. Imágenes, anotaciones, firmas (aviso), OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee
@@ -71,6 +72,29 @@ descubrió una prueba que decía que sí existían `X` y `Q`; ahora fallan limpi
 Comprobado en un formulario real de seguros: se cambió una línea en Arial
 (Type0/Identity-H, subconjunto), MuPDF abre el resultado, la dibuja con la
 misma fuente en el mismo sitio, y es la única diferencia de texto de la página.
+
+### Capa C para Flutter (hito 5a)
+
+`pdfcore-ffi` expone el motor como funciones `extern "C"` (`include/pdfcore.h`)
+con un manejador opaco y JSON para los datos, que es lo que `dart:ffi` llama
+mejor: un solo `jsonDecode` en lugar de una estructura C por tipo. Los tramos de
+texto se nombran por su `id` en la última lectura de la página; cualquier
+edición, deshacer o rehacer los invalida y hay que volver a leer. Ningún pánico
+cruza la frontera (se vuelve un error), los punteros nulos dan `bad_argument`, y
+los errores llevan un `kind` estable (`missing_glyphs` con los caracteres,
+`rejected`, `stale_run`...).
+
+- **Probado de verdad contra la biblioteca compartida**, llamándola desde Python
+  con `ctypes` como la llamará Dart: `cargo build -p pdfcore-ffi && python3 -m
+  pytest pdfcore-ffi/tests` (9 pruebas: leer, reemplazar, ids caducados, respaldo,
+  añadir, campos, deshacer/rehacer, guardar y reabrir, abrir 50 veces).
+- **Compila** (`cargo check`) para `aarch64-linux-android`, `armv7-linux-androideabi`,
+  `x86_64-linux-android`, `aarch64-apple-ios` y `aarch64-apple-ios-sim`. Eso
+  comprueba que el código es válido para esas plataformas, **no** que se enlace
+  ni que corra en un teléfono: para eso hacen falta el NDK, Xcode y un
+  dispositivo, que no hay aquí.
+- Sin hacer todavía: los enlaces Dart y la app Flutter. No se escriben sin poder
+  ejecutarlos; el contrato está en la cabecera y en las pruebas.
 
 ### Deshacer y guardar (hito 4)
 
