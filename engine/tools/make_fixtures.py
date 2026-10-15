@@ -519,7 +519,7 @@ base.update_stream(content_xref, new_content.encode("latin-1"))
 chars = "".join(f"<{g + shift:04X}> <{old[g]:04X}>\n" for g in glyphs)
 base.update_stream(tu, ("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /X def\n/CMapType 2 def\n"
                         "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n%d beginbfchar\n%sendbfchar\nendcmap\nend\nend" % (len(glyphs), chars)).encode())
-descendant = int(base.xref_get_key(font_xref, "DescendantFonts")[1].strip("[] R0").split()[0])
+descendant = int(_re.search(r"(\d+) 0 R", base.xref_get_key(font_xref, "DescendantFonts")[1]).group(1))
 loma = pymupdf.Font(fontfile=SANS)
 widths = " ".join(f"{g + shift} [{round(loma.glyph_advance(old[g]) * 1000)}]" for g in glyphs)
 base.xref_set_key(descendant, "W", f"[{widths}]")
@@ -563,5 +563,40 @@ for source, target in (("type1_simple", "font_type1_noenc"), ("cff_bare", "font_
     doc = pymupdf.open(OUT / f"{source}.pdf")
     doc.xref_set_key(doc[0].get_fonts(full=True)[0][0], "Encoding", "null")
     doc.save(OUT / f"{target}.pdf", garbage=0, deflate=False)
+
+# 24. A line drawn with a TJ whose numbers kern and stretch the text, followed on the same
+#     line by a run placed where the kerned text ends (so a wrong width shows as a gap).
+parts = [("AV", 80), ("A", 40), ("TAR", -30), (" Ejemplo", 15), (" con kerning", 0)]
+plain = "".join(p for p, _ in parts)
+width = pymupdf.get_text_length(plain, fontname="helv", fontsize=14) - sum(n for _, n in parts) / 1000 * 14
+array = " ".join(f"({p}) {n}" if n else f"({p})" for p, n in parts)
+content = (f"BT /F1 14 Tf 72 700 Td [{array}] TJ ET\n"
+           f"BT /F1 14 Tf 1 0 0 1 {72 + width + 12:.3f} 700 Tm (FIN) Tj ET\n"
+           "BT /F1 14 Tf 72 670 Td (Una segunda linea sin kerning) Tj ET")
+(OUT / "kerned.pdf").write_bytes(one_font_page(
+    b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>", content.encode()))
+
+# 23. Other producers, with the case that matters most: a justified paragraph with bold
+#     words in the middle. Needs reportlab (dev only); skipped when it is not installed.
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_JUSTIFY
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    pdfmetrics.registerFont(TTFont("LibSans", SANS))
+    pdfmetrics.registerFont(TTFont("LibSansB", SANS.replace("Regular", "Bold")))
+    pdfmetrics.registerFontFamily("LibSans", normal="LibSans", bold="LibSansB", italic="LibSans", boldItalic="LibSansB")
+    para = ("Para consultar la <b>ubicación, días y horarios de atención; costos del servicio del pasaporte y plazos de entrega</b>, "
+            "en el número <b>55 893 24827</b>. Este párrafo justificado es lo bastante largo como para ocupar varias líneas y mostrar "
+            "cómo reparte el espacio entre palabras un generador de PDF.")
+    for name, font in (("producer_reportlab_type1", "Helvetica"), ("producer_reportlab_ttf", "LibSans")):
+        style = ParagraphStyle("j", fontName=font, fontSize=11, leading=15, alignment=TA_JUSTIFY)
+        SimpleDocTemplate(str(OUT / f"{name}.pdf"), pagesize=A4, leftMargin=72, rightMargin=72, topMargin=72, invariant=1).build(
+            [Paragraph(para, style), Spacer(1, 12), Paragraph("Otro párrafo normal con acentos áéíóú ñ y <b>negrita</b> en medio.", style)])
+except ImportError:
+    print("reportlab not installed: producer_reportlab_* fixtures kept as they are")
 
 print("fixtures in", OUT)

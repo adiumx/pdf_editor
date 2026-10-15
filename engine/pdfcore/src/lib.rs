@@ -14,6 +14,7 @@ mod forms;
 mod image;
 mod items;
 mod journal;
+mod kerning;
 mod layout;
 mod pages;
 mod placement;

@@ -76,6 +76,11 @@ impl Document {
     /// [`replace_text_with_fallback`](Self::replace_text_with_fallback) with the
     /// options spelled out, including [`Reflow`].
     pub fn replace_text_with(&mut self, page: usize, run: &TextRun, new_text: &str, options: ReplaceOptions) -> Result<Replaced> {
+        // The same text changes nothing: not a single operation is rewritten, and no step is recorded.
+        if new_text == run.text && run.not_editable.is_none() && run.xobject.is_none() {
+            let width = ((run.end.0 - run.origin.0).powi(2) + (run.end.1 - run.origin.1).powi(2)).sqrt();
+            return Ok(Replaced { old_width: width, new_width: width, fallback_chars: Vec::new(), reread: false, moved: 0, warnings: Vec::new() });
+        }
         self.transaction(|d| d.replace(page, run, new_text, options))
     }
 
@@ -124,7 +129,7 @@ impl Document {
             .iter()
             .flat_map(|g| (0..font.code_bytes()).rev().map(move |b| (g.code >> (8 * b)) as u8))
             .collect();
-        let old_width = font.advance_of(&old, run.size);
+        let mut old_width = font.advance_of(&old, run.size);
 
         let before_edit = if options.reflow != Reflow::None { page_runs } else { None };
         let mut content = Content::decode(&self.pdf.get_page_content(id))?;
@@ -137,7 +142,18 @@ impl Document {
             return Err(Error::Unsupported(format!("operación inesperada: {}", original.operator)));
         }
 
-        let (ops, new_width, used_fallback) = self.build_show_ops(font, run, &segments, key, data, Some(&original))?;
+        // A `TJ`'s numbers (kerning, justified spaces) count in how wide the old text was, and the
+        // letters that do not change keep theirs.
+        old_width += crate::kerning::old_kerning(run, &original);
+        let kept = if segments.iter().all(|(_, bytes)| bytes.is_some()) {
+            crate::kerning::keep_kerning(font, run, &original, new_text)
+        } else {
+            None
+        };
+        let (ops, new_width, used_fallback) = match kept {
+            Some((op, width)) => (vec![op], width, Vec::new()),
+            None => self.build_show_ops(font, run, &segments, key, data, Some(&original))?,
+        };
         let reread = ops.len() != 1;
         if !used_fallback.is_empty() {
             let resource = self.fallbacks[key].resource.clone();

@@ -95,3 +95,70 @@ fn the_fallback_draws_what_a_simple_subset_font_lacks() {
     let texts: String = reopen(&mut doc).text_runs(0).unwrap().iter().filter(|r| r.origin.1 > 600.0).map(|r| r.text.clone()).collect();
     assert!(texts.contains("Poliza y Ñ") || texts.replace(' ', "").contains("PolizayÑ"), "{texts:?}");
 }
+
+// -- spacing a producer wrote into a TJ ---------------------------------------------
+
+mod kerning {
+    use pdfcore::{Document, ReplaceOptions};
+
+    fn open() -> Document {
+        let path = format!("{}/tests/fixtures/kerned.pdf", env!("CARGO_MANIFEST_DIR"));
+        Document::open(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    fn run(doc: &Document, start: &str) -> pdfcore::TextRun {
+        doc.text_runs(0).unwrap().into_iter().find(|r| r.text.starts_with(start)).unwrap()
+    }
+
+    #[test]
+    fn the_same_text_changes_nothing_at_all() {
+        let mut doc = open();
+        let before = doc.save_to_bytes().unwrap();
+        let kerned = run(&doc, "AVATAR");
+        let done = doc.replace_text(0, &kerned, &kerned.text).unwrap();
+        assert_eq!((done.moved, done.reread), (0, false));
+        assert!(!doc.can_undo(), "no step for nothing");
+        assert_eq!(doc.save_to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn letters_that_stay_keep_their_kerning_and_the_line_keeps_its_gap() {
+        let mut doc = open();
+        let before = run(&doc, "AVATAR");
+        let follower = run(&doc, "FIN");
+        let gap = follower.origin.0 - before.end.0;
+        // Longer at the end: every old letter keeps its place exactly.
+        doc.replace_text_with(0, &before, &format!("{} y mas", before.text), ReplaceOptions::default()).unwrap();
+        let after = run(&doc, "AVATAR");
+        assert_eq!(after.text, format!("{} y mas", before.text));
+        for (old, new) in before.glyphs.iter().zip(&after.glyphs) {
+            assert_eq!(old.code, new.code);
+        }
+        // The prefix ends where it ended (kerning included): the line's start is untouched.
+        assert!((after.origin.0 - before.origin.0).abs() < 0.001);
+        // The follower moved by exactly the added width, so the gap before it is the old one.
+        let follower = run(&doc, "FIN");
+        assert!((follower.origin.0 - after.end.0 - gap).abs() < 0.05, "gap {} became {}", gap, follower.origin.0 - after.end.0);
+        // Same at the start: the kerning of the end is kept and the follower still follows.
+        let mut doc = open();
+        let before = run(&doc, "AVATAR");
+        doc.replace_text_with(0, &before, &format!("Mas {}", before.text), ReplaceOptions::default()).unwrap();
+        let after = run(&doc, "Mas");
+        let follower = run(&doc, "FIN");
+        assert!((follower.origin.0 - after.end.0 - gap).abs() < 0.05);
+    }
+
+    #[test]
+    fn changing_the_middle_keeps_the_kerning_of_both_ends() {
+        let mut doc = open();
+        let before = run(&doc, "AVATAR");
+        let follower = run(&doc, "FIN");
+        let gap = follower.origin.0 - before.end.0;
+        doc.replace_text_with(0, &before, "AVATAR Ejemplo muy largo con kerning", ReplaceOptions::default()).unwrap();
+        let after = run(&doc, "AVATAR");
+        let follower = run(&doc, "FIN");
+        assert!((follower.origin.0 - after.end.0 - gap).abs() < 0.05, "the follower follows the true end");
+        // The untouched end of the old text is where the same letters would be: " con kerning" ends the run.
+        assert!(after.text.ends_with(" con kerning"));
+    }
+}

@@ -47,6 +47,7 @@ como referencia y como oráculo de pruebas.
 | 6h. Mover, redimensionar y alinear campos de formulario (varios a la vez, un solo deshacer); texto de campo derecho también en páginas giradas | **hecho** |
 | 6i. Elementos como en un editor de diseño: textos, imágenes y campos se mueven, alinean, reparten y se les da un interlineado uniforme; alineación del texto en párrafos y campos | **hecho** |
 | 6j. Fidelidad de codificaciones: MacRoman, Standard, Symbol y la codificación propia de Type1/CFF; lista completa de glifos de Adobe; clase de fuente por tramo; texto que no se puede reproducir (Type3, vertical, derecha a izquierda, símbolos) se lee y se rechaza con `not_editable` | **hecho** |
+| 6k. Ida y vuelta sin cambios visibles: `tools/roundtrip_check.py` compara con MuPDF, píxel a píxel, 53 PDF (fixtures, tus PDF reales, otros productores) tras guardar, guardar dos veces, girar y deshacer, mover una página y volver, traer y borrar una página, y editar y volver al texto original; el interletraje (`TJ`) se conserva | **hecho** |
 | 7. Anotaciones (resaltar, notas), aplanar formularios, OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee
@@ -357,6 +358,18 @@ TrueType y Type 3). Las tablas están en `src/encodings_data.rs`, generadas por
 BSD-3, licencia en `fonts/`). Las anchuras de las fuentes estándar sin `/Widths` se miden por letra, no
 por código. Lo que no se puede reproducir (`type3`, `vertical_writing`, `symbolic_font`, `rtl_text`) se
 lee y se rechaza con el error `not_editable` (`reason`). `tools/audit_fonts.py` repite la auditoría.
+
+### Ida y vuelta e interletraje (hito 6k)
+
+Guardar un PDF sin tocarlo lo deja idéntico (la poda de objetos sin referencias, la reescritura plana del
+árbol de páginas y el descifrado no cambian nada visible). Una edición que no cambia el texto no escribe
+nada y no deja paso de deshacer. Al cambiar texto dentro de un tramo dibujado con `TJ`, las letras que
+no cambian (las del principio y las del final) conservan sus códigos y los números de interletraje o de
+justificación que había entre ellas; antes se descartaban y las letras se movían una fracción de punto
+aunque el texto fuera el mismo. El ancho antes y después se mide con esos números, así que el reajuste
+de línea mueve lo justo. Generadores de PDF probados: MuPDF, ReportLab, Rust a mano y tus tres PDF reales (Helvetica y Arial en
+TrueType/Type0, Carlito y Liberation); **no** probados: InDesign, LaTeX, Word, LibreOffice (aquí no
+está instalado su módulo de texto).
 
 ### Huecos conocidos (aún no implementados)
 
