@@ -313,6 +313,10 @@ página y no baja de 6 puntos, y se devuelve donde quedó, para que una cuadríc
 `arrange_fields` alinea (izquierda, derecha, arriba, abajo, centros), reparte con huecos iguales
 (tres o más) o iguala ancho o alto, todo como un solo paso. Una firma ya firmada no se mueve.
 La cuadrícula, el imán y las guías son de la app: el motor ejecuta «pon este campo en esta caja».
+`arrange_fields` alinea los campos que se le pasan entre sí; **no los ajusta a una cuadrícula**.
+Para que cada campo caiga en un nodo de la cuadrícula, la app calcula la caja de cada uno y llama
+a `move_field` por campo, y cada llamada es un paso de deshacer aparte (todavía no hay una
+operación que mueva varios campos a cajas distintas en un solo paso).
 En páginas giradas el texto de un campo se dibuja con `/MK /R` (la rotación del widget, o la de
 la página) para que se lea derecho; antes salía de lado y recortado. También se corrigió un
 pánico al dibujar un campo vacío cuya fuente no estaba incrustada.

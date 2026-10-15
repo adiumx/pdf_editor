@@ -228,6 +228,9 @@ await session.addImage(0, fotoBytes, x: 72, y: 600, width: 120);
 final dondeQuedo = await session.moveField('nombre', [100, 300, 260, 322]);
 await session.arrangeFields(
   [FieldRefs('rfc'), FieldRefs('notas'), FieldRefs('importe')], Arrange.alignLeft); // un solo deshacer
+// Ojo: arrangeFields alinea los campos entre sí, no los ajusta a la cuadrícula. Para ajustar a la
+// cuadrícula, calcula la caja de cada campo y llama a moveField por campo: cada llamada es un
+// paso de deshacer aparte.
 
 // Párrafos: muestra todo el texto en un cuadro y devuélvelo completo.
 final p = await session.paragraphOf(page, run);         // null si es una línea suelta
@@ -245,6 +248,7 @@ Qué hay que tener presente:
 - `insertPages` no hace únicos los nombres de campo: dos formularios con un campo
   `nombre` comparten el valor al rellenarlo.
 - Tras cualquier operación de las anteriores, los `run.id` caducan: vuelve a leer la página.
+- Ajustar campos a una cuadrícula con `moveField` deja un paso de deshacer por campo; `arrangeFields` sí es uno solo, pero no usa la cuadrícula.
 
 ## 6. Boceto de pantalla de edición (sin compilar)
 
