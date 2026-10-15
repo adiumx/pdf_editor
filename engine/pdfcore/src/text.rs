@@ -86,6 +86,10 @@ pub struct TextRun {
     /// Why this text cannot be edited, when it cannot: `type3`, `vertical_writing`,
     /// `symbolic_font` or `rtl_text`. It can still be read, moved and aligned.
     pub not_editable: Option<&'static str>,
+    /// Horizontal scaling in force (`Tz`), 1.0 when none.
+    pub hscale: f32,
+    /// The font descriptor's `/Flags`, when it has one.
+    pub font_flags: Option<u32>,
 }
 
 /// Hebrew and Arabic: written right to left, which needs shaping the engine does not do.
@@ -365,6 +369,8 @@ fn show(
         font_embedded: font.embedded,
         font_kind: font.class,
         not_editable: font.not_editable().or_else(|| rtl.then_some("rtl_text")),
+        hscale: state.th,
+        font_flags: font.flags(),
     });
 }
 

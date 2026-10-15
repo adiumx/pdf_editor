@@ -49,6 +49,7 @@ como referencia y como oráculo de pruebas.
 | 6j. Fidelidad de codificaciones: MacRoman, Standard, Symbol y la codificación propia de Type1/CFF; lista completa de glifos de Adobe; clase de fuente por tramo; texto que no se puede reproducir (Type3, vertical, derecha a izquierda, símbolos) se lee y se rechaza con `not_editable` | **hecho** |
 | 6k. Ida y vuelta sin cambios visibles: `tools/roundtrip_check.py` compara con MuPDF, píxel a píxel, 53 PDF (fixtures, tus PDF reales, otros productores) tras guardar, guardar dos veces, girar y deshacer, mover una página y volver, traer y borrar una página, y editar y volver al texto original; el interletraje (`TJ`) se conserva | **hecho** |
 | 6l. Párrafos como un solo bloque con estilo por tramo (negritas, tamaños, colores): `blocks` / `replace_block` conservan el estilo de cada palabra, escribir hereda el de la letra anterior, solo se reescriben las líneas que cambian, justificado y sangría se mantienen, un solo paso de deshacer | **hecho** |
+| 6m. Fuentes: orden de intentos (misma fuente ampliada → programa de la fuente → fuente incluida), `substitutes` con parecido 0-100, Liberation Mono + Carlito + Caladea (OFL), política `per_char`/`whole_run`/`auto` con ajuste `Tz`, `register_font` / `required_fonts` con fuentes libres sugeridas, ligaduras en la búsqueda | **hecho** |
 | 7. Anotaciones (resaltar, notas), aplanar formularios, OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee

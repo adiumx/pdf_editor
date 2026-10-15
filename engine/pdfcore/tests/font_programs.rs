@@ -20,8 +20,8 @@ fn first_run(doc: &Document) -> pdfcore::TextRun {
     doc.text_runs(0).unwrap().into_iter().next().unwrap()
 }
 
-const WITHOUT: ReplaceOptions = ReplaceOptions { allow_fallback: false, reflow: pdfcore::Reflow::None };
-const WITH: ReplaceOptions = ReplaceOptions { allow_fallback: true, reflow: pdfcore::Reflow::None };
+const WITHOUT: ReplaceOptions = ReplaceOptions { allow_fallback: false, reflow: pdfcore::Reflow::None, substitution: pdfcore::Substitution::PerChar };
+const WITH: ReplaceOptions = ReplaceOptions { allow_fallback: true, reflow: pdfcore::Reflow::None, substitution: pdfcore::Substitution::PerChar };
 
 /// Letters of the new text that the font has but the old text never used must
 /// keep the font; a letter it lacks must say so, or use the bundled font.

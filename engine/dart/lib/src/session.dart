@@ -97,6 +97,12 @@ class PdfSession {
 
   Future<void> arrangeFields(List<FieldRefs> fields, Arrange how) => _call<void>('arrangeFields', [fields, how]);
 
+  Future<List<RequiredFont>> requiredFonts() => _call<List<RequiredFont>>('requiredFonts', []);
+
+  Future<RegisteredFont> registerFont(Uint8List font) => _call<RegisteredFont>('registerFont', [font]);
+
+  Future<void> setSubstitution(Substitution policy) => _call<void>('setSubstitution', [policy]);
+
   Future<List<PdfBlock>> blocks(int page) => _call<List<PdfBlock>>('blocks', [page]);
 
   Future<BlockResult> replaceBlock(int page, PdfBlock block, String text, {bool allowFallback = false}) =>
@@ -240,6 +246,13 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
       return doc.moveField(a[0] as String, (a[1] as List).cast<double>(), widget: a[2] as int);
     case 'arrangeFields':
       doc.arrangeFields((a[0] as List).cast<FieldRefs>(), a[1] as Arrange);
+      return null;
+    case 'requiredFonts':
+      return doc.requiredFonts();
+    case 'registerFont':
+      return doc.registerFont(a[0] as Uint8List);
+    case 'setSubstitution':
+      doc.setSubstitution(a[0] as Substitution);
       return null;
     case 'blocks':
       return doc.blocks(a[0] as int);

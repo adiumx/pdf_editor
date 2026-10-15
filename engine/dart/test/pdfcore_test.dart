@@ -410,6 +410,24 @@ void main() {
     });
   });
 
+  group('font book', () {
+    test('required fonts, a registered font and the letters it draws', () {
+      final doc = open('font_subset_as_verdana');
+      addTearDown(doc.close);
+      final fonts = doc.requiredFonts();
+      expect(fonts.single.needed, isTrue);
+      expect(fonts.single.source!.name, 'Open Sans');
+      expect(doc.page(0).runs.first.substituteSimilarity, lessThan(90));
+      final font = File('${engine.path}/pdfcore/tests/fixtures/registered_verdana.ttf').readAsBytesSync();
+      expect(doc.registerFont(font).family, 'Verdana');
+      expect(doc.requiredFonts().single.registered, isTrue);
+      doc.setSubstitution(Substitution.wholeRun);
+      final page = doc.page(0);
+      final done = doc.replaceText(page, page.runs.first, 'Hola Ñandú', allowFallback: true);
+      expect(done.substitutes.every((s) => s.similarity == 100 && s.isBundledFont), isTrue);
+    });
+  });
+
   group('blocks', () {
     test('a paragraph with bold words is one block and keeps its styles when edited', () async {
       final doc = open('producer_reportlab_ttf');

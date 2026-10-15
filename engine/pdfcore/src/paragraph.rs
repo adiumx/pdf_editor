@@ -198,7 +198,7 @@ impl Document {
 
         let (old_count, new_count) = (members.len(), wrapped.len());
         let mut used_fallback: Vec<char> = Vec::new();
-        let options = ReplaceOptions { allow_fallback, reflow: Reflow::None };
+        let options = ReplaceOptions { allow_fallback, reflow: Reflow::None, ..Default::default() };
 
         // Existing lines, last drawn first: an edit changes only the operations
         // from its own on, so the runs read earlier stay valid for the ones before.
@@ -239,7 +239,7 @@ impl Document {
             }
             if self.fallbacks.contains_key(key) && !used_fallback.is_empty() {
                 let (resource, font_id) = (self.fallbacks[key].resource.clone(), self.fallbacks[key].font_id);
-                self.register_font(id, &resource, font_id)?;
+                self.add_font_resource(id, &resource, font_id)?;
             }
             self.append_to_page(id, &Content { operations: ops })?;
         }

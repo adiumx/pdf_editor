@@ -46,6 +46,9 @@ for name, args in {
     "pdfcore_space_lines": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
     "pdfcore_align_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int],
     "pdfcore_set_fields_alignment": [ctypes.c_void_p, ctypes.c_char_p],
+    "pdfcore_required_fonts": [ctypes.c_void_p],
+    "pdfcore_register_font": [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t],
+    "pdfcore_set_substitution": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_blocks": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_replace_block": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
@@ -580,7 +583,7 @@ def test_a_standard_font_keeps_its_face_for_a_new_letter():
     d.page()
     done = d.replace(0, "mañana")
     assert done["ok"] and done["fallback_chars"] == ""
-    assert done["substitutes"] == [{"char": "ñ", "via": "encoding"}], done
+    assert done["substitutes"] == [{"char": "ñ", "via": "encoding", "font": "Helvetica", "similarity": 100}], done
     page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
     spans = [sp for b in page.get_text("dict")["blocks"] for l in b["lines"] for sp in l["spans"]]
     assert "mañana" in " ".join(sp["text"] for sp in spans)
@@ -588,4 +591,36 @@ def test_a_standard_font_keeps_its_face_for_a_new_letter():
     clip = page.search_for("mañana")[0]
     pix = page.get_pixmap(clip=clip, dpi=200)
     assert sum(1 for i in range(0, len(pix.samples), pix.n) if pix.samples[i] < 128) > 50
+    d.close()
+
+
+def test_substitution_policy_draws_the_whole_run_in_one_face():
+    import pymupdf
+    d = Doc("font_subset_as_verdana")
+    assert call("pdfcore_set_substitution", d.handle, 1)["ok"]
+    d.page()
+    done = d.replace(0, "Hola mundo cruel de Ñandú", fallback=1)
+    assert done["ok"] and len(done["substitutes"]) == 25, done
+    assert {s["via"] for s in done["substitutes"]} == {"bundled_font"}
+    assert all(s["similarity"] < 90 and s["font"].startswith("LiberationSans") for s in done["substitutes"])
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    assert "Ñandú" in page.get_text()
+    spans = [sp for b in page.get_text("dict")["blocks"] for l in b["lines"] for sp in l["spans"]]
+    assert all("Liberation" in sp["font"] or "Sans" in sp["font"] for sp in spans), [sp["font"] for sp in spans]
+    d.close()
+
+
+def test_required_fonts_and_a_registered_font():
+    d = Doc("font_subset_as_verdana")
+    fonts = call("pdfcore_required_fonts", d.handle)["fonts"]
+    assert fonts[0]["base_font"] == "ABCDEF+Verdana" and fonts[0]["needed"] and not fonts[0]["registered"]
+    assert fonts[0]["source"]["name"] == "Open Sans" and fonts[0]["similarity"] < 90
+    run = d.page()["runs"][0]
+    assert run["substitute_similarity"] < 90
+    data = (FIXTURES / "registered_verdana.ttf").read_bytes()
+    done = call("pdfcore_register_font", d.handle, data, len(data))
+    assert done == {"ok": True, "family": "Verdana", "bold": False, "italic": False}, done
+    assert call("pdfcore_required_fonts", d.handle)["fonts"][0]["registered"]
+    assert d.page()["runs"][0]["substitute_similarity"] == 100
+    assert call("pdfcore_register_font", d.handle, b"nope", 4)["kind"] == "unsupported"
     d.close()

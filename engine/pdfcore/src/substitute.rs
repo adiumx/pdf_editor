@@ -21,6 +21,9 @@ use crate::Document;
 pub enum Via {
     /// Added to the font's own encoding: the reader draws it in the original face.
     Encoding,
+    /// The font's embedded program has the glyph; only the document's width table and text map
+    /// did not list it. Exactly the original face.
+    FontProgram,
     /// Drawn with a bundled font of the closest style.
     BundledFont,
 }
@@ -29,26 +32,66 @@ impl Via {
     pub fn as_str(self) -> &'static str {
         match self {
             Via::Encoding => "encoding",
+            Via::FontProgram => "font_program",
             Via::BundledFont => "bundled_font",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Substitute {
     pub ch: char,
     pub via: Via,
+    /// The font that drew it: the original's name for [`Via::Encoding`], the bundled font's
+    /// (`Carlito-Regular`...) otherwise.
+    pub font: String,
+    /// 0..=100, how close that face is to the original (100: same widths and look; under 90
+    /// the person should be told it is a different face).
+    pub similarity: u8,
+}
+
+/// What to do with a run that has letters its font lacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Substitution {
+    /// Only the missing letters use the bundled font.
+    PerChar,
+    /// The whole run is drawn in the bundled font, so no word mixes two faces.
+    WholeRun,
+    /// `PerChar` when the bundled face is a metric clone (similarity of 90 or more), else `WholeRun`.
+    Auto,
+}
+
+/// Letters a reader's copy of a Latin face can be trusted to have: Latin-1 and Latin Extended-A
+/// (the Adobe standard set and what WinAnsi and the common Windows faces cover) plus the usual
+/// punctuation. Anything else (Cyrillic, Greek...) may be blank in the reader, so it is not
+/// taught to a font: the bundled font draws it.
+fn reader_has(ch: char) -> bool {
+    matches!(ch, '\u{20}'..='\u{7E}' | '\u{A0}'..='\u{17F}' | '\u{192}' | '\u{2C6}' | '\u{2C7}' | '\u{2D8}'..='\u{2DD}'
+        | '\u{2013}' | '\u{2014}' | '\u{2018}'..='\u{201E}' | '\u{2020}'..='\u{2022}' | '\u{2026}' | '\u{2030}'
+        | '\u{2039}' | '\u{203A}' | '\u{20AC}' | '\u{2122}' | '\u{2212}')
 }
 
 impl Document {
     /// Add to the encoding of the fonts that are drawn by the reader every letter of `wanted`
     /// (font resource, text) they lack and that has an Adobe glyph name. Returns the letters
     /// that were added. Nothing is touched for a font that already draws its text.
-    pub(crate) fn teach_fonts(&mut self, page: ObjectId, wanted: &[(String, String)]) -> Result<Vec<char>> {
-        let mut added = Vec::new();
+    pub(crate) fn teach_fonts(&mut self, page: ObjectId, wanted: &[(String, String)]) -> Result<Vec<(char, Via)>> {
+        let mut added: Vec<(char, Via)> = Vec::new();
         for (resource, text) in wanted {
             let fonts = fonts_of(&self.pdf, &self.resources(page));
             let Some(font) = fonts.get(resource) else { continue };
+            if font.code_bytes() == 2 && !font.can_extend_encoding() {
+                // A full TrueType program holds letters its text map never listed.
+                let letters: std::collections::BTreeSet<char> = text.chars().collect();
+                for ch in letters {
+                    if let (Some((code, width)), Some(font_id)) = (font.program_glyph(ch), self.font_object(page, resource)) {
+                        if self.add_cid_glyph(font_id, code, width, ch, !font.has_cid_width(code))? {
+                            added.push((ch, Via::FontProgram));
+                        }
+                    }
+                }
+                continue;
+            }
             if !font.can_extend_encoding() {
                 continue;
             }
@@ -69,15 +112,44 @@ impl Document {
             let Some(font_id) = self.font_object(page, resource) else { continue };
             let mut free = font.unused_codes().into_iter();
             for ch in lacking {
+                if !reader_has(ch) {
+                    continue;
+                }
                 let (Some(name), Some(code)) = (glyph_name_of(ch), free.next()) else { continue };
                 if self.add_difference(font_id, code, name, ch)? {
-                    added.push(ch);
+                    added.push((ch, Via::Encoding));
                 }
             }
         }
-        added.sort_unstable();
-        added.dedup();
+        added.sort_unstable_by_key(|(c, _)| *c);
+        added.dedup_by_key(|(c, _)| *c);
         Ok(added)
+    }
+
+    /// Tell a composite font's width table and text map about a glyph its program has.
+    fn add_cid_glyph(&mut self, font_id: ObjectId, code: u32, width: f32, ch: char, write_width: bool) -> Result<bool> {
+        let font = self.pdf.get_dictionary(font_id)?.clone();
+        let Some(descendant) = font.get(b"DescendantFonts").ok().map(|o| resolve(&self.pdf, o).clone()).and_then(|o| {
+            let first = o.as_array().ok()?.first()?.clone();
+            first.as_reference().ok()
+        }) else {
+            return Ok(false);
+        };
+        if write_width {
+            let mut dict = self.pdf.get_dictionary(descendant)?.clone();
+            let mut widths = match dict.get(b"W").ok().map(|o| resolve(&self.pdf, o).clone()) {
+                Some(Object::Array(a)) => a,
+                _ => Vec::new(),
+            };
+            widths.push(Object::Integer(code as i64));
+            widths.push(Object::Array(vec![Object::Integer(width.round() as i64)]));
+            dict.set("W", Object::Array(widths));
+            *self.pdf.get_object_mut(descendant)? = Object::Dictionary(dict);
+        }
+        if let Some(map) = font.get(b"ToUnicode").ok().and_then(|o| o.as_reference().ok()) {
+            self.add_to_unicode(map, code, ch, 4)?;
+        }
+        Ok(true)
     }
 
     /// The font object a page's resource name points to, when it is an indirect one.
@@ -115,7 +187,7 @@ impl Document {
         let font = self.pdf.get_dictionary(font_id)?.clone();
         let to_unicode = font.get(b"ToUnicode").ok().and_then(|o| o.as_reference().ok());
         if let Some(map) = to_unicode {
-            self.add_to_unicode(map, code, ch)?;
+            self.add_to_unicode(map, code, ch, 2)?;
         }
         Ok(true)
     }
@@ -151,12 +223,11 @@ impl Document {
     }
 
     /// Say in a `ToUnicode` map that `code` is `text`, so copying and searching find the letter.
-    pub(crate) fn add_to_unicode(&mut self, map: ObjectId, code: u32, ch: char) -> Result<()> {
+    pub(crate) fn add_to_unicode(&mut self, map: ObjectId, code: u32, ch: char, width: usize) -> Result<()> {
         let Ok(stream) = self.pdf.get_object(map).and_then(|o| o.as_stream()) else { return Ok(()) };
         let body = stream.decompressed_content().unwrap_or_else(|_| stream.content.clone());
         let text = String::from_utf8_lossy(&body).into_owned();
         let Some(end) = text.rfind("endcmap") else { return Ok(()) };
-        let width = if text.contains("<0000>") && text.contains("<FFFF>") { 4 } else { 2 };
         let utf16: String = ch.encode_utf16(&mut [0u16; 2]).iter().map(|u| format!("{u:04X}")).collect();
         let entry = format!("1 beginbfchar\n<{code:0width$X}> <{utf16}>\nendbfchar\n");
         let at = end;

@@ -55,6 +55,8 @@ class TextRun {
     this.notEditable,
     this.fontEmbedded = false,
     this.fontKind = 'not_embedded',
+    this.substituteFont = '',
+    this.substituteSimilarity = 100,
   });
 
   /// Names this run in the *last reading of its page*; any edit, undo or redo
@@ -84,6 +86,12 @@ class TextRun {
   /// exactly (`not_embedded`, `embedded_subset`).
   final String fontKind;
 
+  /// JSON `substitute_font` / `substitute_similarity`: the font that would draw letters this run's
+  /// font lacks (a registered or bundled one) and how close it is, 0-100. Under 90 it is a
+  /// different face: say so before the person types a letter the font does not have.
+  final String substituteFont;
+  final int substituteSimilarity;
+
   factory TextRun.fromJson(Map<String, dynamic> j) => TextRun(
         id: j['id'] as int,
         text: j['text'] as String,
@@ -97,6 +105,8 @@ class TextRun {
         notEditable: j['not_editable'] as String?,
         fontEmbedded: j['font_embedded'] as bool? ?? false,
         fontKind: j['font_kind'] as String? ?? 'not_embedded',
+        substituteFont: j['substitute_font'] as String? ?? '',
+        substituteSimilarity: (j['substitute_similarity'] as num?)?.toInt() ?? 100,
       );
 }
 
@@ -609,15 +619,90 @@ class BlockResult {
 
 /// A letter the document's font could not draw, and what drew it instead (JSON
 /// `{"char","via"}`). `via` is `encoding` (added to the font's own encoding: the
-/// reader draws it in the same face) or `bundled_font` (a Liberation font of the
+/// reader draws it in the same face), `font_program` (the embedded font has the glyph, the
+/// document just did not list it: exactly the same face) or `bundled_font` (a Liberation font of the
 /// closest style). Tell the person about every one.
 class FontSubstitute {
-  FontSubstitute(this.char, this.via);
+  FontSubstitute(this.char, this.via, {this.font = '', this.similarity = 100});
   final String char;
   final String via;
+
+  /// The font that drew it (the original's name for `encoding`, e.g. `Carlito-Regular` otherwise).
+  final String font;
+
+  /// 0-100: how close that face is to the original. 100 is a metric clone; under 90 tell the
+  /// person it is a different face.
+  final int similarity;
+  bool get isDifferentFace => similarity < 90;
   bool get isBundledFont => via == 'bundled_font';
 
   static List<FontSubstitute> list(Object? raw) => ((raw as List?) ?? const [])
-      .map((s) => FontSubstitute((s as Map)['char'] as String, s['via'] as String))
+      .map((s) => FontSubstitute((s as Map)['char'] as String, s['via'] as String,
+          font: (s['font'] as String?) ?? '', similarity: (s['similarity'] as num?)?.toInt() ?? 100))
       .toList();
+}
+
+/// What to do with a run that has letters its font lacks, when the bundled font is allowed.
+enum Substitution {
+  /// Only those letters (default).
+  perChar,
+
+  /// The whole run, so no word mixes two faces.
+  wholeRun,
+
+  /// [wholeRun] unless the bundled face is a metric clone of the original.
+  auto,
+}
+
+/// A free font that looks like one the document uses (JSON `source`).
+class FontSource {
+  FontSource(this.name, this.license, this.url);
+  final String name;
+  final String license;
+  final String url;
+}
+
+/// A font the document uses and what editing it exactly needs (`pdfcore_required_fonts`).
+class RequiredFont {
+  RequiredFont(this.baseFont, this.kind, this.pages, this.runs, this.needed, this.registered, this.bundled,
+      this.similarity, this.source);
+  final String baseFont;
+
+  /// `embedded_full`, `embedded_subset`, `standard`, `not_embedded` or `type3`.
+  final String kind;
+  final List<int> pages;
+  final int runs;
+
+  /// The real font is wanted to edit this exactly (not embedded, or only in part).
+  final bool needed;
+
+  /// A font of this family was handed over with `registerFont`.
+  final bool registered;
+
+  /// The bundled font that stands in for it, and how close it is (0-100).
+  final String bundled;
+  final int similarity;
+  final FontSource? source;
+
+  factory RequiredFont.fromJson(Map<String, dynamic> j) => RequiredFont(
+        j['base_font'] as String,
+        j['kind'] as String,
+        (j['pages'] as List).map((p) => (p as num).toInt()).toList(),
+        (j['runs'] as num).toInt(),
+        j['needed'] as bool,
+        j['registered'] as bool,
+        j['bundled'] as String,
+        (j['similarity'] as num).toInt(),
+        j['source'] == null
+            ? null
+            : FontSource(j['source']['name'] as String, j['source']['license'] as String, j['source']['url'] as String),
+      );
+}
+
+/// What `registerFont` understood about the font (JSON `family`, `bold`, `italic`).
+class RegisteredFont {
+  RegisteredFont(this.family, this.bold, this.italic);
+  final String family;
+  final bool bold;
+  final bool italic;
 }

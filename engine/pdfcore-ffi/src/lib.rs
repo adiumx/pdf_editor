@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{Block, Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
+use pdfcore::{Substitution, Block, Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -29,6 +29,8 @@ pub struct PdfDoc {
     items: HashMap<usize, Vec<Item>>,
     /// What `pdfcore_blocks` last returned for each page.
     blocks: HashMap<usize, Vec<Block>>,
+    /// Which letters use the bundled font when the original lacks some (`pdfcore_set_substitution`).
+    substitution: Substitution,
 }
 
 thread_local! {
@@ -121,7 +123,7 @@ unsafe fn open_with(data: *const u8, len: usize, password: &str) -> *mut PdfDoc 
     }
     let bytes = std::slice::from_raw_parts(data, len);
     match catch_unwind(|| Document::open_with_password(bytes, password)) {
-        Ok(Ok(doc)) => Box::into_raw(Box::new(PdfDoc { doc, reading: HashMap::new(), items: HashMap::new(), blocks: HashMap::new() })),
+        Ok(Ok(doc)) => Box::into_raw(Box::new(PdfDoc { doc, reading: HashMap::new(), items: HashMap::new(), blocks: HashMap::new(), substitution: Substitution::PerChar })),
         Ok(Err(e)) => {
             remember(&e.to_string(), failure(&e)["kind"].as_str().unwrap_or("pdf"));
             std::ptr::null_mut()
@@ -203,8 +205,10 @@ pub unsafe extern "C" fn pdfcore_page(doc: *mut PdfDoc, page: c_int) -> *mut c_c
             .iter()
             .enumerate()
             .map(|(id, r)| {
+                let (substitute, similarity) = d.doc.substitute_for(r);
                 json!({
                     "id": id, "text": r.text, "font": r.font, "base_font": r.base_font,
+                    "substitute_font": substitute, "substitute_similarity": similarity,
                     "size": r.size, "display": r.display, "origin": [r.origin.0, r.origin.1],
                     "invisible": r.render_mode == 3,
                     "editable": r.not_editable.is_none(), "not_editable": r.not_editable,
@@ -373,6 +377,66 @@ pub unsafe extern "C" fn pdfcore_replace_block(
             }
             Err(e) => failure(&e),
         }
+    })
+}
+
+/// What to do with a run that has letters its font lacks (and the caller allowed the bundled
+/// font): 0 only those letters (default), 1 the whole run, 2 the whole run unless the bundled
+/// face is a metric clone of the original. Returns `{"ok":true}`.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_set_substitution(doc: *mut PdfDoc, policy: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        d.substitution = match policy {
+            1 => Substitution::WholeRun,
+            2 => Substitution::Auto,
+            _ => Substitution::PerChar,
+        };
+        json!({ "ok": true })
+    })
+}
+
+/// The fonts the document uses and what editing them needs: `{"fonts":[{"base_font","kind",
+/// "pages","runs","needed","registered","bundled","similarity","source":null|{"name","license","url"}}]}`.
+/// `needed` is true for fonts that are not embedded or only embedded in part: the real font is
+/// wanted to edit them exactly (`pdfcore_register_font`).
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_required_fonts(doc: *mut PdfDoc) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| match d.doc.required_fonts() {
+        Ok(fonts) => json!({
+            "fonts": fonts.iter().map(|f| json!({
+                "base_font": f.base_font, "kind": f.class.as_str(), "pages": f.pages, "runs": f.runs,
+                "needed": f.needed, "registered": f.registered, "bundled": f.bundled, "similarity": f.similarity,
+                "source": f.source.as_ref().map(|s| json!({ "name": s.name, "license": s.license, "url": s.url })),
+            })).collect::<Vec<_>>()
+        }),
+        Err(e) => failure(&e),
+    })
+}
+
+/// Hand the engine a TrueType font the person may use, for the letters other fonts of its family
+/// lack: `{"ok":true,"family","bold","italic"}`. Error kinds: `unsupported` (not TrueType, not
+/// a font), `rejected` (the licence forbids embedding, too big, too many).
+///
+/// # Safety
+/// `doc` must be a live handle; `data` must point to `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_register_font(doc: *mut PdfDoc, data: *const u8, len: usize) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    if data.is_null() {
+        return bad_argument();
+    }
+    let bytes = std::slice::from_raw_parts(data, len);
+    guard(|| match d.doc.register_font(bytes) {
+        Ok(f) => json!({ "ok": true, "family": f.family, "bold": f.bold, "italic": f.italic }),
+        Err(e) => failure(&e),
     })
 }
 
@@ -694,7 +758,7 @@ pub unsafe extern "C" fn pdfcore_replace_all(
             3 => Reflow::RightAligned,
             _ => Reflow::Following,
         };
-        let options = ReplaceOptions { allow_fallback: allow_fallback != 0, reflow };
+        let options = ReplaceOptions { allow_fallback: allow_fallback != 0, reflow, substitution: d.substitution };
         match d.doc.replace_all(find, replacement, search_options(flags), options) {
             Ok(done) => {
                 edited(d);
@@ -745,9 +809,10 @@ fn edited(d: &mut PdfDoc) {
     d.blocks.clear();
 }
 
-/// `[{"char":"ñ","via":"encoding"|"bundled_font"}]`: letters the original font lacked.
+/// `[{"char":"ñ","via":"encoding"|"bundled_font","font","similarity"}]`: letters the original font
+/// lacked, what drew them and how close (0-100) that face is to the original.
 fn substitutes_json(list: &[pdfcore::Substitute]) -> Vec<Value> {
-    list.iter().map(|s| json!({ "char": s.ch.to_string(), "via": s.via.as_str() })).collect()
+    list.iter().map(|s| json!({ "char": s.ch.to_string(), "via": s.via.as_str(), "font": s.font, "similarity": s.similarity })).collect()
 }
 
 fn warning_json(w: &Warning) -> Value {
@@ -776,7 +841,7 @@ fn replace(d: &mut PdfDoc, page: c_int, run_id: c_int, new_text: &str, allow_fal
         3 => Reflow::RightAligned,
         _ => Reflow::Following,
     };
-    let options = ReplaceOptions { allow_fallback: allow_fallback != 0, reflow };
+    let options = ReplaceOptions { allow_fallback: allow_fallback != 0, reflow, substitution: d.substitution };
     match d.doc.replace_text_with(page, &run, new_text, options) {
         Ok(done) => {
             edited(d);

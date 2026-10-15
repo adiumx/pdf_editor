@@ -97,10 +97,45 @@ fn occurrences(haystack: &[char], query: &[char], options: &SearchOptions) -> Ve
     found
 }
 
+/// A ligature glyph read as the letters it stands for (`ﬁ` is `fi`), else the character itself.
+fn letters_of(c: char) -> &'static str {
+    match c {
+        '\u{FB00}' => "ff",
+        '\u{FB01}' => "fi",
+        '\u{FB02}' => "fl",
+        '\u{FB03}' => "ffi",
+        '\u{FB04}' => "ffl",
+        '\u{FB05}' | '\u{FB06}' => "st",
+        _ => "",
+    }
+}
+
+/// `text` folded for comparing, ligatures spelled out: each folded character with the index of
+/// the character it came from.
+fn folded_with_owner(text: impl Iterator<Item = char>, options: &SearchOptions) -> (Vec<char>, Vec<usize>) {
+    let (mut out, mut owner) = (Vec::new(), Vec::new());
+    for (i, c) in text.enumerate() {
+        match letters_of(c) {
+            "" => {
+                out.push(fold(c, options));
+                owner.push(i);
+            }
+            spelled => {
+                for l in spelled.chars() {
+                    out.push(fold(l, options));
+                    owner.push(i);
+                }
+            }
+        }
+    }
+    (out, owner)
+}
+
 fn matches_in_line(page: usize, line: &Line, query: &[char], options: &SearchOptions) -> Vec<Match> {
-    let folded: Vec<char> = line.chars.iter().map(|c| fold(c.ch, options)).collect();
+    let (folded, owner) = folded_with_owner(line.chars.iter().map(|c| c.ch), options);
     occurrences(&folded, query, options)
         .into_iter()
+        .map(|(start, end)| (owner[start], owner[end - 1] + 1))
         .map(|(start, end)| {
             let part = &line.chars[start..end];
             let (first, last) = (&part[0], &part[part.len() - 1]);
@@ -121,7 +156,7 @@ fn matches_in_line(page: usize, line: &Line, query: &[char], options: &SearchOpt
 impl Document {
     /// Every occurrence of `query` in the document, page by page, top to bottom.
     pub fn find_text(&self, query: &str, options: SearchOptions) -> Vec<Match> {
-        let query: Vec<char> = query.chars().map(|c| fold(c, &options)).collect();
+        let (query, _) = folded_with_owner(query.chars(), &options);
         let mut out = Vec::new();
         for page in 0..self.page_count() {
             let Ok(runs) = self.text_runs(page) else { continue };
@@ -142,7 +177,7 @@ impl Document {
         search: SearchOptions,
         replace: ReplaceOptions,
     ) -> Result<ReplacedAll> {
-        let query: Vec<char> = find.chars().map(|c| fold(c, &search)).collect();
+        let (query, _) = folded_with_owner(find.chars(), &search);
         if query.is_empty() {
             return Err(Error::Rejected("no hay nada que buscar".into()));
         }

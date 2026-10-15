@@ -500,7 +500,7 @@ impl Document {
             if unfit.is_empty() {
                 continue;
             }
-            let (_, data) = fallback::choose(&style.base_font);
+            let (_, data) = self.pick_font(&style.base_font, font.flags()).into_pair();
             let missing = if allow_fallback { fallback::lacks(data, &unfit.iter().collect::<String>()) } else { unfit };
             lacking.extend(missing);
         }
@@ -512,6 +512,9 @@ impl Document {
 
         // Width of a letter in its style (kerning ignored), cached.
         let mut cache: HashMap<(usize, char), f32> = HashMap::new();
+        // The bundled (or registered) font each style falls back to.
+        let choices: Vec<fallback::Choice> =
+            block.styles.iter().map(|st| self.pick_font(&st.base_font, fonts[&st.font].flags())).collect();
         let mut advance = |sid: usize, ch: char| -> f32 {
             *cache.entry((sid, ch)).or_insert_with(|| {
                 let style = &block.styles[sid];
@@ -521,7 +524,7 @@ impl Document {
                     .iter()
                     .map(|(t, b)| match b {
                         Some(bytes) => font.advance_of(bytes, style.size),
-                        None => fallback::advance(fallback::choose(&style.base_font).1, t, style.size),
+                        None => fallback::advance(choices[sid].data, t, style.size),
                     })
                     .sum()
             })
@@ -610,6 +613,7 @@ impl Document {
         let mut ops: Vec<Operation> = Vec::new();
         let mut used_fallback: Vec<char> = Vec::new();
         let mut fallback_key: Option<&'static str> = None;
+        let mut fallback_similarity = 100u8;
         for (i, line) in lines.iter().enumerate().filter(|(i, _)| !kept[*i]) {
             let mut trimmed: &[(char, usize)] = line;
             while trimmed.last().is_some_and(|(c, _)| *c == ' ') {
@@ -644,13 +648,15 @@ impl Document {
                     }
                     current_fill = Some(sid);
                 }
-                let (key, data) = fallback::choose(&style.base_font);
+                let choice = choices[sid];
+                let (key, data) = (choice.key, choice.data);
                 for (piece, bytes) in font.segments(&text) {
                     let (name, size) = match &bytes {
                         Some(_) => (style.font.clone(), style.tf_size),
                         None => {
                             self.ensure_fallback(key, data)?;
                             fallback_key = Some(key);
+                            fallback_similarity = choice.similarity;
                             (self.fallbacks[key].resource.clone(), style.tf_size)
                         }
                     };
@@ -690,7 +696,7 @@ impl Document {
         }
         if let Some(key) = fallback_key {
             let (resource, font_id) = (self.fallbacks[key].resource.clone(), self.fallbacks[key].font_id);
-            self.register_font(id, &resource, font_id)?;
+            self.add_font_resource(id, &resource, font_id)?;
         }
 
         // The old lines that are no longer there as they were stop drawing.
@@ -734,8 +740,13 @@ impl Document {
             removed: old_count.saturating_sub(new_count),
             substitutes: taught
                 .iter()
-                .map(|&ch| Substitute { ch, via: Via::Encoding })
-                .chain(used_fallback.iter().map(|&ch| Substitute { ch, via: Via::BundledFont }))
+                .map(|&(ch, via)| Substitute { ch, via, font: block.styles[0].base_font.clone(), similarity: 100 })
+                .chain(used_fallback.iter().map(|&ch| Substitute {
+                ch,
+                via: Via::BundledFont,
+                font: fallback_key.unwrap_or_default().to_string(),
+                similarity: fallback_similarity,
+            }))
                 .collect(),
             fallback_chars: used_fallback,
             warnings,

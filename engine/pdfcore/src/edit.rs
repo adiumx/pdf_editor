@@ -16,7 +16,7 @@ use lopdf::{Dictionary, Object, Stream};
 use crate::error::{Error, Result};
 use crate::fallback::{self, Embedded};
 use crate::reflow::{Reflow, Warning};
-use crate::substitute::{Substitute, Via};
+use crate::substitute::{Substitute, Substitution, Via};
 use crate::text::{fonts_of, TextRun};
 use crate::Document;
 
@@ -52,11 +52,13 @@ pub struct ReplaceOptions {
     pub allow_fallback: bool,
     /// What happens to the rest of the line when the length changes.
     pub reflow: Reflow,
+    /// Which letters use the bundled font when the original lacks some (needs `allow_fallback`).
+    pub substitution: Substitution,
 }
 
 impl Default for ReplaceOptions {
     fn default() -> Self {
-        ReplaceOptions { allow_fallback: false, reflow: Reflow::Following }
+        ReplaceOptions { allow_fallback: false, reflow: Reflow::Following, substitution: Substitution::PerChar }
     }
 }
 
@@ -118,8 +120,20 @@ impl Document {
         );
         let font = &*font;
 
-        let segments = font.segments(new_text);
-        let (key, data) = fallback::choose(&run.base_font);
+        let mut segments = font.segments(new_text);
+        let choice = self.pick_font(&run.base_font, font.flags());
+        let (key, data) = (choice.key, choice.data);
+        let whole = allow_fallback
+            && segments.iter().any(|(_, b)| b.is_none())
+            && match options.substitution {
+                Substitution::PerChar => false,
+                Substitution::WholeRun => true,
+                Substitution::Auto => choice.similarity < 90,
+            };
+        if whole {
+            // One face for the whole run: no word mixes two designs.
+            segments = vec![(new_text.to_string(), None)];
+        }
 
         // Everything that can fail is decided before anything is changed.
         let unfit: Vec<char> = segments.iter().filter(|(_, b)| b.is_none()).flat_map(|(t, _)| t.chars()).collect();
@@ -164,7 +178,7 @@ impl Document {
         if !used_fallback.is_empty() {
             let resource = self.fallbacks[key].resource.clone();
             let font_id = self.fallbacks[key].font_id;
-            self.register_font(id, &resource, font_id)?;
+            self.add_font_resource(id, &resource, font_id)?;
         }
         let pieces = ops.len();
         content.operations.splice(run.op_index..=run.op_index, ops);
@@ -177,8 +191,16 @@ impl Document {
             (moved, corrections, warnings) = (outcome.moved, outcome.corrections, outcome.warnings);
         }
         self.set_page_content(id, &content)?;
-        let mut substitutes: Vec<Substitute> = taught.iter().map(|&ch| Substitute { ch, via: Via::Encoding }).collect();
-        substitutes.extend(used_fallback.iter().map(|&ch| Substitute { ch, via: Via::BundledFont }));
+        let mut substitutes: Vec<Substitute> = taught
+            .iter()
+            .map(|&(ch, via)| Substitute { ch, via, font: run.base_font.clone(), similarity: 100 })
+            .collect();
+        substitutes.extend(used_fallback.iter().map(|&ch| Substitute {
+            ch,
+            via: Via::BundledFont,
+            font: key.to_string(),
+            similarity: choice.similarity,
+        }));
         Ok(Replaced {
             old_width,
             new_width,
@@ -212,7 +234,15 @@ impl Document {
         let switch = |name: &str, size: f32| {
             Operation::new("Tf", vec![Object::Name(name.as_bytes().to_vec()), Object::Real(size)])
         };
-        let first_shows = |ops: &Vec<Operation>| !ops.iter().any(|o| o.operator != "Tf");
+        let first_shows = |ops: &Vec<Operation>| !ops.iter().any(|o| o.operator != "Tf" && o.operator != "Tz");
+        // A bundled face that runs wider or narrower than the original is squeezed or stretched
+        // (`Tz`) to the original's pace, within reason.
+        let squeeze = font
+            .average_width()
+            .map(|w| (w / fallback::average_width(data)).clamp(0.85, 1.15))
+            .filter(|f| (f - 1.0).abs() > 0.03)
+            .unwrap_or(1.0);
+        let tz = |factor: f32| Operation::new("Tz", vec![Object::Real(run.hscale * factor * 100.0)]);
 
         for (piece, bytes) in segments {
             let (shown, wants_fallback) = match bytes {
@@ -224,7 +254,7 @@ impl Document {
                     self.ensure_fallback(key, data)?;
                     let embedded = self.fallbacks.get_mut(key).expect("just ensured");
                     let (b, advance) = embedded.write(&mut self.pdf, piece, run.size)?;
-                    new_width += advance;
+                    new_width += advance * squeeze;
                     used_fallback.extend(piece.chars());
                     (Embedded::hex(b), true)
                 }
@@ -232,6 +262,9 @@ impl Document {
             if wants_fallback != in_fallback {
                 let name = if wants_fallback { self.fallbacks[key].resource.clone() } else { run.font.clone() };
                 ops.push(switch(&name, run.tf_size));
+                if squeeze != 1.0 {
+                    ops.push(tz(if wants_fallback { squeeze } else { 1.0 }));
+                }
                 in_fallback = wants_fallback;
             }
             ops.push(match (original, first_shows(&ops)) {
@@ -241,15 +274,18 @@ impl Document {
         }
         if in_fallback {
             ops.push(switch(&run.font, run.tf_size)); // what follows expects the original font
+            if squeeze != 1.0 {
+                ops.push(tz(1.0));
+            }
         }
-        if ops.iter().all(|o| o.operator == "Tf") {
+        if ops.iter().all(|o| o.operator == "Tf" || o.operator == "Tz") {
             return Err(Error::Unsupported("el texto nuevo está vacío".into()));
         }
         Ok((ops, new_width, used_fallback))
     }
 
     /// Make a font usable by name in one page's content.
-    pub(crate) fn register_font(&mut self, page: lopdf::ObjectId, resource: &str, font: lopdf::ObjectId) -> Result<()> {
+    pub(crate) fn add_font_resource(&mut self, page: lopdf::ObjectId, resource: &str, font: lopdf::ObjectId) -> Result<()> {
         let mut resources = self.resources(page);
         let mut fonts = resources
             .get(b"Font")

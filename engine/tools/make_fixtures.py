@@ -632,4 +632,57 @@ try:
 except ImportError:
     print("reportlab not installed: producer_reportlab_* fixtures kept as they are")
 
+# 24. A serif subset (Liberation Serif) that calls itself Verdana: the closest bundled face is a
+#     sans one of a different width, so the substitution policy and the Tz squeeze can be tested.
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+from fontTools import subset as _subset
+from fontTools.ttLib import TTFont as _TT
+_text = "Hola mundo cruel de las letras que faltan"
+_opts = _subset.Options()
+_opts.notdef_outline = True
+_font = _TT(SANS.replace("Sans", "Serif"))
+_sub = _subset.Subsetter(_opts)
+_sub.populate(text=_text)
+_sub.subset(_font)
+_font.save("/tmp/_subset_serif.ttf")
+page.insert_font(fontname="F0", fontfile="/tmp/_subset_serif.ttf", set_simple=False)
+page.insert_text((72, 200), _text, fontname="F0", fontsize=14)
+fx = doc[0].get_fonts(full=True)[0][0]
+doc.xref_set_key(fx, "BaseFont", "/ABCDEF+Verdana")
+doc.save(OUT / "font_subset_as_verdana.pdf", garbage=0, deflate=False)
+
+# 25. A whole composite font whose ToUnicode lists only the letters the page uses (as many
+#     producers write it): the program has more, and the engine may use them.
+from fontTools.ttLib import TTFont as _TT2
+_cmap = _TT2(SANS).getBestCmap()
+_glyph_order = _TT2(SANS).getGlyphOrder()
+doc = pymupdf.open(OUT / "font_tt_full_type0.pdf")
+_fx = doc[0].get_fonts(full=True)[0][0]
+_tu = int(doc.xref_get_key(_fx, "ToUnicode")[1].split()[0])
+_text = "Poliza numero 12345 y una linea mas"
+_entries = "".join("<%04X> <%04X>\n" % (_glyph_order.index(_cmap[ord(c)]), ord(c)) for c in sorted(set(_text)))
+_map = ("/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n/CMapName /Adobe-Identity-UCS def /CMapType 2 def\n"
+        "1 begincodespacerange <0000> <FFFF> endcodespacerange\n%d beginbfchar\n%sendbfchar\nendcmap CMapName currentdict /CMap defineresource pop end end\n"
+        % (len(set(_text)), _entries))
+doc.update_stream(_tu, _map.encode())
+doc.save(OUT / "font_tt_full_type0_tight.pdf", garbage=0, deflate=False)
+
+# 26. A font to register for the font-book tests: a Latin subset of Liberation Sans that calls
+#     itself "Verdana" (renamed, as the OFL asks of a modified copy).
+_f = _TT2(SANS)
+_o = _subset.Options()
+_o.name_IDs = ["*"]
+_sub = _subset.Subsetter(_o)
+_sub.populate(unicodes=list(range(0x20, 0x180)) + [0x20AC])
+_sub.subset(_f)
+for _rec in _f["name"].names:
+    if _rec.nameID in (1, 16):
+        _rec.string = "Verdana"
+    elif _rec.nameID == 4:
+        _rec.string = "Verdana Regular"
+    elif _rec.nameID == 6:
+        _rec.string = "Verdana-Regular"
+_f.save(OUT / "registered_verdana.ttf")
+
 print("fixtures in", OUT)

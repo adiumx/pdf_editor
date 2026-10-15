@@ -60,6 +60,11 @@ pub struct Font {
     type3: bool,
     /// ZapfDingbats and the like: the glyphs are symbols, not text.
     symbols: bool,
+    /// `/Flags` of the font descriptor (fixed pitch, serif, italic, force bold...).
+    flags: Option<u32>,
+    /// Type 0 fonts with a full TrueType program and glyph ids as codes: the letters the program
+    /// draws that the font's text map does not list, as `(code, width per 1000 em)`.
+    program_glyphs: HashMap<char, (u32, f32)>,
 }
 
 /// How faithfully a font can be reproduced when text is added to it.
@@ -133,6 +138,8 @@ impl Font {
             vertical: false,
             type3: subtype == "Type3",
             symbols: false,
+            flags: None,
+            program_glyphs: HashMap::new(),
         };
 
         match kind {
@@ -232,6 +239,7 @@ impl Font {
     }
 
     fn read_descriptor(&mut self, descriptor: &Dictionary) {
+        self.flags = descriptor.get(b"Flags").ok().and_then(|o| o.as_i64().ok()).map(|f| f as u32);
         self.embedded = descriptor.has(b"FontFile")
             || descriptor.has(b"FontFile2")
             || descriptor.has(b"FontFile3");
@@ -277,6 +285,7 @@ impl Font {
         };
 
         let mut verdicts: Vec<(u32, Option<bool>)> = Vec::new();
+        let mut found_glyphs: HashMap<char, (u32, f32)> = HashMap::new();
         let mut judge = |program: &Program| match program {
             Program::Sfnt(data) => {
                 let Ok(face) = ttf_parser::Face::parse(data, 0) else { return false };
@@ -304,6 +313,18 @@ impl Font {
                         }),
                     };
                     verdicts.push((*code, gid.map(|g| face.glyph_bounding_box(ttf_parser::GlyphId(g)).is_some())));
+                }
+                // Glyph ids are the codes: every Latin letter the program draws can be written.
+                if self.kind == FontKind::Type0 && to_gid.is_none() && cid_to_gid.is_none() && face.tables().glyf.is_some() {
+                    let scale = 1000.0 / face.units_per_em() as f32;
+                    for ch in ('\u{21}'..='\u{24F}').chain(['\u{20AC}', '\u{2013}', '\u{2014}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}']) {
+                        let Some(gid) = face.glyph_index(ch) else { continue };
+                        if face.glyph_bounding_box(gid).is_none() {
+                            continue;
+                        }
+                        let width = face.glyph_hor_advance(gid).unwrap_or(0) as f32 * scale;
+                        found_glyphs.insert(ch, (gid.0 as u32, width));
+                    }
                 }
                 true
             }
@@ -344,6 +365,7 @@ impl Font {
                 judge(&Program::Cff(data.clone()));
             }
         }
+        self.program_glyphs = found_glyphs;
         for (code, verdict) in verdicts {
             match verdict {
                 Some(true) => {
@@ -383,6 +405,34 @@ impl Font {
     /// from its family, so it always does).
     pub fn has_width(&self, code: u32) -> bool {
         self.widths.is_empty() || code.checked_sub(self.first_char).is_some_and(|i| (i as usize) < self.widths.len())
+    }
+
+    /// The descriptor's `/Flags`, which say whether the face is serif, fixed pitch, italic...
+    pub fn flags(&self) -> Option<u32> {
+        self.flags
+    }
+
+    /// Mean advance (per 1000 em) of the lowercase letters a-z this font draws, when it states
+    /// widths for them: how wide the face runs, to compare with another.
+    pub fn average_width(&self) -> Option<f32> {
+        let widths: Vec<f32> = ('a'..='z')
+            .filter_map(|c| self.code_for(&c.to_string()))
+            .map(|code| self.width_of(code))
+            .filter(|w| *w > 0.0)
+            .collect();
+        (widths.len() >= 10).then(|| widths.iter().sum::<f32>() / widths.len() as f32)
+    }
+
+    /// For a composite font: the code and width (per 1000 em) of a letter its program draws that
+    /// its text map does not list, if the program has it.
+    pub fn program_glyph(&self, letter: char) -> Option<(u32, f32)> {
+        let listed = self.to_unicode.as_ref().and_then(|m| m.code_of(&letter.to_string())).is_some_and(|c| !self.blank.contains(&c));
+        self.program_glyphs.get(&letter).copied().filter(|_| !listed)
+    }
+
+    /// Whether a composite font states a width for this glyph (else it gets the default).
+    pub fn has_cid_width(&self, code: u32) -> bool {
+        self.cid_widths.contains_key(&code)
     }
 
     pub fn code_bytes(&self) -> usize {
@@ -500,6 +550,14 @@ impl Font {
         if let Some(code) = self.to_unicode.as_ref().and_then(|m| m.code_of(text)) {
             if !self.blank.contains(&code) {
                 return Some(code);
+            }
+        }
+        if self.kind == FontKind::Type0 {
+            let mut chars = text.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                // In the program but not in the text map: its glyph id is its code, once the
+                // font states a width for it (see `Document::teach_fonts`).
+                return self.program_glyphs.get(&c).map(|(code, _)| *code);
             }
         }
         if self.kind == FontKind::Simple {

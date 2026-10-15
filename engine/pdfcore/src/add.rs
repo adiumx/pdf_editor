@@ -154,7 +154,7 @@ impl Document {
         ops.push(Operation::new("Q", vec![]));
 
         let font_id = self.fallbacks[key].font_id;
-        self.register_font(id, &resource, font_id)?;
+        self.add_font_resource(id, &resource, font_id)?;
         self.append_to_page(id, &Content { operations: ops })?;
 
         let height = lead * (lines.len().saturating_sub(1)) as f32 + size * (ascent + (-face.descender() as f32 * scale));

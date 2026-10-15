@@ -240,8 +240,8 @@ fn a_fallback_font_split_still_moves_what_follows() {
     let mut doc = open("line_pen");
     let before = origin(&doc, R1);
     let r = run(&doc, R0);
-    let done = doc.replace_text_with_fallback(0, &r, "El resto de las oficinas Ā de").unwrap();
-    assert_eq!(done.fallback_chars, vec!['Ā']);
+    let done = doc.replace_text_with_fallback(0, &r, "El resto de las oficinas Ж de").unwrap();
+    assert_eq!(done.fallback_chars, vec!['Ж']);
     assert!(done.reread);
     same(origin(&doc, R1), (before.0 + delta(&done), before.1), "el siguiente");
     same(origin(&doc, NEXT), (72.0, 680.0), "la línea de abajo");

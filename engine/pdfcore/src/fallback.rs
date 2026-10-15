@@ -18,7 +18,7 @@ use ttf_parser::Face;
 
 use crate::error::{Error, Result};
 
-const FONTS: [(&str, &[u8]); 8] = [
+const FONTS: [(&str, &[u8]); 20] = [
     ("LiberationSans-Regular", include_bytes!("../fonts/LiberationSans-Regular.ttf")),
     ("LiberationSans-Bold", include_bytes!("../fonts/LiberationSans-Bold.ttf")),
     ("LiberationSans-Italic", include_bytes!("../fonts/LiberationSans-Italic.ttf")),
@@ -27,32 +27,128 @@ const FONTS: [(&str, &[u8]); 8] = [
     ("LiberationSerif-Bold", include_bytes!("../fonts/LiberationSerif-Bold.ttf")),
     ("LiberationSerif-Italic", include_bytes!("../fonts/LiberationSerif-Italic.ttf")),
     ("LiberationSerif-BoldItalic", include_bytes!("../fonts/LiberationSerif-BoldItalic.ttf")),
+    ("LiberationMono-Regular", include_bytes!("../fonts/LiberationMono-Regular.ttf")),
+    ("LiberationMono-Bold", include_bytes!("../fonts/LiberationMono-Bold.ttf")),
+    ("LiberationMono-Italic", include_bytes!("../fonts/LiberationMono-Italic.ttf")),
+    ("LiberationMono-BoldItalic", include_bytes!("../fonts/LiberationMono-BoldItalic.ttf")),
+    ("Carlito-Regular", include_bytes!("../fonts/Carlito-Regular.ttf")),
+    ("Carlito-Bold", include_bytes!("../fonts/Carlito-Bold.ttf")),
+    ("Carlito-Italic", include_bytes!("../fonts/Carlito-Italic.ttf")),
+    ("Carlito-BoldItalic", include_bytes!("../fonts/Carlito-BoldItalic.ttf")),
+    ("Caladea-Regular", include_bytes!("../fonts/Caladea-Regular.ttf")),
+    ("Caladea-Bold", include_bytes!("../fonts/Caladea-Bold.ttf")),
+    ("Caladea-Italic", include_bytes!("../fonts/Caladea-Italic.ttf")),
+    ("Caladea-BoldItalic", include_bytes!("../fonts/Caladea-BoldItalic.ttf")),
 ];
 
-/// The bundled font closest in style to `base_font`: serif or sans, bold,
-/// italic. (Monospace is not bundled yet and falls to sans.)
-pub(crate) fn choose(base_font: &str) -> (&'static str, &'static [u8]) {
-    let name = base_font.rsplit('+').next().unwrap_or(base_font).to_ascii_lowercase();
-    let serif = ["times", "serif", "georgia", "garamond", "palatino", "cambria", "minion", "book"]
-        .iter()
-        .any(|k| name.contains(k))
-        && !name.contains("sans");
-    let bold = ["bold", "black", "heavy", "demi"].iter().any(|k| name.contains(k));
-    let italic = name.contains("italic") || name.contains("oblique");
-    by_style(serif, bold, italic)
+/// The bundled families. Liberation is metrically compatible with Arial/Helvetica (Sans),
+/// Times New Roman (Serif) and Courier New (Mono), Carlito with Calibri and Caladea with
+/// Cambria: a swapped letter takes the room the original face would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Family {
+    Sans,
+    Serif,
+    Mono,
+    Carlito,
+    Caladea,
 }
 
-/// The bundled font of a given style.
+impl Family {
+    fn prefix(self) -> &'static str {
+        match self {
+            Family::Sans => "LiberationSans",
+            Family::Serif => "LiberationSerif",
+            Family::Mono => "LiberationMono",
+            Family::Carlito => "Carlito",
+            Family::Caladea => "Caladea",
+        }
+    }
+}
+
+/// The bundled font chosen for a face, and how close it is.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Choice {
+    pub key: &'static str,
+    pub data: &'static [u8],
+    /// 0..=100: 100 is a metric-compatible clone of the original (same widths, same look to
+    /// the eye); below 90 it is the closest by kind only, and the person should be told.
+    pub similarity: u8,
+}
+
+fn contains_any(name: &str, words: &[&str]) -> bool {
+    words.iter().any(|w| name.contains(w))
+}
+
+/// The bundled font closest to a face, from its name and (when known) the descriptor's
+/// `/Flags`: an exact clone scores 100, a family named by kind (a serif, a monospaced one) 70-75,
+/// one guessed from the flags alone 55-60, nothing known 40.
+pub(crate) fn pick(base_font: &str, flags: Option<u32>) -> Choice {
+    let raw = base_font.rsplit('+').next().unwrap_or(base_font).to_ascii_lowercase();
+    let name: String = raw.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let sans_word = name.contains("sans") || name.contains("gothic");
+    let (family, similarity) = if contains_any(&name, &["arial", "helvetica", "arimo", "liberationsans"]) {
+        (Family::Sans, 100)
+    } else if contains_any(&name, &["timesnewroman", "times", "tinos", "liberationserif"]) {
+        (Family::Serif, 100)
+    } else if contains_any(&name, &["couriernew", "courier", "cousine", "liberationmono"]) {
+        (Family::Mono, 100)
+    } else if contains_any(&name, &["calibri", "carlito"]) {
+        (Family::Carlito, 100)
+    } else if contains_any(&name, &["cambria", "caladea"]) {
+        (Family::Caladea, 100)
+    } else if contains_any(&name, &["mono", "consolas", "lucidaconsole", "menlo", "monaco", "typewriter", "fixed", "code"]) {
+        (Family::Mono, 75)
+    } else if !sans_word && contains_any(&name, &["georgia", "garamond", "palatino", "minion", "book", "century", "baskerville", "didot", "serif", "roman"]) {
+        (Family::Serif, 75)
+    } else if contains_any(&name, &["verdana", "tahoma", "segoe", "trebuchet", "myriad", "opensans", "roboto", "lato", "sans", "gothic", "frutiger", "univers"]) {
+        (Family::Sans, 70)
+    } else if let Some(f) = flags.filter(|f| f & 1 != 0) {
+        let _ = f;
+        (Family::Mono, 60)
+    } else if flags.is_some_and(|f| f & 2 != 0) {
+        (Family::Serif, 60)
+    } else if flags.is_some() {
+        (Family::Sans, 55)
+    } else {
+        (Family::Sans, 40)
+    };
+    let bold = contains_any(&name, &["bold", "black", "heavy", "demi"]) || flags.is_some_and(|f| f & (1 << 18) != 0);
+    let italic = contains_any(&name, &["italic", "oblique"]) || flags.is_some_and(|f| f & (1 << 6) != 0);
+    let (key, data) = by_family(family, bold, italic);
+    Choice { key, data, similarity }
+}
+
+impl Choice {
+    pub fn into_pair(self) -> (&'static str, &'static [u8]) {
+        (self.key, self.data)
+    }
+}
+
+/// The bundled font closest in style to `base_font`, by name alone.
+pub(crate) fn choose(base_font: &str) -> (&'static str, &'static [u8]) {
+    let c = pick(base_font, None);
+    (c.key, c.data)
+}
+
+/// The bundled Liberation font of a given style (sans or serif).
 pub(crate) fn by_style(serif: bool, bold: bool, italic: bool) -> (&'static str, &'static [u8]) {
-    let family = if serif { "LiberationSerif" } else { "LiberationSans" };
+    by_family(if serif { Family::Serif } else { Family::Sans }, bold, italic)
+}
+
+pub(crate) fn by_family(family: Family, bold: bool, italic: bool) -> (&'static str, &'static [u8]) {
     let style = match (bold, italic) {
         (true, true) => "BoldItalic",
         (true, false) => "Bold",
         (false, true) => "Italic",
         _ => "Regular",
     };
-    let key = format!("{family}-{style}");
+    let key = format!("{}-{style}", family.prefix());
     FONTS.iter().find(|(k, _)| *k == key).copied().expect("every combination is bundled")
+}
+
+/// Mean advance (per 1000 em) of a-z in a bundled font.
+pub(crate) fn average_width(data: &[u8]) -> f32 {
+    advance(data, "abcdefghijklmnopqrstuvwxyz", 1000.0) / 26.0
 }
 
 /// The characters of `text` that font has no glyph for.
@@ -131,7 +227,8 @@ impl Embedded {
         descriptor.set("Type", name("FontDescriptor"));
         descriptor.set("FontName", name(key));
         let italic = key.contains("Italic");
-        descriptor.set("Flags", 32 + if italic { 64 } else { 0 });
+        let pitch = if key.contains("Mono") { 1 } else { 0 } + if key.contains("Serif") || key.contains("Caladea") { 2 } else { 0 };
+        descriptor.set("Flags", 32 + pitch + if italic { 64 } else { 0 });
         descriptor.set(
             "FontBBox",
             vec![bbox.x_min, bbox.y_min, bbox.x_max, bbox.y_max]
@@ -253,7 +350,11 @@ mod tests {
         assert_eq!(choose("ABCDEF+Arial-BoldMT").0, "LiberationSans-Bold");
         assert_eq!(choose("TimesNewRomanPS-ItalicMT").0, "LiberationSerif-Italic");
         assert_eq!(choose("Helvetica,Bold").0, "LiberationSans-Bold");
-        assert_eq!(choose("Calibri").0, "LiberationSans-Regular");
+        assert_eq!(choose("Calibri").0, "Carlito-Regular");
+        assert_eq!(choose("Cambria-Bold").0, "Caladea-Bold");
+        assert_eq!(choose("CourierNewPS-ItalicMT").0, "LiberationMono-Italic");
+        assert_eq!(pick("Georgia", None).similarity, 75);
+        assert_eq!(pick("Zzz", Some(1)).key, "LiberationMono-Regular");
         assert_eq!(choose("Arial-BoldItalicMT").0, "LiberationSans-BoldItalic");
     }
 

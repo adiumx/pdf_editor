@@ -46,16 +46,16 @@ fn missing_letters_are_drawn_with_the_fallback_and_the_rest_keeps_the_original()
 
 #[test]
 fn the_next_line_keeps_its_own_font_after_a_font_switch() {
-    // Ā is outside WinAnsi, so the Helvetica line needs the fallback for it.
+    // Ж is Cyrillic, outside any Latin reader face, so the Helvetica line needs the fallback for it.
     // The font switch must be undone afterwards, or the line after it would be
     // drawn in the fallback, in the wrong face and size.
     let mut doc = open("standard");
     let runs = doc.text_runs(0).unwrap();
-    let done = doc.replace_text_with_fallback(0, &runs[0], "Hola Ā").unwrap();
-    assert_eq!(done.fallback_chars, vec!['Ā']);
+    let done = doc.replace_text_with_fallback(0, &runs[0], "Hola Ж").unwrap();
+    assert_eq!(done.fallback_chars, vec!['Ж']);
 
     let again = reopen(&mut doc).text_runs(0).unwrap();
-    assert_eq!(again.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["Hola ", "Ā", "Negrita áéíóú ñ"]);
+    assert_eq!(again.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["Hola ", "Ж", "Negrita áéíóú ñ"]);
     assert_eq!(again[0].base_font, "Helvetica");
     assert_eq!(again[1].base_font, "LiberationSans-Regular");
     assert_eq!(again[2].base_font, "Helvetica-Bold");

@@ -11,6 +11,7 @@ mod encodings_data;
 mod error;
 mod fallback;
 mod font;
+mod fontbook;
 mod forms;
 mod image;
 mod items;
@@ -36,7 +37,8 @@ pub use error::{Error, Result};
 pub use font::{glyph_name_text, Font, FontClass, FontKind, Glyph};
 pub use add::{Added, Align, Anchor, NewText};
 pub use edit::{ReplaceOptions, Replaced};
-pub use substitute::{Substitute, Via};
+pub use fontbook::{FontSource, RegisteredFont, RequiredFont};
+pub use substitute::{Substitute, Substitution, Via};
 pub use reflow::{Alignment, Reflow, Warning};
 pub use forms::{Field, FieldKind, Signature, Widget};
 pub use image::{AddedImage, NewImage};
@@ -85,6 +87,8 @@ pub struct Document {
     wrapped: std::collections::HashSet<ObjectId>,
     undo: Vec<Patch>,
     redo: Vec<Patch>,
+    /// Fonts the app registered for letters the document's fonts lack.
+    registered: Vec<fontbook::Registered>,
 }
 
 /// How many steps can be undone.
@@ -123,6 +127,7 @@ impl Document {
             wrapped: Default::default(),
             undo: Vec::new(),
             redo: Vec::new(),
+            registered: Vec::new(),
         }
     }
 

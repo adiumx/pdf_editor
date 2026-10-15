@@ -63,6 +63,10 @@ class _Native {
             'pdfcore_align_paragraph'),
         setFieldsAlignment =
             lib.lookupFunction<_Str Function(_Handle, _Str), _Str Function(_Handle, _Str)>('pdfcore_set_fields_alignment'),
+        requiredFonts = lib.lookupFunction<_Str Function(_Handle), _Str Function(_Handle)>('pdfcore_required_fonts'),
+        registerFont = lib.lookupFunction<_Str Function(_Handle, Pointer<Uint8>, Size),
+            _Str Function(_Handle, Pointer<Uint8>, int)>('pdfcore_register_font'),
+        setSubstitution = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_set_substitution'),
         blocks = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_blocks'),
         replaceBlock = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
             _Str Function(_Handle, int, int, _Str, int)>('pdfcore_replace_block'),
@@ -113,6 +117,9 @@ class _Native {
   final _Str Function(_Handle, int, _Str) spaceLines;
   final _Str Function(_Handle, int, int, int) alignParagraph;
   final _Str Function(_Handle, _Str) setFieldsAlignment;
+  final _Str Function(_Handle) requiredFonts;
+  final _Str Function(_Handle, Pointer<Uint8>, int) registerFont;
+  final _Str Function(_Handle, int) setSubstitution;
   final _Str Function(_Handle, int) blocks;
   final _Str Function(_Handle, int, int, _Str, int) replaceBlock;
   final _Str Function(_Handle, int, int) paragraph;
@@ -326,6 +333,30 @@ class PdfDocument implements Finalizable {
       (j['warnings'] as List).map((w) => PdfWarning.fromJson(w as Map<String, dynamic>)).toList(),
     );
   }
+
+  /// The fonts the document uses and which ones editing exactly would need (not embedded, or only
+  /// the used letters are). Offer the person [FontSource.url] or let them pick a font from the
+  /// device, then pass its bytes to [registerFont].
+  List<RequiredFont> requiredFonts() =>
+      (_json(_n.requiredFonts(_live))['fonts'] as List).map((f) => RequiredFont.fromJson(f as Map<String, dynamic>)).toList();
+
+  /// Hand over a TrueType font the person may use. It is used, at similarity 100, for the letters
+  /// other fonts of its family lack. Throws `rejected` when its licence forbids embedding and
+  /// `unsupported` when it is not TrueType.
+  RegisteredFont registerFont(Uint8List font) {
+    final buffer = malloc<Uint8>(font.isEmpty ? 1 : font.length);
+    try {
+      buffer.asTypedList(font.length).setAll(0, font);
+      final j = _json(_n.registerFont(_live, buffer, font.length));
+      return RegisteredFont(j['family'] as String, j['bold'] as bool, j['italic'] as bool);
+    } finally {
+      malloc.free(buffer);
+    }
+  }
+
+  /// Which letters use the bundled font when the original lacks some and the caller allows it
+  /// (`allowFallback`): see [Substitution]. Stays until changed.
+  void setSubstitution(Substitution policy) => _json(_n.setSubstitution(_live, policy.index));
 
   /// The paragraphs of [page], each as ONE block with the style of every stretch
   /// of its text (a paragraph with bold words is not split). Ids are good until

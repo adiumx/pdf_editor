@@ -12,7 +12,7 @@ fn first_run(doc: &Document) -> pdfcore::TextRun {
     doc.text_runs(0).unwrap().into_iter().find(|r| !r.text.trim().is_empty() || r.not_editable.is_some()).expect("a run")
 }
 
-const NO_FALLBACK: ReplaceOptions = ReplaceOptions { allow_fallback: false, reflow: pdfcore::Reflow::None };
+const NO_FALLBACK: ReplaceOptions = ReplaceOptions { allow_fallback: false, reflow: pdfcore::Reflow::None, substitution: pdfcore::Substitution::PerChar };
 
 #[test]
 fn macroman_text_is_read_and_written_with_the_documents_own_codes() {
@@ -23,9 +23,15 @@ fn macroman_text_is_read_and_written_with_the_documents_own_codes() {
     let done = doc.replace_text_with(0, &run, "Camión ñandú ÁÉÍÓÚ", NO_FALLBACK).unwrap();
     assert!(done.fallback_chars.is_empty());
     assert_eq!(first_run(&doc).text, "Camión ñandú ÁÉÍÓÚ");
-    // A letter MacRoman lacks is refused, not written as some other letter.
+    // A Latin letter MacRoman lacks is added to the font's own encoding (the reader draws it in
+    // the same face) and reported; one a Latin face may not have is refused, never written as
+    // some other letter.
     let run = first_run(&doc);
-    assert!(matches!(doc.replace_text_with(0, &run, "Žluťoučký", NO_FALLBACK), Err(Error::MissingGlyphs(c)) if c.contains(&'Ž')));
+    let done = doc.replace_text_with(0, &run, "Žluťoučký", NO_FALLBACK).unwrap();
+    assert!(done.substitutes.iter().any(|s| s.ch == 'Ž' && s.via == pdfcore::Via::Encoding));
+    assert_eq!(first_run(&doc).text, "Žluťoučký");
+    let run = first_run(&doc);
+    assert!(matches!(doc.replace_text_with(0, &run, "жук", NO_FALLBACK), Err(Error::MissingGlyphs(c)) if c.contains(&'ж')));
 }
 
 #[test]
@@ -37,9 +43,11 @@ fn standard_encoding_reads_ligatures_and_keeps_them_as_one_glyph() {
     let done = doc.replace_text_with(0, &run, "\u{FB01}nal \u{FB02}or", NO_FALLBACK).unwrap();
     assert!(done.fallback_chars.is_empty());
     assert_eq!(first_run(&doc).text, "\u{FB01}nal \u{FB02}or");
-    // StandardEncoding has no accented letters (they are composed): they are not guessed.
+    // StandardEncoding has no accented letters: the font learns them, and says so.
     let run = first_run(&doc);
-    assert!(matches!(doc.replace_text_with(0, &run, "camión", NO_FALLBACK), Err(Error::MissingGlyphs(c)) if c.contains(&'ó')));
+    let done = doc.replace_text_with(0, &run, "camión", NO_FALLBACK).unwrap();
+    assert_eq!(done.substitutes.iter().map(|s| s.ch).collect::<String>(), "ó");
+    assert_eq!(first_run(&doc).text, "camión");
 }
 
 #[test]
@@ -69,7 +77,7 @@ fn text_that_cannot_be_reproduced_is_read_and_refused_with_a_reason() {
         let run = first_run(&doc);
         assert_eq!(run.not_editable, Some(reason), "{fixture}");
         let before = doc.save_to_bytes().unwrap();
-        match doc.replace_text_with(0, &run, "Hola", ReplaceOptions { allow_fallback: true, reflow: pdfcore::Reflow::Following }) {
+        match doc.replace_text_with(0, &run, "Hola", ReplaceOptions { allow_fallback: true, reflow: pdfcore::Reflow::Following, substitution: pdfcore::Substitution::PerChar }) {
             Err(Error::NotEditable(r)) => assert_eq!(r, reason, "{fixture}"),
             other => panic!("{fixture}: expected NotEditable({reason}), got {other:?}"),
         }

@@ -310,6 +310,38 @@ Soporte por tipo de fuente (probado con fixtures en `pdfcore/tests/fixtures`, au
 Nombres de glifo: lista completa de Adobe (4281 nombres, BSD-3), `uniXXXX`, `uXXXX`, ligaduras
 con `_` y variantes con `.` (`pdfcore::glyph_name_text`). No leídas todavía: MacExpertEncoding.
 
+### Letras que la fuente no tiene: orden de intentos y aviso
+
+Al escribir una letra que la fuente del texto no dibuja, el motor prueba, en este orden:
+
+1. **La propia fuente** (embebida completa, o un código que ya dibuja).
+2. **La misma fuente ampliada**: si el lector dibuja la fuente con su copia (las estándar y las no
+   embebidas) se añade la letra a su `/Differences` y a `/Widths`; si es una fuente compuesta
+   TrueType completa se añade el glifo de su programa a `/W` y a `ToUnicode`. Es exactamente la misma cara.
+   Solo se hace con letras latinas (Latin-1 y Latin Extendido-A y la puntuación usual), que cualquier
+   copia del lector tiene; el cirílico o el griego no se enseñan a una fuente latina.
+3. **Una fuente incluida** (con `allowFallback`): Liberation Sans/Serif/Mono (clones métricos de
+   Arial, Times y Courier), Carlito (Calibri) y Caladea (Cambria), todas OFL. La elegida sale del
+   nombre y de los `Flags` de la fuente; `similarity` va de 0 a 100 (100 = clon métrico; menos de 90 =
+   otra cara: **avisa a la persona**).
+4. Si ninguna la tiene: `missing_glyphs` y no se cambia nada.
+
+Cada resultado de edición trae `substitutes: [{char, via, font, similarity}]` con `via` =
+`encoding` | `font_program` | `bundled_font` (la lista vacía = nada que avisar). Política
+(`setSubstitution`): `perChar` (solo esas letras, por defecto), `wholeRun` (todo el texto en una cara, sin
+palabras con dos diseños) o `auto` (`wholeRun` salvo clon métrico). Una cara incluida de otro ancho
+se estrecha o ensancha con `Tz` (hasta ±15 %) para conservar el ritmo.
+
+Antes de editar: cada `TextRun` trae `substituteFont`/`substituteSimilarity`, y
+`requiredFonts()` lista las fuentes del documento con `needed` (no embebida o solo parcial),
+`registered` y `source` (una alternativa libre con licencia y URL). `registerFont(bytes)` acepta una
+fuente TrueType que la persona pueda usar (se respeta `fsType`; si prohíbe embeber → `rejected`) y
+desde ese momento sustituye a su familia con `similarity` 100.
+
+Alfabetos: se leen y se editan los que la fuente del documento dibuje (cirílico, griego, CJK si la
+fuente embebida los trae). Las fuentes incluidas cubren latín, griego y cirílico; **no** CJK. Árabe/hebreo
+(`rtl_text`) y escritura vertical se leen pero no se editan. La búsqueda entiende ligaduras (`ﬁ` = `fi`).
+
 ## 7. Boceto de pantalla de edición (sin compilar)
 
 Muestra la idea: imagen de fondo + un `Positioned` por texto, con `display * zoom`.
