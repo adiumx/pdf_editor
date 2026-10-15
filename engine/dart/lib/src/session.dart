@@ -112,6 +112,28 @@ class PdfSession {
 
   Future<List<Map<String, dynamic>>> batch(List<BatchOp> ops) => _call<List<Map<String, dynamic>>>('batch', [ops]);
 
+  Future<List<PdfAnnotation>> annotations(int page) => _call<List<PdfAnnotation>>('annotations', [page]);
+
+  Future<int> addAnnotation(int page, NewAnnotation annotation) => _call<int>('addAnnotation', [page, annotation]);
+
+  Future<void> deleteAnnotation(int page, PdfAnnotation annotation) => _call<void>('deleteAnnotation', [page, annotation]);
+
+  Future<void> setAnnotationContents(int page, PdfAnnotation annotation, String contents) =>
+      _call<void>('setAnnotationContents', [page, annotation, contents]);
+
+  Future<void> moveAnnotation(int page, PdfAnnotation annotation, double dx, double dy) =>
+      _call<void>('moveAnnotation', [page, annotation, dx, dy]);
+
+  Future<FlattenResult> flatten({List<int>? pages, bool annotations = true, bool forms = true}) =>
+      _call<FlattenResult>('flatten', [pages, annotations, forms]);
+
+  Future<RedactResult> redact(int page, List<List<double>> boxes, {List<double> fill = const [0, 0, 0], bool removeImages = false}) =>
+      _call<RedactResult>('redact', [page, boxes, fill, removeImages]);
+
+  Future<List<PageReport>> ocrReport() => _call<List<PageReport>>('ocrReport', []);
+
+  Future<Uint8List> saveIncremental() => _call<Uint8List>('saveIncremental', []);
+
   Future<void> setSubstitution(Substitution policy) => _call<void>('setSubstitution', [policy]);
 
   Future<List<PdfBlock>> blocks(int page) => _call<List<PdfBlock>>('blocks', [page]);
@@ -285,6 +307,28 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
       return doc.refreshAppearances(onlyMissing: a[0] as bool);
     case 'batch':
       return doc.batch((a[0] as List).cast<BatchOp>());
+    case 'annotations':
+      return doc.annotations(a[0] as int);
+    case 'addAnnotation':
+      return doc.addAnnotation(a[0] as int, a[1] as NewAnnotation);
+    case 'deleteAnnotation':
+      doc.deleteAnnotation(a[0] as int, a[1] as PdfAnnotation);
+      return null;
+    case 'setAnnotationContents':
+      doc.setAnnotationContents(a[0] as int, a[1] as PdfAnnotation, a[2] as String);
+      return null;
+    case 'moveAnnotation':
+      doc.moveAnnotation(a[0] as int, a[1] as PdfAnnotation, a[2] as double, a[3] as double);
+      return null;
+    case 'flatten':
+      return doc.flatten(pages: (a[0] as List?)?.cast<int>(), annotations: a[1] as bool, forms: a[2] as bool);
+    case 'redact':
+      return doc.redact(a[0] as int, (a[1] as List).map((b) => (b as List).cast<double>()).toList(),
+          fill: (a[2] as List).cast<double>(), removeImages: a[3] as bool);
+    case 'ocrReport':
+      return doc.ocrReport();
+    case 'saveIncremental':
+      return doc.saveIncremental();
     case 'setSubstitution':
       doc.setSubstitution(a[0] as Substitution);
       return null;

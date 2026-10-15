@@ -9,7 +9,7 @@
 //! The whole font program is embedded once per document and style, compressed;
 //! only the width table and the text map grow, as more characters are used.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use lopdf::{Dictionary, Object, ObjectId, Stream, StringFormat};
 
@@ -173,6 +173,8 @@ pub(crate) struct Embedded {
     pub font_id: ObjectId,
     descendant: ObjectId,
     to_unicode: ObjectId,
+    /// The `FontFile2` stream, cut down to the glyphs used each time one is added.
+    program: ObjectId,
     data: &'static [u8],
     used: BTreeMap<u16, char>,
 }
@@ -192,6 +194,16 @@ impl Embedded {
             }
             let descendant = dict.get(b"DescendantFonts").ok()?.as_array().ok()?.first()?.as_reference().ok()?;
             let to_unicode = dict.get(b"ToUnicode").ok()?.as_reference().ok()?;
+            let program = pdf
+                .get_dictionary(descendant)
+                .ok()?
+                .get(b"FontDescriptor")
+                .ok()?
+                .as_reference()
+                .ok()
+                .and_then(|d| pdf.get_dictionary(d).ok())
+                .and_then(|d| d.get(b"FontFile2").ok())
+                .and_then(|o| o.as_reference().ok())?;
             let map = pdf.get_object(to_unicode).ok()?.as_stream().ok()?;
             let map = map.decompressed_content().unwrap_or_else(|_| map.content.clone());
             let used = crate::cmap::CMap::parse(&map)
@@ -204,6 +216,7 @@ impl Embedded {
                 font_id: *id,
                 descendant,
                 to_unicode,
+                program,
                 data,
                 used,
             });
@@ -216,10 +229,13 @@ impl Embedded {
         let scale = 1000.0 / face.units_per_em() as f32;
         let name = |n: &str| Object::Name(n.as_bytes().to_vec());
 
-        let mut program = Stream::new(Dictionary::new(), data.to_vec());
-        program.dict.set("Length1", data.len() as i64);
+        // Only the notdef glyph to begin with; each letter drawn adds its own outline.
+        let first = crate::subset::subset(data, &BTreeSet::new()).unwrap_or_else(|| data.to_vec());
+        let mut program = Stream::new(Dictionary::new(), first.clone());
+        program.dict.set("Length1", first.len() as i64);
         let _ = program.compress();
         let program = pdf.add_object(program);
+        let program_id = program;
 
         let bbox = face.global_bounding_box();
         let mut descriptor = Dictionary::new();
@@ -271,7 +287,7 @@ impl Embedded {
         let font = pdf.add_object(font);
 
         let resource = format!("PC{}", key.replace('-', ""));
-        Ok(Embedded { resource, font_id: font, descendant, to_unicode, data, used: BTreeMap::new() })
+        Ok(Embedded { resource, font_id: font, descendant, to_unicode, program: program_id, data, used: BTreeMap::new() })
     }
 
     /// The bytes that draw `text` in this font, and how far they advance at
@@ -302,6 +318,15 @@ impl Embedded {
             widths.push(Object::Array(vec![Object::Integer(w.round() as i64)]));
         }
         pdf.get_dictionary_mut(self.descendant)?.set("W", Object::Array(widths));
+
+        // The font program with the outlines of every glyph used so far.
+        let keep: BTreeSet<u16> = self.used.keys().copied().collect();
+        if let Some(cut) = crate::subset::subset(self.data, &keep) {
+            let mut program = Stream::new(Dictionary::new(), cut.clone());
+            program.dict.set("Length1", cut.len() as i64);
+            let _ = program.compress();
+            *pdf.get_object_mut(self.program)? = Object::Stream(program);
+        }
 
         let mut map = String::from(
             "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n\

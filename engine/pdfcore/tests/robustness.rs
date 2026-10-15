@@ -70,6 +70,11 @@ fn survive(name: &str, bytes: &[u8]) {
         }
     }));
     assert!(outcome.is_ok(), "{name}: panicked");
+    if started.elapsed() > Duration::from_secs(5) {
+        if let Ok(dir) = std::env::var("SLOW_DIR") {
+            let _ = std::fs::write(format!("{dir}/slow_{}.pdf", name.replace(' ', "_")), bytes);
+        }
+    }
     assert!(started.elapsed() < Duration::from_secs(10), "{name}: took {:?}", started.elapsed());
 }
 

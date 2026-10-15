@@ -164,3 +164,18 @@ fn search_finds_words_written_with_ligature_glyphs() {
     // Typing the ligature itself finds it too.
     assert_eq!(doc.find_text("\u{FB01}ce", Default::default()).len(), 1);
 }
+
+#[test]
+fn the_bundled_font_is_cut_down_to_the_letters_used() {
+    let mut doc = open("embedded");
+    let before = doc.save_to_bytes().unwrap().len();
+    let run = doc.text_runs(0).unwrap().remove(0);
+    doc.replace_text_with_fallback(0, &run, "Ñandú ЖЖ").unwrap();
+    let grown = doc.save_to_bytes().unwrap().len() - before;
+    // A whole Liberation Sans is ~410 KB (~190 KB compressed); a few letters of it are a few KB.
+    assert!(grown < 30_000, "grew by {grown} bytes");
+    // More letters later: the same font, grown a little.
+    let run = doc.text_runs(0).unwrap().into_iter().find(|r| r.text.contains("Ñ") || r.text.contains("Ж")).unwrap_or_else(|| doc.text_runs(0).unwrap().remove(0));
+    doc.replace_text_with_fallback(0, &run, "Ñandú ЖЖ Щ").unwrap();
+    assert!(doc.save_to_bytes().unwrap().len() - before < 40_000);
+}

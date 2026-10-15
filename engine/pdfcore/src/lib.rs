@@ -4,6 +4,7 @@
 //! text as runs that know their font and where they sit.
 
 mod add;
+mod annots;
 mod block;
 mod cmap;
 mod edit;
@@ -11,9 +12,12 @@ mod encodings_data;
 mod error;
 mod fallback;
 mod font;
+mod flatten;
 mod fontbook;
 mod forms;
 mod image;
+mod inline_encrypt;
+mod incremental;
 mod items;
 mod journal;
 mod kerning;
@@ -24,9 +28,12 @@ mod placement;
 mod paragraph;
 mod program;
 mod lines;
+mod redact;
+mod report;
 mod reflow;
 mod search;
 mod standard_widths;
+mod subset;
 mod substitute;
 mod text;
 
@@ -38,6 +45,10 @@ pub use error::{Error, Result};
 pub use font::{glyph_name_text, Font, FontClass, FontKind, Glyph};
 pub use add::{Added, Align, Anchor, NewText};
 pub use edit::{ReplaceOptions, Replaced};
+pub use report::{PageKind, PageReport};
+pub use redact::{RedactOptions, Redacted};
+pub use flatten::{FlattenOptions, Flattened};
+pub use annots::{AnnotKind, Annotation, NewAnnotation, Shape};
 pub use manage::{Hit, Refreshed};
 pub use fontbook::{FontSource, RegisteredFont, RequiredFont};
 pub use substitute::{Substitute, Substitution, Via};
@@ -91,6 +102,8 @@ pub struct Document {
     redo: Vec<Patch>,
     /// Fonts the app registered for letters the document's fonts lack.
     registered: Vec<fontbook::Registered>,
+    /// The file as opened and its password, for `save_incremental`.
+    source: Option<(Vec<u8>, String)>,
 }
 
 /// How many steps can be undone.
@@ -106,18 +119,28 @@ impl Document {
 
     /// Open a document protected by `password`. Saving writes it unprotected.
     pub fn open_with_password(bytes: &[u8], password: &str) -> Result<Document> {
-        let pdf = match Raw::load_mem_with_options(bytes, lopdf::LoadOptions::with_password(password)) {
-            Ok(pdf) => pdf,
+        let options = || lopdf::LoadOptions::with_password(password);
+        // A file that keeps `/Encrypt` inline is first made an equivalent one that does not.
+        let (pdf, used) = match Raw::load_mem_with_options(bytes, options()) {
             Err(lopdf::Error::InvalidPassword) if has_inline_encrypt(bytes) => {
-                return Err(Error::Unsupported(
-                    "este PDF protegido guarda su cifrado de una forma que el motor no lee todavía".into(),
-                ))
+                let rewritten = inline_encrypt::make_encrypt_indirect(bytes).ok_or_else(|| {
+                    Error::Unsupported("este PDF protegido guarda su cifrado de una forma que el motor no lee todavía".into())
+                })?;
+                match Raw::load_mem_with_options(&rewritten, options()) {
+                    Ok(pdf) => (pdf, rewritten),
+                    Err(lopdf::Error::InvalidPassword) if password.is_empty() => return Err(Error::PasswordRequired),
+                    Err(lopdf::Error::InvalidPassword) => return Err(Error::WrongPassword),
+                    Err(other) => return Err(other.into()),
+                }
             }
+            Ok(pdf) => (pdf, bytes.to_vec()),
             Err(lopdf::Error::InvalidPassword) if password.is_empty() => return Err(Error::PasswordRequired),
             Err(lopdf::Error::InvalidPassword) => return Err(Error::WrongPassword),
             Err(other) => return Err(other.into()),
         };
-        Ok(Document::from_raw(pdf))
+        let mut document = Document::from_raw(pdf);
+        document.source = Some((used, password.to_string()));
+        Ok(document)
     }
 
     pub(crate) fn from_raw(pdf: Raw) -> Document {
@@ -130,6 +153,7 @@ impl Document {
             undo: Vec::new(),
             redo: Vec::new(),
             registered: Vec::new(),
+            source: None,
         }
     }
 

@@ -88,6 +88,9 @@ pub struct TextRun {
     pub not_editable: Option<&'static str>,
     /// Horizontal scaling in force (`Tz`), 1.0 when none.
     pub hscale: f32,
+    /// Character and word spacing in force (`Tc`, `Tw`), in text space units.
+    pub char_space: f32,
+    pub word_space: f32,
     /// The font descriptor's `/Flags`, when it has one.
     pub font_flags: Option<u32>,
 }
@@ -116,7 +119,57 @@ impl Default for State {
     }
 }
 
+/// Hash everything a font is read from: its dictionary, and through references the descendant,
+/// descriptor, width tables, text map and font program (their stored bytes, not decoded).
+fn hash_object(doc: &Document, object: &Object, depth: u8, hasher: &mut std::collections::hash_map::DefaultHasher) {
+    use std::hash::Hash;
+    if depth == 0 {
+        return;
+    }
+    match object {
+        Object::Reference(id) => {
+            id.hash(hasher);
+            if let Ok(target) = doc.get_object(*id) {
+                hash_object(doc, target, depth - 1, hasher);
+            }
+        }
+        Object::Dictionary(d) => {
+            for (k, v) in d.iter() {
+                k.hash(hasher);
+                hash_object(doc, v, depth, hasher);
+            }
+        }
+        Object::Stream(s) => {
+            for (k, v) in s.dict.iter() {
+                k.hash(hasher);
+                hash_object(doc, v, depth, hasher);
+            }
+            s.content.len().hash(hasher);
+            s.content.hash(hasher);
+        }
+        Object::Array(a) => {
+            for v in a {
+                hash_object(doc, v, depth, hasher);
+            }
+        }
+        Object::Integer(n) => n.hash(hasher),
+        Object::Real(r) => r.to_bits().hash(hasher),
+        Object::Name(n) => n.hash(hasher),
+        Object::String(b, _) => b.hash(hasher),
+        Object::Boolean(b) => b.hash(hasher),
+        Object::Null => 0u8.hash(hasher),
+    }
+}
+
+thread_local! {
+    /// Fonts already read, by a hash of everything they are read from. Reading a font (checking
+    /// each glyph of its program) costs far more than hashing it, and an operation reads the
+    /// page's fonts several times.
+    static FONT_CACHE: std::cell::RefCell<HashMap<u64, Font>> = std::cell::RefCell::new(HashMap::new());
+}
+
 pub(crate) fn fonts_of(doc: &Document, resources: &Dictionary) -> HashMap<String, Font> {
+    use std::hash::{Hash, Hasher};
     let mut fonts = HashMap::new();
     let Some(Object::Dictionary(table)) = resources.get(b"Font").ok().map(|o| resolve(doc, o)) else {
         return fonts;
@@ -124,7 +177,26 @@ pub(crate) fn fonts_of(doc: &Document, resources: &Dictionary) -> HashMap<String
     for (name, entry) in table.iter() {
         if let Ok(dict) = resolve(doc, entry).as_dict() {
             let name = String::from_utf8_lossy(name).into_owned();
-            fonts.insert(name.clone(), Font::from_dict(doc, &name, dict));
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            name.hash(&mut hasher);
+            hash_object(doc, &Object::Dictionary(dict.clone()), 6, &mut hasher);
+            let key = hasher.finish();
+            let cached = FONT_CACHE.with(|c| c.borrow().get(&key).cloned());
+            let font = match cached {
+                Some(font) => font,
+                None => {
+                    let font = Font::from_dict(doc, &name, dict);
+                    FONT_CACHE.with(|c| {
+                        let mut cache = c.borrow_mut();
+                        if cache.len() >= 128 {
+                            cache.clear();
+                        }
+                        cache.insert(key, font.clone());
+                    });
+                    font
+                }
+            };
+            fonts.insert(name, font);
         }
     }
     fonts
@@ -370,6 +442,8 @@ fn show(
         font_kind: font.class,
         not_editable: font.not_editable().or_else(|| rtl.then_some("rtl_text")),
         hscale: state.th,
+        char_space: state.tc,
+        word_space: state.tw,
         font_flags: font.flags(),
     });
 }

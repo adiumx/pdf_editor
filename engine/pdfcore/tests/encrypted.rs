@@ -32,7 +32,33 @@ fn a_user_password_is_asked_for() {
 }
 
 #[test]
-fn an_unreadable_form_of_protection_says_so() {
-    let error = Document::open(&fixture("encrypted_inline")).err().expect("must fail");
-    assert!(matches!(error, Error::Unsupported(_)), "{error}");
+fn a_dictionary_written_inline_in_the_trailer_is_read() {
+    // MuPDF writes /Encrypt as a dictionary in the trailer; the engine makes it an object first.
+    let original = fixture("encrypted_inline");
+    let mut doc = Document::open(&original).expect("opens");
+    assert_eq!(doc.text_runs(0).unwrap()[0].text, "Hola mundo");
+    let run = doc.text_runs(0).unwrap().remove(0);
+    doc.replace_text(0, &run, "Editado").unwrap();
+    assert_eq!(Document::open(&doc.save_to_bytes().unwrap()).unwrap().text_runs(0).unwrap()[0].text, "Editado");
+    // And the password is still asked for when there is one.
+    let protected = fixture("encrypted_inline_user");
+    assert!(matches!(Document::open(&protected), Err(Error::PasswordRequired)));
+    assert!(matches!(Document::open_with_password(&protected, "mal"), Err(Error::WrongPassword)));
+    let mut doc = Document::open_with_password(&protected, "secreto").unwrap();
+    assert_eq!(doc.text_runs(0).unwrap()[0].text, "Hola mundo");
+    // An incremental save keeps working on top of the rewritten file.
+    let run = doc.text_runs(0).unwrap().remove(0);
+    doc.replace_text(0, &run, "Cambiado").unwrap();
+    let saved = doc.save_incremental().unwrap();
+    assert_eq!(Document::open_with_password(&saved, "secreto").unwrap().text_runs(0).unwrap()[0].text, "Cambiado");
+}
+
+#[test]
+fn a_file_with_an_xref_stream_and_inline_protection_still_says_it_cannot() {
+    // No classic trailer to rewrite: refuse in plain words rather than fail obscurely.
+    let mut bytes = fixture("encrypted_inline");
+    let at = bytes.windows(7).rposition(|w| w == b"trailer").unwrap();
+    bytes[at..at + 7].copy_from_slice(b"trailor");
+    let error = Document::open(&bytes).err().expect("must fail");
+    assert!(matches!(error, Error::Unsupported(_) | Error::Pdf(_)), "{error}");
 }

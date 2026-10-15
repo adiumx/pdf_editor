@@ -96,7 +96,7 @@ impl Document {
         self.transaction(|d| d.remove_items(page, items))
     }
 
-    fn remove_items(&mut self, page: usize, items: &[Item]) -> Result<()> {
+    pub(crate) fn remove_items(&mut self, page: usize, items: &[Item]) -> Result<()> {
         let id = self.page_id(page)?;
         let mut runs: Vec<&TextRun> = Vec::new();
         let mut pictures: Vec<&PagePicture> = Vec::new();
@@ -139,7 +139,7 @@ impl Document {
     }
 
     /// Remove one widget of a field from its page and from the form.
-    fn remove_widget(&mut self, name: &str, widget: usize) -> Result<()> {
+    pub(crate) fn remove_widget(&mut self, name: &str, widget: usize) -> Result<()> {
         let field = self.field(name).ok_or_else(|| Error::NoSuchField(name.to_string()))?;
         let w = field.widgets.get(widget).ok_or_else(|| Error::NoSuchField(name.to_string()))?.clone();
         if let Some(page) = w.page {
@@ -173,7 +173,7 @@ impl Document {
     }
 
     /// Take `target` out of the array `holder[key]` (held directly or through a reference).
-    fn remove_reference(&mut self, holder: ObjectId, key: &[u8], target: ObjectId) -> Result<()> {
+    pub(crate) fn remove_reference(&mut self, holder: ObjectId, key: &[u8], target: ObjectId) -> Result<()> {
         let is_target = |o: &Object| o.as_reference().ok() == Some(target);
         match self.pdf.get_dictionary(holder)?.get(key).ok().cloned() {
             Some(Object::Reference(r)) => {

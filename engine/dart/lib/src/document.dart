@@ -80,6 +80,19 @@ class _Native {
         refreshAppearances =
             lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_refresh_appearances'),
         batch = lib.lookupFunction<_Str Function(_Handle, _Str), _Str Function(_Handle, _Str)>('pdfcore_batch'),
+        annotations = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_annotations'),
+        addAnnotation = lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>('pdfcore_add_annotation'),
+        deleteAnnotation =
+            lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_delete_annotation'),
+        setAnnotationContents = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str),
+            _Str Function(_Handle, int, int, _Str)>('pdfcore_set_annotation_contents'),
+        moveAnnotation = lib.lookupFunction<_Str Function(_Handle, Int, Int, Float, Float),
+            _Str Function(_Handle, int, int, double, double)>('pdfcore_move_annotation'),
+        flatten = lib.lookupFunction<_Str Function(_Handle, _Str), _Str Function(_Handle, _Str)>('pdfcore_flatten'),
+        redact = lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>('pdfcore_redact'),
+        ocrReport = lib.lookupFunction<_Str Function(_Handle), _Str Function(_Handle)>('pdfcore_ocr_report'),
+        saveIncremental = lib.lookupFunction<Pointer<Uint8> Function(_Handle, Pointer<Size>),
+            Pointer<Uint8> Function(_Handle, Pointer<Size>)>('pdfcore_save_incremental'),
         setSubstitution = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_set_substitution'),
         blocks = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_blocks'),
         replaceBlock = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
@@ -142,6 +155,15 @@ class _Native {
   final _Str Function(_Handle, int, int, double, double, double, double) resizeItem;
   final _Str Function(_Handle, int) refreshAppearances;
   final _Str Function(_Handle, _Str) batch;
+  final _Str Function(_Handle, int) annotations;
+  final _Str Function(_Handle, int, _Str) addAnnotation;
+  final _Str Function(_Handle, int, int) deleteAnnotation;
+  final _Str Function(_Handle, int, int, _Str) setAnnotationContents;
+  final _Str Function(_Handle, int, int, double, double) moveAnnotation;
+  final _Str Function(_Handle, _Str) flatten;
+  final _Str Function(_Handle, int, _Str) redact;
+  final _Str Function(_Handle) ocrReport;
+  final Pointer<Uint8> Function(_Handle, Pointer<Size>) saveIncremental;
   final _Str Function(_Handle, int) setSubstitution;
   final _Str Function(_Handle, int) blocks;
   final _Str Function(_Handle, int, int, _Str, int) replaceBlock;
@@ -423,6 +445,49 @@ class PdfDocument implements Finalizable {
     }
   }
 
+  /// The annotations of [page]: highlights, notes, free text, drawings, links, fields...
+  List<PdfAnnotation> annotations(int page) =>
+      (_json(_n.annotations(_live, page))['annotations'] as List).map((a) => PdfAnnotation.fromJson(a as Map<String, dynamic>)).toList();
+
+  /// Add an annotation (with a look every reader draws); returns its index. One undo step.
+  int addAnnotation(int page, NewAnnotation annotation) =>
+      (_withString(jsonEncode(annotation.json), (p) => _json(_n.addAnnotation(_live, page, p)))['index'] as num).toInt();
+
+  void deleteAnnotation(int page, PdfAnnotation annotation) => _json(_n.deleteAnnotation(_live, page, annotation.index));
+
+  /// Change what a note says (free text is drawn again).
+  void setAnnotationContents(int page, PdfAnnotation annotation, String contents) =>
+      _withString(contents, (c) => _json(_n.setAnnotationContents(_live, page, annotation.index, c)));
+
+  void moveAnnotation(int page, PdfAnnotation annotation, double dx, double dy) =>
+      _json(_n.moveAnnotation(_live, page, annotation.index, dx, dy));
+
+  /// Draw annotations and/or form fields into their pages and remove them (the copy to send or
+  /// print). Signature fields are left. One undo step; a signed document stops being valid.
+  FlattenResult flatten({List<int>? pages, bool annotations = true, bool forms = true}) {
+    final params = jsonEncode({'pages': pages, 'annotations': annotations, 'forms': forms});
+    final j = _withString(params, (p) => _json(_n.flatten(_live, p)));
+    return FlattenResult((j['drawn'] as num).toInt(), (j['removed'] as num).toInt(), (j['skipped'] as num).toInt());
+  }
+
+  /// Take the text under [boxes] (as the page is shown) out of the file, and cover the place.
+  /// Text inside a form XObject refuses the whole redaction (`unsupported`). Pictures that touch a
+  /// box stay, covered, unless [removeImages]; see [RedactResult.imagesKept]. One undo step.
+  RedactResult redact(int page, List<List<double>> boxes, {List<double> fill = const [0, 0, 0], bool removeImages = false}) {
+    final params = jsonEncode({'boxes': boxes, 'fill': fill, 'remove_images': removeImages});
+    final j = _withString(params, (p) => _json(_n.redact(_live, page, p)));
+    return RedactResult((j['chars'] as num).toInt(), (j['runs'] as num).toInt(), (j['images_removed'] as num).toInt(),
+        (j['images_kept'] as num).toInt(), (j['annotations_removed'] as num).toInt());
+  }
+
+  /// What each page holds and which ones are pictures with no text (offer OCR on those).
+  List<PageReport> ocrReport() => (_json(_n.ocrReport(_live))['pages'] as List).map((p) {
+        final m = p as Map<String, dynamic>;
+        return PageReport((m['page'] as num).toInt(), m['kind'] as String, (m['visible_chars'] as num).toInt(),
+            (m['invisible_chars'] as num).toInt(), (m['images'] as num).toInt(), (m['image_coverage'] as num).toDouble(),
+            m['needs_ocr'] as bool);
+      }).toList();
+
   /// Which letters use the bundled font when the original lacks some and the caller allows it
   /// (`allowFallback`): see [Substitution]. Stays until changed.
   void setSubstitution(Substitution policy) => _json(_n.setSubstitution(_live, policy.index));
@@ -641,6 +706,25 @@ class PdfDocument implements Finalizable {
     try {
       final data = _n.save(_live, length);
       if (data == nullptr) throw PdfException('pdf', _n.lastError().toDartString());
+      try {
+        return Uint8List.fromList(data.asTypedList(length.value));
+      } finally {
+        _n.freeBytes(data, length.value);
+      }
+    } finally {
+      calloc.free(length);
+    }
+  }
+
+  /// The file as it was opened with the changes appended as an update: every byte of the original
+  /// stays at the start (a signature keeps its byte range). With no changes, the original.
+  Uint8List saveIncremental() {
+    final length = calloc<Size>();
+    try {
+      final data = _n.saveIncremental(_live, length);
+      if (data == nullptr) {
+        throw PdfException('pdf', _n.lastError().toDartString());
+      }
       try {
         return Uint8List.fromList(data.asTypedList(length.value));
       } finally {

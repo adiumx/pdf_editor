@@ -52,6 +52,8 @@ como referencia y como oráculo de pruebas.
 | 6m. Fuentes: orden de intentos (misma fuente ampliada → programa de la fuente → fuente incluida), `substitutes` con parecido 0-100, Liberation Mono + Carlito + Caladea (OFL), política `per_char`/`whole_run`/`auto` con ajuste `Tz`, `register_font` / `required_fonts` con fuentes libres sugeridas, ligaduras en la búsqueda | **hecho** |
 | 6n. Edición por rangos: estilo (negrita, cursiva, tamaño, color) por tramo con la fuente del propio documento o una incluida, `replace_range`, justificar/desjustificar, `push_down` de lo que hay debajo, cajas por letra | **hecho** |
 | 6o. Lotes en un solo paso de deshacer, borrar ítems, `hit_test` con posición de cursor, redimensionar imágenes/campos/texto, reconstruir la apariencia de formularios | **hecho** |
+| 6p. Anotaciones con apariencia (resaltar, subrayar, tachar, ondulado, nota, texto libre, tinta, formas, línea), aplanar, censurar de verdad (texto fuera del archivo), informe de OCR, guardado incremental | **hecho** |
+| 7. Texto de formularios XObject editable en el sitio, fuentes incluidas subconjuntadas, `/Encrypt` en línea, caché de fuentes leídas, `benchmarkDocument` para medir en el dispositivo | **hecho** |
 | 7. Anotaciones (resaltar, notas), aplanar formularios, OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee
@@ -236,8 +238,9 @@ la fuente.
   sólo crece su tabla de anchuras y el mapa de texto, así que el texto se puede
   buscar y copiar.
 - Si ni el respaldo trae el carácter (por ejemplo CJK) falla igual con
-  `MissingGlyphs` y sin cambios. Pendiente: Liberation Mono y subconjuntar la
-  fuente incrustada para que pese menos.
+  `MissingGlyphs` y sin cambios.
+- Desde el hito 7 la fuente se **subconjunta**: solo van los contornos de las letras usadas
+  (unos kilobytes en vez de ~200 KB), y se incluyen además Liberation Mono, Carlito (Calibri) y Caladea (Cambria).
 - Licencia: las fuentes son SIL OFL 1.1 (`pdfcore/fonts/LICENSE-Liberation-OFL.txt`),
   que permite incluirlas e incrustarlas en un producto de pago.
 
@@ -251,8 +254,9 @@ la fuente.
   pero que cualquiera puede leer) se abre como cualquier otro. Uno que pide contraseña
   falla con `password_required`; con `open_with_password`, una contraseña mala da
   `wrong_password`. Al guardar se escribe **sin** protección. Un `/Encrypt` escrito como
-  diccionario en línea (lo hace MuPDF) lo lee mal la biblioteca de PDF que usamos: se
-  informa con un error claro (`unsupported`) en vez de abrir un documento vacío.
+  diccionario en línea (lo hace MuPDF) no lo lee la biblioteca de PDF que usamos: desde el hito 7 el motor
+  lo reescribe como objeto (actualización incremental) y abre el archivo; con xref comprimida informa
+  `unsupported`.
 - **Medido** (release, Linux x86-64, `cargo run --release --example bench -- archivo.pdf`):
 
   | Documento | Abrir | Leer 1 página | Una edición | Guardar | Memoria máxima |

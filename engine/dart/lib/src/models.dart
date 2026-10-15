@@ -775,3 +775,115 @@ class BatchOp {
 
   factory BatchOp.setField(String name, String value) => BatchOp._({'op': 'set_field', 'name': name, 'value': value});
 }
+
+/// An annotation of a page (`annotations`). Indexes are good until the next edit.
+class PdfAnnotation {
+  PdfAnnotation(this.index, this.kind, this.subtype, this.display, this.contents, this.author, this.color, this.quads,
+      this.hasAppearance, this.hidden);
+
+  /// Position in the page's list: pass it to `deleteAnnotation`, `moveAnnotation`...
+  final int index;
+
+  /// `highlight`, `underline`, `strike_out`, `squiggly`, `note`, `free_text`, `ink`, `square`,
+  /// `circle`, `line`, `link`, `stamp`, `popup`, `widget` or `other`.
+  final String kind;
+  final String subtype;
+  final List<double> display;
+  final String contents;
+  final String author;
+  final List<double>? color;
+
+  /// For text markup: the boxes it covers.
+  final List<List<double>> quads;
+  final bool hasAppearance;
+  final bool hidden;
+
+  factory PdfAnnotation.fromJson(Map<String, dynamic> j) => PdfAnnotation(
+        (j['index'] as num).toInt(),
+        j['kind'] as String,
+        j['subtype'] as String,
+        _box(j['display']),
+        j['contents'] as String,
+        j['author'] as String,
+        j['color'] == null ? null : _box(j['color']),
+        [for (final q in j['quads'] as List) _box(q)],
+        j['has_appearance'] as bool,
+        j['hidden'] as bool,
+      );
+}
+
+/// What to add with `addAnnotation`; boxes and points are as the page is shown.
+class NewAnnotation {
+  const NewAnnotation._(this.json);
+  final Map<String, dynamic> json;
+
+  static Map<String, dynamic> _common(List<double> color, String contents, String author, double opacity) =>
+      {'color': color, 'contents': contents, 'author': author, 'opacity': opacity};
+
+  factory NewAnnotation.markup(String shape, List<List<double>> boxes,
+          {List<double> color = const [1, 0.9, 0.2], String contents = '', String author = '', double opacity = 1}) =>
+      NewAnnotation._({'shape': shape, 'boxes': boxes, ..._common(color, contents, author, opacity)});
+
+  /// `shape` is `highlight`, `underline`, `strike_out` or `squiggly`.
+  factory NewAnnotation.highlight(List<List<double>> boxes, {List<double> color = const [1, 0.9, 0.2], String contents = ''}) =>
+      NewAnnotation.markup('highlight', boxes, color: color, contents: contents);
+
+  factory NewAnnotation.note(double x, double y, String contents, {List<double> color = const [1, 0.9, 0.2], String author = ''}) =>
+      NewAnnotation._({'shape': 'note', 'at': [x, y], ..._common(color, contents, author, 1)});
+
+  factory NewAnnotation.freeText(List<double> rect, String contents,
+          {double size = 12, List<double> color = const [0, 0, 0], String author = ''}) =>
+      NewAnnotation._({'shape': 'free_text', 'rect': rect, 'size': size, ..._common(color, contents, author, 1)});
+
+  factory NewAnnotation.ink(List<List<List<double>>> strokes,
+          {double width = 2, List<double> color = const [0, 0, 0], double opacity = 1}) =>
+      NewAnnotation._({'shape': 'ink', 'strokes': strokes, 'width': width, ..._common(color, '', '', opacity)});
+
+  factory NewAnnotation.rectangle(List<double> rect,
+          {double width = 1.5, List<double> color = const [1, 0, 0], List<double>? fill}) =>
+      NewAnnotation._({'shape': 'square', 'rect': rect, 'width': width, 'fill': fill, ..._common(color, '', '', 1)});
+
+  factory NewAnnotation.ellipse(List<double> rect,
+          {double width = 1.5, List<double> color = const [1, 0, 0], List<double>? fill}) =>
+      NewAnnotation._({'shape': 'circle', 'rect': rect, 'width': width, 'fill': fill, ..._common(color, '', '', 1)});
+
+  factory NewAnnotation.line(List<double> from, List<double> to, {double width = 2, List<double> color = const [1, 0, 0]}) =>
+      NewAnnotation._({'shape': 'line', 'from': from, 'to': to, 'width': width, ..._common(color, '', '', 1)});
+}
+
+/// What `flatten` did.
+class FlattenResult {
+  FlattenResult(this.drawn, this.removed, this.skipped);
+  final int drawn;
+  final int removed;
+
+  /// Left alone: signature fields.
+  final int skipped;
+}
+
+/// What `redact` did. [imagesKept] are pictures that touch a box and were only covered: their
+/// data is still in the file (ask for `removeImages` to take them out whole).
+class RedactResult {
+  RedactResult(this.chars, this.runs, this.imagesRemoved, this.imagesKept, this.annotationsRemoved);
+  final int chars;
+  final int runs;
+  final int imagesRemoved;
+  final int imagesKept;
+  final int annotationsRemoved;
+}
+
+/// What a page holds (`ocrReport`).
+class PageReport {
+  PageReport(this.page, this.kind, this.visibleChars, this.invisibleChars, this.images, this.imageCoverage, this.needsOcr);
+  final int page;
+
+  /// `native`, `scanned_no_text`, `scanned_with_text_layer`, `image_only` or `blank`.
+  final String kind;
+  final int visibleChars;
+  final int invisibleChars;
+  final int images;
+  final double imageCoverage;
+
+  /// Offer to run OCR on this page: it is a picture with no text. The engine recognises no characters.
+  final bool needsOcr;
+}

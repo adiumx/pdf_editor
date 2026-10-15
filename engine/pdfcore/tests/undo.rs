@@ -37,7 +37,7 @@ fn undoing_added_text_removes_it_and_the_font_it_brought() {
     let before = doc.save_to_bytes().unwrap().len();
     doc.add_text(0, &NewText::new("nuevo", 72.0, 300.0)).unwrap();
     let during = doc.save_to_bytes().unwrap().len();
-    assert!(during > before + 50_000, "la fuente incrustada debería pesar");
+    assert!(during > before + 1_000 && during < before + 40_000, "la fuente incrustada (recortada a lo usado) debería pesar unos kilobytes: {before} -> {during}");
     assert!(doc.undo());
     assert_eq!(texts(&doc), ["Hola mundo", "Negrita áéíóú ñ"]);
     let after = doc.save_to_bytes().unwrap().len();

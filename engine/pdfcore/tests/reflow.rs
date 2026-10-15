@@ -270,3 +270,24 @@ fn a_centred_or_right_aligned_line_is_flagged_but_a_left_one_is_not() {
     assert!(hint("Fecha", "Fecha de hoy: ").contains(&Warning::LineMayBeAligned { alignment: Alignment::Right }));
     assert!(!hint("Nombre", "Nombre completo: ").iter().any(|w| matches!(w, Warning::LineMayBeAligned { .. })));
 }
+
+#[test]
+fn text_inside_a_form_xobject_can_be_edited_in_place() {
+    let mut doc = open("line_xobject");
+    let before = doc.save_to_bytes().unwrap();
+    let inside = run(&doc, R1);
+    assert!(inside.xobject.is_some());
+    let done = doc.replace_text(0, &inside, "otra cosa").unwrap();
+    assert_eq!((done.moved, done.reread), (0, false));
+    let after = doc.text_runs(0).unwrap();
+    let edited = after.iter().find(|r| r.xobject.is_some()).unwrap();
+    assert_eq!(edited.text, "otra cosa");
+    same(edited.origin, inside.origin, "el texto del formulario no se movió");
+    assert!(after.iter().filter(|r| r.xobject.is_none()).count() >= 1);
+    // A letter its font lacks is refused (a form's fonts are not extended), and nothing changes.
+    let again = after.iter().find(|r| r.xobject.is_some()).unwrap().clone();
+    assert!(matches!(doc.replace_text(0, &again, "x\u{4E16}"), Err(pdfcore::Error::MissingGlyphs(_))));
+    assert!(doc.undo());
+    assert!(!doc.can_undo());
+    assert_eq!(doc.save_to_bytes().unwrap(), before);
+}

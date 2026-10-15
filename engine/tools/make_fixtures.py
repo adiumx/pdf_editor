@@ -439,6 +439,8 @@ for name, user, algo in [
     (OUT / f"{name}.pdf").write_bytes(indirect_encrypt(raw))
     if name == "encrypted_owner":
         (OUT / "encrypted_inline.pdf").write_bytes(raw)
+    if name == "encrypted_user":
+        (OUT / "encrypted_inline_user.pdf").write_bytes(raw)
 # 21. Font audit fixtures (prefix font_): one PDF per kind of font a real file may use,
 #     written by hand where no tool will produce the kind (Type 3, MMType1, MacRoman...).
 def raw_pdf(objects):
@@ -684,5 +686,17 @@ for _rec in _f["name"].names:
     elif _rec.nameID == 6:
         _rec.string = "Verdana-Regular"
 _f.save(OUT / "registered_verdana.ttf")
+
+# 27. Pages for the OCR report: a scan with no text, a scan with an invisible text layer, a blank page.
+_pix = pymupdf.Pixmap(pymupdf.csGRAY, 60, 84, bytes([200]) * (60 * 84), False)
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_image(page.rect, pixmap=_pix)
+doc.save(OUT / "scan_no_text.pdf", garbage=0, deflate=False)
+page.insert_text((72, 200), "Texto reconocido por OCR en una capa invisible de esta pagina escaneada", fontname="helv", fontsize=12, render_mode=3)
+doc.save(OUT / "scan_with_text.pdf", garbage=0, deflate=False)
+doc = pymupdf.open()
+doc.new_page(width=595, height=842)
+doc.save(OUT / "blank.pdf", garbage=0, deflate=False)
 
 print("fixtures in", OUT)

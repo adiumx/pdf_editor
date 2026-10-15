@@ -3,6 +3,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:pdfcore/benchmark.dart';
 import 'package:pdfcore/pdfcore.dart';
 import 'package:test/test.dart';
 
@@ -425,6 +426,37 @@ void main() {
       final page = doc.page(0);
       final done = doc.replaceText(page, page.runs.first, 'Hola Ñandú', allowFallback: true);
       expect(done.substitutes.every((s) => s.similarity == 100 && s.isBundledFont), isTrue);
+    });
+  });
+
+  group('benchmark', () {
+    test('measures every step on a real document', () {
+      final result = benchmarkDocument(fixture('producer_reportlab_ttf'), libraryPath: libraryPath, repeat: 2);
+      final steps = result['best_ms'] as Map<String, double>;
+      expect(steps.keys, containsAll(['open', 'page', 'blocks', 'replace_block', 'save', 'save_incremental']));
+      expect(steps.values.every((ms) => ms >= 0), isTrue);
+      expect(result['pages'], 1);
+    });
+  });
+
+  group('annotations, flatten, redact, OCR report, incremental save', () {
+    test('they cross the boundary', () {
+      final doc = open('standard');
+      addTearDown(doc.close);
+      final box = doc.page(0).runs.first.display;
+      doc.addAnnotation(0, NewAnnotation.highlight([box]));
+      doc.addAnnotation(0, NewAnnotation.note(300, 100, 'Revisar'));
+      final listed = doc.annotations(0);
+      expect(listed.map((a) => a.kind), ['highlight', 'note']);
+      doc.setAnnotationContents(0, listed[1], 'Otra nota');
+      doc.deleteAnnotation(0, listed[0]);
+      expect(doc.annotations(0).single.contents, 'Otra nota');
+      expect(doc.flatten(annotations: true, forms: false).drawn, 1);
+      expect(doc.annotations(0), isEmpty);
+      final done = doc.redact(0, [box]);
+      expect(done.chars, greaterThan(0));
+      expect(doc.ocrReport().single.kind, 'native');
+      expect(doc.saveIncremental().length, greaterThan(fixture('standard').length));
     });
   });
 

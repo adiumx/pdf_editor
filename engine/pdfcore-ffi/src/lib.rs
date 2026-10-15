@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{BlockOptions, StyleChange, Substitution, Block, Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
+use pdfcore::{FlattenOptions, NewAnnotation, RedactOptions, Shape, BlockOptions, StyleChange, Substitution, Block, Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -902,6 +902,263 @@ pub unsafe extern "C" fn pdfcore_batch(doc: *mut PdfDoc, params: *const c_char) 
     })
 }
 
+fn point_of(v: Option<&Value>) -> Option<(f32, f32)> {
+    let a = v?.as_array()?;
+    Some((a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32))
+}
+
+fn rect_of(v: Option<&Value>) -> Option<[f32; 4]> {
+    let a = v?.as_array()?;
+    if a.len() != 4 {
+        return None;
+    }
+    let n: Vec<f32> = a.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
+    (n.len() == 4).then(|| [n[0], n[1], n[2], n[3]])
+}
+
+fn color_of_json(v: Option<&Value>) -> Option<[f32; 3]> {
+    let a = v?.as_array()?;
+    let n: Vec<f32> = a.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
+    (n.len() == 3).then(|| [n[0], n[1], n[2]])
+}
+
+/// The annotations of a page: `{"annotations":[{"index","kind","subtype","display","contents",
+/// "author","color","quads","has_appearance","hidden"}]}`. `kind` is `highlight`, `underline`,
+/// `strike_out`, `squiggly`, `note`, `free_text`, `ink`, `square`, `circle`, `line`, `link`, `stamp`,
+/// `popup`, `widget` or `other`. Indexes are good until the next edit.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_annotations(doc: *mut PdfDoc, page: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| match d.doc.annotations(page.max(0) as usize) {
+        Ok(list) => json!({
+            "annotations": list.iter().map(|a| json!({
+                "index": a.index, "kind": a.kind.as_str(), "subtype": a.subtype, "display": a.display,
+                "contents": a.contents, "author": a.author, "color": a.color, "quads": a.quads,
+                "has_appearance": a.has_appearance, "hidden": a.hidden,
+            })).collect::<Vec<_>>()
+        }),
+        Err(e) => failure(&e),
+    })
+}
+
+/// Add an annotation: `{"shape":"highlight"|"underline"|"strike_out"|"squiggly" (+"boxes":[[x0,y0,x1,y1]..]),
+/// "note" (+"at":[x,y]), "free_text" (+"rect","size"), "ink" (+"strokes":[[[x,y]..]..],"width"),
+/// "square"|"circle" (+"rect","fill":[r,g,b]?,"width"), "line" (+"from","to","width"),
+/// "color":[r,g,b],"contents","author","opacity"}` in points as a reader shows the page.
+/// Returns `{"ok":true,"index"}`; free text the font cannot draw is `missing_glyphs`.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_add_annotation(doc: *mut PdfDoc, page: c_int, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else { return bad_params() };
+        let boxes = || -> Vec<[f32; 4]> { p.get("boxes").and_then(Value::as_array).map(|a| a.iter().filter_map(|b| rect_of(Some(b))).collect()).unwrap_or_default() };
+        let width = p.get("width").and_then(Value::as_f64).unwrap_or(1.5) as f32;
+        let fill = color_of_json(p.get("fill"));
+        let shape = match p.get("shape").and_then(Value::as_str).unwrap_or("") {
+            "highlight" => Shape::Highlight(boxes()),
+            "underline" => Shape::Underline(boxes()),
+            "strike_out" => Shape::StrikeOut(boxes()),
+            "squiggly" => Shape::Squiggly(boxes()),
+            "note" => match point_of(p.get("at")) {
+                Some(at) => Shape::Note { at },
+                None => return bad_params(),
+            },
+            "free_text" => match rect_of(p.get("rect")) {
+                Some(rect) => Shape::FreeText { rect, size: p.get("size").and_then(Value::as_f64).unwrap_or(12.0) as f32 },
+                None => return bad_params(),
+            },
+            "ink" => {
+                let strokes: Vec<Vec<(f32, f32)>> = p
+                    .get("strokes")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().map(|s| s.as_array().map(|pts| pts.iter().filter_map(|pt| point_of(Some(pt))).collect()).unwrap_or_default()).collect())
+                    .unwrap_or_default();
+                Shape::Ink { strokes, width }
+            }
+            "square" | "circle" => match rect_of(p.get("rect")) {
+                Some(rect) if p.get("shape").and_then(Value::as_str) == Some("square") => Shape::Square { rect, fill, width },
+                Some(rect) => Shape::Circle { rect, fill, width },
+                None => return bad_params(),
+            },
+            "line" => match (point_of(p.get("from")), point_of(p.get("to"))) {
+                (Some(from), Some(to)) => Shape::Line { from, to, width },
+                _ => return bad_params(),
+            },
+            _ => return json!({ "error": "forma de anotación desconocida", "kind": "bad_argument" }),
+        };
+        let new = NewAnnotation {
+            shape,
+            color: color_of_json(p.get("color")).unwrap_or([1.0, 0.9, 0.2]),
+            contents: p.get("contents").and_then(Value::as_str).unwrap_or("").to_string(),
+            author: p.get("author").and_then(Value::as_str).unwrap_or("").to_string(),
+            opacity: p.get("opacity").and_then(Value::as_f64).unwrap_or(1.0) as f32,
+        };
+        match d.doc.add_annotation(page.max(0) as usize, &new) {
+            Ok(index) => {
+                edited(d);
+                json!({ "ok": true, "index": index })
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// Remove the annotation at `index` of the page's list (and its pop-up).
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_delete_annotation(doc: *mut PdfDoc, page: c_int, index: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        let result = d.doc.delete_annotation(page.max(0) as usize, index.max(0) as usize);
+        finished(d, result)
+    })
+}
+
+/// Change what an annotation says (a free-text box is drawn again).
+///
+/// # Safety
+/// `doc` must be a live handle; `contents` a NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_set_annotation_contents(doc: *mut PdfDoc, page: c_int, index: c_int, contents: *const c_char) -> *mut c_char {
+    let (Some(d), Some(contents)) = (handle(doc), string_arg(contents)) else { return bad_argument() };
+    guard(|| {
+        let result = d.doc.set_annotation_contents(page.max(0) as usize, index.max(0) as usize, contents);
+        finished(d, result)
+    })
+}
+
+/// Move an annotation by `(dx, dy)` points as a reader shows the page.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_move_annotation(doc: *mut PdfDoc, page: c_int, index: c_int, dx: f32, dy: f32) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        let result = d.doc.move_annotation(page.max(0) as usize, index.max(0) as usize, dx, dy);
+        finished(d, result)
+    })
+}
+
+/// Draw annotations and/or form fields into their pages and remove them: `{"pages":[..]|null,
+/// "annotations":bool,"forms":bool}` (both default true). Returns `{"ok":true,"drawn","removed",
+/// "skipped"}`. Signature fields are never flattened (`skipped`). A signed document stops being valid.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_flatten(doc: *mut PdfDoc, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else { return bad_params() };
+        let pages: Option<Vec<usize>> = p.get("pages").and_then(Value::as_array).map(|a| a.iter().filter_map(|n| n.as_u64().map(|n| n as usize)).collect());
+        let options = FlattenOptions {
+            annotations: p.get("annotations").and_then(Value::as_bool).unwrap_or(true),
+            forms: p.get("forms").and_then(Value::as_bool).unwrap_or(true),
+        };
+        match d.doc.flatten(pages.as_deref(), options) {
+            Ok(done) => {
+                edited(d);
+                json!({ "ok": true, "drawn": done.drawn, "removed": done.removed, "skipped": done.skipped })
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// Take the text under boxes out of the file and cover the place: `{"boxes":[[x0,y0,x1,y1]..],
+/// "fill":[r,g,b],"remove_images":bool}`. Returns `{"ok":true,"chars","runs","images_removed",
+/// "images_kept","annotations_removed"}`. Text inside a form XObject refuses the whole redaction
+/// (`unsupported`). Pictures that touch a box stay (covered) unless `remove_images`.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_redact(doc: *mut PdfDoc, page: c_int, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else { return bad_params() };
+        let boxes: Vec<[f32; 4]> = p.get("boxes").and_then(Value::as_array).map(|a| a.iter().filter_map(|b| rect_of(Some(b))).collect()).unwrap_or_default();
+        let options = RedactOptions {
+            fill: color_of_json(p.get("fill")).unwrap_or([0.0, 0.0, 0.0]),
+            remove_images: p.get("remove_images").and_then(Value::as_bool).unwrap_or(false),
+        };
+        match d.doc.redact(page.max(0) as usize, &boxes, &options) {
+            Ok(done) => {
+                edited(d);
+                json!({
+                    "ok": true, "chars": done.chars, "runs": done.runs, "images_removed": done.images_removed,
+                    "images_kept": done.images_kept, "annotations_removed": done.annotations_removed,
+                })
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// What each page holds and whether it needs OCR: `{"pages":[{"page","kind":"native"|
+/// "scanned_no_text"|"scanned_with_text_layer"|"image_only"|"blank","visible_chars",
+/// "invisible_chars","images","image_coverage","needs_ocr"}]}`. The engine recognises no
+/// characters; this says where the app should offer it.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_ocr_report(doc: *mut PdfDoc) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| match d.doc.ocr_report() {
+        Ok(pages) => json!({
+            "pages": pages.iter().map(|r| json!({
+                "page": r.page, "kind": r.kind.as_str(), "visible_chars": r.visible_chars,
+                "invisible_chars": r.invisible_chars, "images": r.images, "image_coverage": r.image_coverage,
+                "needs_ocr": r.needs_ocr,
+            })).collect::<Vec<_>>()
+        }),
+        Err(e) => failure(&e),
+    })
+}
+
+/// The file as opened with the changes appended as an update (every byte of the original stays at
+/// the start; a signature keeps its byte range). Like `pdfcore_save`: a buffer of `*len` bytes freed
+/// with `pdfcore_free_bytes`, or null with the reason in `pdfcore_last_error`.
+///
+/// # Safety
+/// `doc` must be a live handle; `len` a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_save_incremental(doc: *mut PdfDoc, len: *mut usize) -> *mut u8 {
+    if len.is_null() {
+        return std::ptr::null_mut();
+    }
+    *len = 0;
+    let Some(d) = handle(doc) else { return std::ptr::null_mut() };
+    match catch_unwind(AssertUnwindSafe(|| d.doc.save_incremental())) {
+        Ok(Ok(bytes)) => {
+            let mut bytes = bytes.into_boxed_slice().into_vec();
+            bytes.shrink_to_fit();
+            *len = bytes.len();
+            let ptr = bytes.as_mut_ptr();
+            std::mem::forget(bytes);
+            ptr
+        }
+        Ok(Err(e)) => {
+            remember(&e.to_string(), failure(&e)["kind"].as_str().unwrap_or("pdf"));
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            remember("fallo interno del motor al guardar", "panic");
+            std::ptr::null_mut()
+        }
+    }
+}
+
 fn arrange_of(name: &str) -> Option<Arrange> {
     Some(match name {
         "align_left" => Arrange::AlignLeft,
@@ -1289,6 +1546,7 @@ fn warning_json(w: &Warning) -> Value {
         Warning::ReflowFailed => json!({ "kind": "reflow_failed" }),
         Warning::OverlapsText { text } => json!({ "kind": "overlaps_text", "text": text }),
         Warning::BelowPage { by } => json!({ "kind": "below_page", "by": by }),
+        Warning::SharedForm { pages } => json!({ "kind": "shared_form", "pages": pages }),
     }
 }
 

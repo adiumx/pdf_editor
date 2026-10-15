@@ -99,9 +99,7 @@ impl Document {
             return Err(Error::NotEditable("rtl_text".into()));
         }
         if run.xobject.is_some() {
-            return Err(Error::Unsupported(
-                "editar texto dentro de un formulario XObject aún no está soportado".into(),
-            ));
+            return self.replace_in_form(page, run, new_text);
         }
         let id = self.page_id(page)?;
         // A font the reader draws itself can learn the letters it lacks, and stays the same face.
@@ -209,6 +207,83 @@ impl Document {
             reread: reread || corrections > 0,
             moved,
             warnings,
+        })
+    }
+
+    /// Edit text that a form XObject draws: the string is replaced inside the form's own content,
+    /// with the form's own font. Nothing after it on the line is moved and no other font is used
+    /// (a form's fonts are the form's business), so every letter must be drawable as it is. The
+    /// change shows wherever the form is drawn, and the result says how many pages that is.
+    fn replace_in_form(&mut self, page: usize, run: &TextRun, new_text: &str) -> Result<Replaced> {
+        let page_id = self.page_id(page)?;
+        let name = run.xobject.clone().unwrap_or_default();
+        let form_id = self
+            .find_form(&self.resources(page_id), name.as_bytes(), 0)
+            .ok_or_else(|| Error::Unsupported("no se encontró el formulario XObject de ese texto".into()))?;
+        let stream = self.pdf.get_object(form_id)?.as_stream()?.clone();
+        let resources = stream
+            .dict
+            .get(b"Resources")
+            .ok()
+            .and_then(|o| crate::font::resolve(&self.pdf, o).as_dict().ok())
+            .cloned()
+            .unwrap_or_else(|| self.resources(page_id));
+        let mut fonts = fonts_of(&self.pdf, &resources);
+        let font = fonts.get_mut(&run.font).ok_or_else(|| Error::Unsupported(format!("no se encontró la fuente {}", run.font)))?;
+        font.allow_seen(run.glyphs.iter().map(|g| g.code));
+        let font = &*font;
+        let unfit: Vec<char> = font.segments(new_text).iter().filter(|(_, b)| b.is_none()).flat_map(|(t, _)| t.chars()).collect();
+        if !unfit.is_empty() {
+            return Err(Error::MissingGlyphs(unfit));
+        }
+        let data = stream.decompressed_content().map_err(|e| Error::Unsupported(format!("no se pudo leer el formulario: {e}")))?;
+        let mut content = Content::decode(&data)?;
+        let original = content
+            .operations
+            .get(run.op_index)
+            .ok_or_else(|| Error::Unsupported("el texto ya no está donde se leyó".into()))?
+            .clone();
+        if !matches!(original.operator.as_str(), "Tj" | "TJ" | "'" | "\"") {
+            return Err(Error::Unsupported(format!("operación inesperada: {}", original.operator)));
+        }
+        let old: Vec<u8> = run.glyphs.iter().flat_map(|g| (0..font.code_bytes()).rev().map(move |b| (g.code >> (8 * b)) as u8)).collect();
+        let old_width = font.advance_of(&old, run.size) + crate::kerning::old_kerning(run, &original);
+        let (op, new_width) = match crate::kerning::keep_kerning(font, run, &original, new_text) {
+            Some(done) => done,
+            None => {
+                let bytes = font.encode(new_text).map_err(Error::MissingGlyphs)?;
+                let width = font.advance_of(&bytes, run.size);
+                (show_like(&original, Embedded::hex(bytes)), width)
+            }
+        };
+        content.operations[run.op_index] = op;
+        let mut dict = stream.dict.clone();
+        for key in ["Filter", "DecodeParms", "Length"] {
+            dict.remove(key.as_bytes());
+        }
+        let mut replacement = Stream::new(dict, content.encode()?);
+        let _ = replacement.compress();
+        *self.pdf.get_object_mut(form_id)? = Object::Stream(replacement);
+        let pages = (0..self.page_count())
+            .filter(|p| self.page_id(*p).ok().is_some_and(|id| self.find_form(&self.resources(id), name.as_bytes(), 0) == Some(form_id)))
+            .count();
+        let warnings = if pages > 1 { vec![Warning::SharedForm { pages }] } else { Vec::new() };
+        Ok(Replaced { old_width, new_width, fallback_chars: Vec::new(), substitutes: Vec::new(), reread: false, moved: 0, warnings })
+    }
+
+    /// The form XObject called `name` among these resources, or inside the forms they hold.
+    fn find_form(&self, resources: &Dictionary, name: &[u8], depth: usize) -> Option<lopdf::ObjectId> {
+        let table = resources.get(b"XObject").ok().map(|o| crate::font::resolve(&self.pdf, o)).and_then(|o| o.as_dict().ok())?;
+        if let Some(found) = table.get(name).ok().and_then(|o| o.as_reference().ok()) {
+            return Some(found);
+        }
+        if depth >= 4 {
+            return None;
+        }
+        table.iter().find_map(|(_, entry)| {
+            let inner = crate::font::resolve(&self.pdf, entry).as_stream().ok()?;
+            let nested = crate::font::resolve(&self.pdf, inner.dict.get(b"Resources").ok()?).as_dict().ok()?;
+            self.find_form(nested, name, depth + 1)
         })
     }
 

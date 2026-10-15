@@ -6,9 +6,9 @@ Guía para llevar `pdfcore` a una app Flutter (Android ahora, iOS después).
 
 | Pieza | Estado |
 |---|---|
-| Motor Rust (`pdfcore`) | Probado: 142 pruebas, fuzz con ~25 mil archivos dañados, y contra PDF reales de seguros |
+| Motor Rust (`pdfcore`) | Probado: más de 250 pruebas, fuzz con ~25 mil archivos dañados, y contra PDF reales de seguros |
 | Capa C (`pdfcore-ffi`) | Probada llamándola desde Python (`ctypes`) y desde Dart |
-| Paquete Dart (`engine/dart`) | **Probado**: 28 pruebas con `dart test` contra la librería real, en Linux. Una versión anterior ya se integró y probó en una app Flutter en Windows y en un emulador Android (lectura, edición, formularios, guardado) |
+| Paquete Dart (`engine/dart`) | **Probado**: 35 pruebas con `dart test` contra la librería real, en Linux. Una versión anterior ya se integró y probó en una app Flutter en Windows y en un emulador Android (lectura, edición, formularios, guardado) |
 | Compilar para Android/iOS | `cargo check` pasa; **el enlazado y la ejecución en un teléfono no se han probado** (no hay NDK, Xcode ni Flutter donde se escribió) |
 | La interfaz Flutter de abajo | **Boceto sin compilar**: muestra cómo se usa la API, no es una app terminada |
 
@@ -49,8 +49,10 @@ sola. `arm64-v8a` cubre las tablets Galaxy Tab S7 FE/S9/S10; `armeabi-v7a` los
 equipos viejos de 32 bits; `x86_64` el emulador.
 
 El perfil `release` ya está ajustado para tamaño (`opt-level = "s"`, LTO, strip).
-Si pesa demasiado, el siguiente ahorro es subconjuntar las fuentes incrustadas
-(~3 MB de Liberation van dentro).
+Las fuentes incluidas (Liberation Sans/Serif/Mono, Carlito, Caladea: unos 7 MB en el binario) se
+**subconjuntan al incrustarlas**: un documento solo lleva los contornos de las letras que usó (unos
+kilobytes por fuente y estilo, no ~200 KB). Si el binario pesa demasiado, se pueden quitar
+familias enteras de `pdfcore/src/fallback.rs`.
 
 **iOS** (en un Mac con Xcode):
 
@@ -311,6 +313,28 @@ Todo es un paso de deshacer, y los ids caducan con cualquier edición. Si un tex
 - `refreshAppearances(onlyMissing:)`: reconstruye la apariencia (`/AP`) de los campos desde su valor, para
   visores que no la generan; marca/casillas reciben los estados que les falten.
 
+### Anotaciones, aplanar, censurar, informe de OCR y guardado incremental
+
+- **Anotaciones**: `annotations(page)` las lista (`kind`: `highlight`, `underline`, `strike_out`, `squiggly`, `note`,
+  `free_text`, `ink`, `square`, `circle`, `line`, `link`, ...). `addAnnotation(page, NewAnnotation.highlight(boxes) |
+  .note(x, y, texto) | .freeText(rect, texto) | .ink(trazos) | .rectangle(...) | .ellipse(...) | .line(...))` crea
+  la anotación **con su apariencia**, así que cualquier visor la dibuja (MuPDF las lee como anotaciones del
+  tipo correcto). `setAnnotationContents`, `moveAnnotation` y `deleteAnnotation`. Cada una es un paso de
+  deshacer. El texto libre solo admite lo que Helvetica/WinAnsi dibuja (si no, `missing_glyphs`).
+- **Aplanar** (`flatten(pages:, annotations:, forms:)`): dibuja anotaciones y campos en la propia página y los quita
+  (la copia para enviar o imprimir). Las firmas no se aplanan (`skipped`); un documento firmado deja de ser
+  válido. Los enlaces se conservan.
+- **Censurar** (`redact(page, boxes, removeImages:)`): las letras cuyo centro cae en una zona **se quitan del
+  archivo** (no solo se tapan); el resto del texto no se mueve (un hueco de `TJ` exacto). Anotaciones y campos bajo la
+  zona se quitan. Las imágenes que tocan la zona se tapan pero **sus píxeles siguen en el archivo** (`imagesKept`)
+  salvo `removeImages: true`, que las quita enteras. Texto dentro de un XObject de formulario, o dibujado con
+  `'`/`"`, rechaza toda la censura (`unsupported`) para no dejar nada legible por error. No toca metadatos ni
+  revisiones anteriores de un archivo guardado de forma incremental.
+- **Informe de OCR** (`ocrReport()`): por página `native`, `scanned_no_text` (ofrece OCR: `needsOcr`),
+  `scanned_with_text_layer`, `image_only` o `blank`. El motor no reconoce caracteres.
+- **Guardado incremental** (`saveIncremental()`): el archivo original intacto al principio y los cambios añadidos
+  al final; una firma conserva su rango de bytes. También para archivos con contraseña.
+
 ## 6. Fidelidad de fuentes: qué se puede editar y cómo se avisa
 
 Cada `TextRun` trae (JSON → Dart): `font_kind` → `fontKind` (`embedded_full`, `embedded_subset`,
@@ -428,11 +452,39 @@ dedo para colocar el cursor entre letras (la lupa de la versión web), el teclad
 que redimensiona la pantalla, y el zoom al ancho. La versión web (`app/static/js/`)
 tiene resueltos esos tres casos y sirve de referencia.
 
+## Medir en el dispositivo
+
+Los tiempos de abajo (README) son de Linux. Lo que cuesta en tu tablet solo se sabe midiéndolo allí:
+
+```dart
+import 'package:pdfcore/benchmark.dart';
+final resultado = benchmarkDocument(bytesDeUnPdfReal, repeat: 3); // tiempos en ms y memoria en MB
+debugPrint(jsonEncode(resultado));
+```
+
+Mide abrir, leer página, bloques, ítems, líneas, una edición con deshacer, guardar y guardar incremental,
+con la mejor de `repeat` pasadas (la primera paga la carga fría). Desde una terminal:
+`dart run tool/benchmark.dart archivo.pdf ruta/libpdfcore_ffi.so`.
+
+## Qué no se ha podido verificar (resumen)
+
+- Compilación, enlazado y ejecución en Android/iOS reales (no hay NDK, Xcode ni teléfono donde se escribió).
+- Tiempos y memoria en la tablet (use `benchmarkDocument`).
+- Cómo ven el resultado los visores de Android (Google Drive, Samsung, Chrome, Acrobat): las comprobaciones
+  visuales se hicieron con MuPDF, que es un solo lector.
+- PDF con fuentes que no están en las pruebas (solo hay las que generan los scripts de `tools/` y tus tres
+  PDF reales): cada fuente rara es un caso nuevo.
+- Fuentes del sistema del dispositivo: el motor no las ve; la app debe pasarlas con `registerFont`.
+- OCR: el motor solo dice qué páginas lo necesitan.
+
 ## Limitaciones del motor a tener presentes
 
-- Texto dentro de formularios XObject: se lee, no se edita.
+- Texto dentro de formularios XObject: se lee y **se edita en el sitio** (con la propia fuente del formulario;
+  nada se mueve y no hay fuente de respaldo). Si el formulario lo dibujan varias páginas, todas muestran el cambio
+  (`shared_form`). Mover y borrar texto de un XObject sigue sin estar soportado; censurarlo se rechaza.
 - Fuentes incrustadas: los glifos se verifican en el programa de fuente (TrueType, OpenType, CFF y Type 1); lo que no tiene va a la fuente de respaldo. Una fuente cuyo programa no se puede leer es la excepción: ahí solo se escribe lo que la página ya dibujaba.
-- Con texto justificado, el reajuste solo puede mover tramos enteros (no reparte el espacio entre palabras): si hay un `exceeds_margin`, revisa la línea.
-- Faltan las anotaciones (resaltar, notas).
-- PDF cifrados con el diccionario `/Encrypt` escrito en línea (lo hace MuPDF): se informa, no se abre.
-- Párrafos: no se reconoce texto justificado ni con sangría de primera línea, y no se empuja lo que hay debajo.
+- PDF cifrados con `/Encrypt` escrito en línea (MuPDF): se abren (se reescribe como objeto) si el archivo usa tabla xref clásica;
+  con xref comprimida se informa (`unsupported`).
+- Árabe, hebreo y escritura vertical se leen pero no se editan; las fuentes incluidas no cubren CJK.
+- Las anotaciones se crean con apariencia propia; no se editan las que traen otros programas salvo mover, borrar y cambiar su texto.
+- La censura no toca metadatos ni revisiones anteriores de un archivo guardado de forma incremental, y no edita los píxeles de las imágenes.

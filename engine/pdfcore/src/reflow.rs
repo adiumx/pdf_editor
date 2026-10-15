@@ -72,6 +72,8 @@ pub enum Warning {
     OverlapsText { text: String },
     /// A paragraph grew past the bottom of the page by this many points.
     BelowPage { by: f32 },
+    /// The text was inside a form XObject used by this many pages: they all show the change.
+    SharedForm { pages: usize },
 }
 
 pub(crate) struct Outcome {

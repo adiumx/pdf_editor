@@ -57,6 +57,14 @@ for name, args in {
     "pdfcore_resize_item": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float],
     "pdfcore_refresh_appearances": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_batch": [ctypes.c_void_p, ctypes.c_char_p],
+    "pdfcore_annotations": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_add_annotation": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
+    "pdfcore_delete_annotation": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
+    "pdfcore_set_annotation_contents": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p],
+    "pdfcore_move_annotation": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_float, ctypes.c_float],
+    "pdfcore_flatten": [ctypes.c_void_p, ctypes.c_char_p],
+    "pdfcore_redact": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
+    "pdfcore_ocr_report": [ctypes.c_void_p],
     "pdfcore_set_substitution": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_blocks": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_replace_block": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
@@ -715,3 +723,123 @@ def test_missing_looks_are_rebuilt():
     page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
     assert all(w.field_name for w in page.widgets())
     d.close()
+
+
+def test_annotations_are_seen_by_an_independent_reader():
+    import pymupdf
+    d = Doc("standard")
+    box = d.page()["runs"][0]["display"]
+    add = lambda p: call("pdfcore_add_annotation", d.handle, 0, json.dumps(p).encode())
+    assert add({"shape": "highlight", "boxes": [box], "color": [1, 0.9, 0.2]})["ok"]
+    assert add({"shape": "note", "at": [300, 100], "contents": "Revisar", "author": "Cesar"})["ok"]
+    assert add({"shape": "free_text", "rect": [100, 300, 300, 360], "size": 12, "contents": "Texto libre con acentos: ñandú"})["ok"]
+    assert add({"shape": "ink", "strokes": [[[100, 400], [150, 420], [200, 400]]], "width": 2, "color": [1, 0, 0]})["ok"]
+    assert add({"shape": "square", "rect": [100, 450, 200, 500], "fill": [0.8, 0.9, 1], "width": 1.5, "color": [0, 0, 1]})["ok"]
+    assert add({"shape": "circle", "rect": [220, 450, 320, 500], "width": 1.5, "color": [0, 0.5, 0]})["ok"]
+    assert add({"shape": "line", "from": [100, 520], "to": [300, 560], "width": 2, "color": [1, 0, 0]})["ok"]
+    assert add({"shape": "free_text", "rect": [100, 300, 300, 360], "contents": "\u4e16"})["kind"] == "missing_glyphs"
+    listed = call("pdfcore_annotations", d.handle, 0)["annotations"]
+    assert [a["kind"] for a in listed] == ["highlight", "note", "free_text", "ink", "square", "circle", "line"]
+    data = d.save()
+    page = pymupdf.open(stream=data, filetype="pdf")[0]
+    assert [a.type[1] for a in page.annots()] == ["Highlight", "Text", "FreeText", "Ink", "Square", "Circle", "Line"]
+    # The highlight multiplies yellow over the text's own box; the free text is there for a text reader.
+    pix = page.get_pixmap(clip=pymupdf.Rect(box[0], box[1], box[2], box[3]), dpi=72)
+    px = pix.pixel(1, 1)
+    assert px[0] > 200 and px[1] > 180 and px[2] < 120, px
+    assert "ñandú" in " ".join(page.get_text().split()) or any("ñandú" in (a.info.get("content") or "") for a in page.annots())
+    # Move, re-word, delete.
+    assert call("pdfcore_move_annotation", d.handle, 0, 1, 10.0, 20.0)["ok"]
+    assert call("pdfcore_set_annotation_contents", d.handle, 0, 2, "Otro texto".encode())["ok"]
+    assert call("pdfcore_delete_annotation", d.handle, 0, 0)["ok"]
+    after = call("pdfcore_annotations", d.handle, 0)["annotations"]
+    assert len(after) == 6 and after[0]["kind"] == "note" and after[1]["contents"] == "Otro texto"
+    d.close()
+
+
+def test_flatten_and_redact_agree_with_an_independent_reader():
+    import pymupdf
+    d = Doc("form")
+    name = next(n for n, f in d.fields().items() if f["kind"] == "text" and not f["read_only"])
+    assert d.field(name, "Valor aplanado")["ok"]
+    done = call("pdfcore_flatten", d.handle, json.dumps({"annotations": True, "forms": True}).encode())
+    assert done["ok"] and done["drawn"] >= 1, done
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    assert "Valor aplanado" in page.get_text()
+    assert [w.field_name for w in page.widgets()] == ["firma"]
+    d.close()
+
+    d = Doc("producer_reportlab_ttf")
+    reader = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    words = reader.get_text("words")
+    target = next(w for w in words if w[4] == "horarios")
+    neighbours = {w[4]: w[:4] for w in words if w[1] == target[1] and w[4] in ("días", "atención;")}
+    box = [target[0] + 0.3, target[1], target[2] - 0.3, target[3]]
+    done = call("pdfcore_redact", d.handle, 0, json.dumps({"boxes": [box]}).encode())
+    assert done["ok"] and done["chars"] == len("horarios"), done
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    text = page.get_text()
+    assert "horarios" not in text
+    after = {w[4]: w[:4] for w in page.get_text("words")}
+    for word, old in neighbours.items():
+        assert all(abs(a - b) < 0.7 for a, b in zip(after[word], old)), (word, old, after[word])
+    # Covered: black where the word was.
+    pix = page.get_pixmap(clip=pymupdf.Rect(*box), dpi=72)
+    assert pix.pixel(int((box[2] - box[0]) / 2), int((box[3] - box[1]) / 2))[0] < 40
+    d.close()
+
+
+def test_ocr_report_and_incremental_save():
+    import pymupdf
+    d = Doc("scan_no_text")
+    pages = call("pdfcore_ocr_report", d.handle)["pages"]
+    assert pages[0]["kind"] == "scanned_no_text" and pages[0]["needs_ocr"]
+    d.close()
+    original = (FIXTURES / "standard.pdf").read_bytes()
+    d = Doc("standard")
+    d.page()
+    assert d.replace(0, "Incremental")["ok"]
+    size = ctypes.c_size_t()
+    lib.pdfcore_save_incremental.restype = ctypes.c_void_p
+    lib.pdfcore_save_incremental.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+    ptr = lib.pdfcore_save_incremental(d.handle, ctypes.byref(size))
+    assert ptr and size.value > len(original)
+    saved = ctypes.string_at(ptr, size.value)
+    lib.pdfcore_free_bytes(ctypes.c_void_p(ptr), size.value)
+    assert saved[:len(original)] == original
+    assert "Incremental" in pymupdf.open(stream=saved, filetype="pdf")[0].get_text()
+    d.close()
+
+
+def test_a_cut_down_bundled_font_still_draws_its_letters():
+    import pymupdf
+    d = Doc("embedded")
+    d.page()
+    done = d.replace(0, "Ж Щ Ñ", fallback=1)
+    assert done["ok"] and sorted(done["fallback_chars"]) == sorted("ЖЩÑ") , done
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    assert "Ж Щ Ñ" in " ".join(page.get_text().split())
+    hits = page.search_for("Ж")
+    assert hits
+    pix = page.get_pixmap(clip=hits[0], dpi=200)
+    ink = sum(1 for i in range(0, len(pix.samples), pix.n) if pix.samples[i] < 128)
+    assert ink > 80, ink
+    d.close()
+
+
+def test_inline_protection_form_xobject_text_and_the_independent_reader():
+    import pymupdf
+    # MuPDF's own way of writing /Encrypt opens now, and the edit survives a round trip.
+    d = Doc("encrypted_inline")
+    d.page()
+    assert d.replace(0, "Editado")["ok"]
+    assert "Editado" in pymupdf.open(stream=d.save(), filetype="pdf")[0].get_text()
+    d.close()
+    # Text drawn by a form XObject is edited in the form itself.
+    d = Doc("line_xobject")
+    try:
+        done = d.replace(run_named(d, "lunes a viernes")["id"], "otra cosa")
+        assert done["ok"], done
+        assert "otra cosa" in pymupdf.open(stream=d.save(), filetype="pdf")[0].get_text()
+    finally:
+        d.close()
