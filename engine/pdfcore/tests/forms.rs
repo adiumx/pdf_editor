@@ -243,3 +243,12 @@ fn fields_come_with_the_order_a_person_fills_them_in() {
     let orders: Vec<usize> = by_order.iter().map(|(o, _)| *o).collect();
     assert_eq!(orders, (0..orders.len()).collect::<Vec<_>>());
 }
+
+#[test]
+fn clearing_a_field_draws_an_empty_box_without_failing() {
+    // Used to panic when the field's own font was missing and nothing had been typed.
+    let mut doc = open_fixture("form_hard");
+    doc.set_field_value("importe", "1,234.50").unwrap();
+    doc.set_field_value("importe", "").unwrap();
+    assert_eq!(reopen(&mut doc).field("importe").unwrap().value, "");
+}

@@ -231,6 +231,38 @@ class FieldWidget {
   final bool hasAppearance;
 }
 
+/// How `arrangeFields` lines fields up.
+enum Arrange {
+  alignLeft('align_left'),
+  alignRight('align_right'),
+  alignTop('align_top'),
+  alignBottom('align_bottom'),
+
+  /// Centres share a vertical line.
+  centerHorizontally('center_horizontally'),
+
+  /// Centres share a horizontal line.
+  centerVertically('center_vertically'),
+
+  /// Equal gaps from left to right (three fields or more).
+  distributeHorizontally('distribute_horizontally'),
+
+  /// Equal gaps from top to bottom (three fields or more).
+  distributeVertically('distribute_vertically'),
+  sameWidth('same_width'),
+  sameHeight('same_height');
+
+  const Arrange(this.code);
+  final String code;
+}
+
+/// One widget of one field: a field that appears in several places has several.
+class FieldRefs {
+  const FieldRefs(this.name, [this.widget = 0]);
+  final String name;
+  final int widget;
+}
+
 /// Several lines that read as one block of text. [text] is all of it: show it
 /// in one editing box and hand the result to `replaceParagraph`.
 class PdfParagraph {

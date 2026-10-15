@@ -9,7 +9,7 @@ use lopdf::content::{Content, Operation};
 use lopdf::{Dictionary, Object, ObjectId, Stream};
 
 use crate::error::{Error, Result};
-use crate::text::multiply;
+use crate::text::{invert, multiply};
 use crate::Document;
 
 /// Largest picture accepted, in pixels: a 100 MB bitmap on a phone is a crash.
@@ -122,15 +122,6 @@ impl Document {
         self.pdf.get_dictionary_mut(page)?.set("Resources", Object::Dictionary(resources));
         Ok(name)
     }
-}
-
-fn invert(m: [f32; 6]) -> Option<[f32; 6]> {
-    let det = m[0] * m[3] - m[1] * m[2];
-    if det.abs() < 1e-9 {
-        return None;
-    }
-    let (a, b, c, d) = (m[3] / det, -m[1] / det, -m[2] / det, m[0] / det);
-    Some([a, b, c, d, -(m[4] * a + m[5] * c), -(m[4] * b + m[5] * d)])
 }
 
 fn decode(data: &[u8]) -> Result<Picture> {

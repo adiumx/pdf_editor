@@ -48,6 +48,12 @@ pub struct Widget {
     id: ObjectId,
 }
 
+impl Widget {
+    pub(crate) fn id(&self) -> ObjectId {
+        self.id
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Field {
     /// Fully qualified name.
@@ -475,7 +481,7 @@ impl Document {
         Ok(())
     }
 
-    fn fill_text(&mut self, field: &Field, value: &str) -> Result<()> {
+    pub(crate) fn fill_text(&mut self, field: &Field, value: &str) -> Result<()> {
         // Build every appearance first: a failure there leaves the field as it was.
         let mut appearances = Vec::new();
         for widget in &field.widgets {
@@ -496,7 +502,7 @@ impl Document {
     }
 
     /// Select the rows at `chosen` (indexes into the options) of a list box.
-    fn fill_list(&mut self, field: &Field, chosen: &[usize]) -> Result<()> {
+    pub(crate) fn fill_list(&mut self, field: &Field, chosen: &[usize]) -> Result<()> {
         let mut sorted = chosen.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
@@ -544,7 +550,11 @@ impl Document {
 
     fn text_appearance(&mut self, field: &Field, widget: &Widget, value: &str, selected: &[usize]) -> Result<ObjectId> {
         let [x0, y0, x1, y1] = widget.rect;
-        let (w, h) = (x1 - x0, y1 - y0);
+        // The text reads upright on the page as shown: the widget's own rotation
+        // (`/MK /R`) if it has one, else the page's. On a turned page the box is
+        // drawn in a frame turned the other way, so it must be laid out sideways.
+        let turn = self.widget_turn(widget);
+        let (w, h) = if turn % 180 == 0 { (x1 - x0, y1 - y0) } else { (y1 - y0, x1 - x0) };
         let da = parse_da(&field.da);
         let is_list = field.kind == FieldKind::List;
         let shown: String = if is_list {
@@ -668,6 +678,8 @@ impl Document {
         let (font_entry, resource) = match &own {
             Some((entry, _)) => (entry.clone(), da.font.clone()),
             None => {
+                // An empty field never encoded anything, so the font may not be in yet.
+                self.ensure_fallback(key, data)?;
                 let embedded = &self.fallbacks[key];
                 (Object::Reference(embedded.font_id), embedded.resource.clone())
             }
@@ -713,6 +725,9 @@ impl Document {
         dict.set("Type", Object::Name(b"XObject".to_vec()));
         dict.set("Subtype", Object::Name(b"Form".to_vec()));
         dict.set("BBox", vec![Object::Real(0.0), Object::Real(0.0), Object::Real(w), Object::Real(h)]);
+        if let Some(matrix) = turn_matrix(turn, w, h) {
+            dict.set("Matrix", Object::Array(matrix.iter().map(|v| Object::Real(*v)).collect()));
+        }
         dict.set("Resources", Object::Dictionary(resources));
         let mut stream = Stream::new(dict, content.into_bytes());
         let _ = stream.compress();
@@ -881,5 +896,34 @@ fn mark_ops(style: char, w: f32, h: f32, color: &str) -> String {
             "{stroke}\n{:.2} w 1 J 1 j\n{:.2} {:.2} m {:.2} {:.2} l {:.2} {:.2} l S\n",
             s * 0.12, cx - s * 0.3, cy + s * 0.02, cx - s * 0.08, cy - s * 0.24, cx + s * 0.32, cy + s * 0.3
         ),
+    }
+}
+
+// -- widgets on turned pages ------------------------------------------------------
+
+impl Document {
+    /// How far (counter-clockwise, in degrees) a widget's drawing is turned so it reads
+    /// upright on the page as shown: its own `/MK /R`, or the page's rotation.
+    fn widget_turn(&self, widget: &Widget) -> i32 {
+        let own = self
+            .pdf
+            .get_dictionary(widget.id)
+            .ok()
+            .and_then(|d| d.get(b"MK").ok())
+            .and_then(|o| resolve(&self.pdf, o).as_dict().ok())
+            .and_then(|mk| mk.get(b"R").ok())
+            .and_then(|o| num(&self.pdf, o))
+            .map(|r| (r as i32).rem_euclid(360));
+        own.unwrap_or_else(|| widget.page.and_then(|p| self.page_size(p).ok()).map_or(0, |s| s.rotation))
+    }
+}
+
+/// The form matrix that turns a `w` by `h` drawing so that it fills the widget's box.
+fn turn_matrix(turn: i32, w: f32, h: f32) -> Option<[f32; 6]> {
+    match turn {
+        90 => Some([0.0, 1.0, -1.0, 0.0, h, 0.0]),
+        180 => Some([-1.0, 0.0, 0.0, -1.0, w, h]),
+        270 => Some([0.0, -1.0, 1.0, 0.0, 0.0, w]),
+        _ => None,
     }
 }

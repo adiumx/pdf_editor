@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{Align, Alignment, Anchor, Document, Error, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
+use pdfcore::{Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -284,6 +284,79 @@ pub unsafe extern "C" fn pdfcore_replace_paragraph(
                     "fallback_chars": done.fallback_chars.iter().collect::<String>(),
                     "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>(),
                 })
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// Put a field's widget (index `widget` of its widgets) in the box `x0,y0,x1,y1`, in the page
+/// as a reader shows it. The box is kept on the page; returns `{"ok":true,"display":[..]}`
+/// with where it ended up. The field is redrawn at its new size.
+///
+/// # Safety
+/// `doc` must be a live handle; `name` a NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_move_field(
+    doc: *mut PdfDoc,
+    name: *const c_char,
+    widget: c_int,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+) -> *mut c_char {
+    let (Some(d), Some(name)) = (handle(doc), string_arg(name)) else { return bad_argument() };
+    guard(|| match d.doc.move_field(name, widget.max(0) as usize, [x0, y0, x1, y1]) {
+        Ok(display) => {
+            edited(d);
+            json!({ "ok": true, "display": display })
+        }
+        Err(e) => failure(&e),
+    })
+}
+
+/// Line fields up as one step. `params` is JSON: `{"fields":[{"name","widget"}],"how":"..."}` with
+/// `how` one of `align_left`, `align_right`, `align_top`, `align_bottom`, `center_horizontally`,
+/// `center_vertically`, `distribute_horizontally`, `distribute_vertically`, `same_width`, `same_height`.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_arrange_fields(doc: *mut PdfDoc, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else {
+            return json!({ "error": "parámetros no válidos", "kind": "bad_argument" });
+        };
+        let how = match p.get("how").and_then(Value::as_str) {
+            Some("align_left") => Arrange::AlignLeft,
+            Some("align_right") => Arrange::AlignRight,
+            Some("align_top") => Arrange::AlignTop,
+            Some("align_bottom") => Arrange::AlignBottom,
+            Some("center_horizontally") => Arrange::CenterHorizontally,
+            Some("center_vertically") => Arrange::CenterVertically,
+            Some("distribute_horizontally") => Arrange::DistributeHorizontally,
+            Some("distribute_vertically") => Arrange::DistributeVertically,
+            Some("same_width") => Arrange::SameWidth,
+            Some("same_height") => Arrange::SameHeight,
+            _ => return json!({ "error": "«how» no es una forma de alinear conocida", "kind": "bad_argument" }),
+        };
+        let items: Option<Vec<FieldRef>> = p.get("fields").and_then(Value::as_array).map(|list| {
+            list.iter()
+                .filter_map(|f| {
+                    Some(FieldRef {
+                        name: f.get("name")?.as_str()?.to_string(),
+                        widget: f.get("widget").and_then(Value::as_u64).unwrap_or(0) as usize,
+                    })
+                })
+                .collect()
+        });
+        let Some(items) = items else { return json!({ "error": "faltan los campos", "kind": "bad_argument" }) };
+        match d.doc.arrange_fields(&items, how) {
+            Ok(()) => {
+                edited(d);
+                json!({ "ok": true })
             }
             Err(e) => failure(&e),
         }

@@ -354,6 +354,11 @@ for i, line in enumerate(wrap("Columna aparte con sus propias lineas a la misma 
     page.insert_text((430, 110 + 15 * i), line, fontname="helv", fontsize=12)
 doc.save(OUT / "paragraph.pdf", garbage=0, deflate=False)
 
+# 19. The basic form on a page turned 90 degrees, for moving fields on a turned page.
+doc = pymupdf.open(stream=(OUT / "form.pdf").read_bytes(), filetype="pdf")
+doc[0].set_rotation(90)
+doc.save(OUT / "form_rotated.pdf", garbage=0, deflate=False)
+
 # 11. Encrypted copies of the simple text page. Most producers write /Encrypt as
 #     an indirect object, which MuPDF does not; `indirect_encrypt` rewrites it
 #     that way with an incremental update. One file keeps MuPDF's inline form.

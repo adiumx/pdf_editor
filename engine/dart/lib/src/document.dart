@@ -51,6 +51,9 @@ class _Native {
         find = lib.lookupFunction<_Str Function(_Handle, _Str, Int), _Str Function(_Handle, _Str, int)>('pdfcore_find'),
         replaceAll = lib.lookupFunction<_Str Function(_Handle, _Str, _Str, Int, Int, Int),
             _Str Function(_Handle, _Str, _Str, int, int, int)>('pdfcore_replace_all'),
+        moveField = lib.lookupFunction<_Str Function(_Handle, _Str, Int, Float, Float, Float, Float),
+            _Str Function(_Handle, _Str, int, double, double, double, double)>('pdfcore_move_field'),
+        arrangeFields = lib.lookupFunction<_Str Function(_Handle, _Str), _Str Function(_Handle, _Str)>('pdfcore_arrange_fields'),
         paragraph = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_paragraph'),
         replaceParagraph = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
             _Str Function(_Handle, int, int, _Str, int)>('pdfcore_replace_paragraph'),
@@ -90,6 +93,8 @@ class _Native {
   final _Str Function(_Handle, int) lines;
   final _Str Function(_Handle, _Str, int) find;
   final _Str Function(_Handle, _Str, _Str, int, int, int) replaceAll;
+  final _Str Function(_Handle, _Str, int, double, double, double, double) moveField;
+  final _Str Function(_Handle, _Str) arrangeFields;
   final _Str Function(_Handle, int, int) paragraph;
   final _Str Function(_Handle, int, int, _Str, int) replaceParagraph;
   final _Str Function(_Handle, int, Pointer<Uint8>, int, _Str) addImage;
@@ -204,6 +209,24 @@ class PdfDocument implements Finalizable {
           text,
           (t) => _json(_n.replaceTextEx(
               _live, page, runId, t, allowFallback ? 1 : 0, _reflowCodes[reflow]!))));
+
+  /// Put a field's widget in the box `[x0, y0, x1, y1]` (as a reader shows the
+  /// page) and redraw it at that size. The box is kept on the page and at least
+  /// a few points each way; returns where it ended up, so a grid can show it.
+  /// A signed signature cannot be moved.
+  List<double> moveField(String name, List<double> box, {int widget = 0}) {
+    final j = _withString(name, (n) => _json(_n.moveField(_live, n, widget, box[0], box[1], box[2], box[3])));
+    return _box(j['display']);
+  }
+
+  /// Line fields up or space them evenly, as one step for [undo].
+  void arrangeFields(List<FieldRefs> fields, Arrange how) {
+    final params = jsonEncode({
+      'how': how.code,
+      'fields': [for (final f in fields) {'name': f.name, 'widget': f.widget}],
+    });
+    _withString(params, (p) => _json(_n.arrangeFields(_live, p)));
+  }
 
   /// The paragraph [run] is a line of (two lines or more of one font, evenly
   /// spaced and left-aligned), or null. Read the page first.

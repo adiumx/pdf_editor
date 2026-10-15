@@ -31,6 +31,16 @@ pub fn multiply(a: Matrix, b: Matrix) -> Matrix {
     ]
 }
 
+/// The matrix that undoes `m`, if it has one.
+pub fn invert(m: Matrix) -> Option<Matrix> {
+    let det = m[0] * m[3] - m[1] * m[2];
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let (a, b, c, d) = (m[3] / det, -m[1] / det, -m[2] / det, m[0] / det);
+    Some([a, b, c, d, -(m[4] * a + m[5] * c), -(m[4] * b + m[5] * d)])
+}
+
 pub fn apply(m: Matrix, x: f32, y: f32) -> (f32, f32) {
     (x * m[0] + y * m[2] + m[4], x * m[1] + y * m[3] + m[5])
 }

@@ -44,7 +44,8 @@ como referencia y como oráculo de pruebas.
 | 6e. Imágenes JPEG y PNG (con transparencia) en cualquier punto de la página | **hecho** |
 | 6f. Glifos verificados también en fuentes CFF, OpenType-CFF y Type 1 | **hecho** |
 | 6g. Párrafos de varias líneas: se vuelven a repartir al editar, con la misma fuente y color | **hecho** |
-| 7. Anotaciones (resaltar, notas), OCR en el dispositivo | |
+| 6h. Mover, redimensionar y alinear campos de formulario (varios a la vez, un solo deshacer); texto de campo derecho también en páginas giradas | **hecho** |
+| 7. Anotaciones (resaltar, notas), aplanar formularios, OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee
 
@@ -303,6 +304,18 @@ larga: reescribe las líneas que hay, vacía las que sobran y añade líneas deb
 fuente y color. No mueve lo que hay debajo: si el párrafo crece sobre otro texto, avisa
 (`overlaps_text`, `below_page`). No reconoce texto justificado, sangría de primera línea ni
 líneas con varias fuentes. Todo es un solo paso de deshacer.
+
+### Mover y alinear campos (hito 6h)
+
+`move_field(nombre, widget, caja)` pone un campo en una caja (coordenadas de la página tal como
+se ve) y lo redibuja a su nuevo tamaño con el valor que tiene; la caja se mantiene dentro de la
+página y no baja de 6 puntos, y se devuelve donde quedó, para que una cuadrícula la muestre.
+`arrange_fields` alinea (izquierda, derecha, arriba, abajo, centros), reparte con huecos iguales
+(tres o más) o iguala ancho o alto, todo como un solo paso. Una firma ya firmada no se mueve.
+La cuadrícula, el imán y las guías son de la app: el motor ejecuta «pon este campo en esta caja».
+En páginas giradas el texto de un campo se dibuja con `/MK /R` (la rotación del widget, o la de
+la página) para que se lea derecho; antes salía de lado y recortado. También se corrigió un
+pánico al dibujar un campo vacío cuya fuente no estaba incrustada.
 
 ### Huecos conocidos (aún no implementados)
 

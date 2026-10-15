@@ -50,6 +50,12 @@ uint8_t *pdfcore_extract_pages(PdfDoc *doc, const int *pages, size_t n_pages, si
 char *pdfcore_paragraph(PdfDoc *doc, int page, int run_id);
 /* new_text is the paragraph's whole text; {"ok":true,"lines","added","removed","fallback_chars","warnings"} */
 char *pdfcore_replace_paragraph(PdfDoc *doc, int page, int run_id, const char *new_text, int allow_fallback);
+/* box in the page as shown; {"ok":true,"display":[x0,y0,x1,y1]} with where it ended up */
+char *pdfcore_move_field(PdfDoc *doc, const char *name, int widget, float x0, float y0, float x1, float y1);
+/* {"fields":[{"name","widget"}],"how":"align_left"|"align_right"|"align_top"|"align_bottom"|
+   "center_horizontally"|"center_vertically"|"distribute_horizontally"|"distribute_vertically"|
+   "same_width"|"same_height"} */
+char *pdfcore_arrange_fields(PdfDoc *doc, const char *params);
 char *pdfcore_signatures(PdfDoc *doc); /* {"signatures":[{"field","signer"}]} */
 
 /* Editing. */

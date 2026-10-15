@@ -82,6 +82,11 @@ class PdfSession {
           {SearchOptions options = const SearchOptions(), bool allowFallback = false, Reflow reflow = Reflow.following}) =>
       _call<ReplaceAllResult>('replaceAll', [find, replacement, options, allowFallback, reflow]);
 
+  Future<List<double>> moveField(String name, List<double> box, {int widget = 0}) =>
+      _call<List<double>>('moveField', [name, box, widget]);
+
+  Future<void> arrangeFields(List<FieldRefs> fields, Arrange how) => _call<void>('arrangeFields', [fields, how]);
+
   Future<PdfParagraph?> paragraphOf(PageData page, TextRun run) => _call<PdfParagraph?>('paragraph', [page.index, run.id]);
 
   Future<ParagraphResult> replaceParagraph(PageData page, TextRun run, String text, {bool allowFallback = false}) =>
@@ -199,6 +204,11 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
     case 'replaceAll':
       return doc.replaceAll(a[0] as String, a[1] as String,
           options: a[2] as SearchOptions, allowFallback: a[3] as bool, reflow: a[4] as Reflow);
+    case 'moveField':
+      return doc.moveField(a[0] as String, (a[1] as List).cast<double>(), widget: a[2] as int);
+    case 'arrangeFields':
+      doc.arrangeFields((a[0] as List).cast<FieldRefs>(), a[1] as Arrange);
+      return null;
     case 'paragraph':
       return doc.paragraphById(a[0] as int, a[1] as int);
     case 'replaceParagraph':

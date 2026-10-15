@@ -446,4 +446,28 @@ void main() {
       }
     });
   });
+
+  group('field layout', () {
+    test('a field moves, several line up, and one undo takes each back', () async {
+      final doc = PdfDocument.open(fixture('form_hard'), libraryPath: libraryPath);
+      addTearDown(doc.close);
+      final box = doc.moveField('rfc', [300, 100, 450, 124]);
+      expect(box, [300, 100, 450, 124]);
+      expect(doc.fields().firstWhere((f) => f.name == 'rfc').widgets.first.display, [300, 100, 450, 124]);
+      doc.arrangeFields([const FieldRefs('rfc'), const FieldRefs('importe'), const FieldRefs('estado')], Arrange.alignLeft);
+      final lefts = doc.fields().where((f) => ['rfc', 'importe', 'estado'].contains(f.name)).map((f) => f.widgets.first.display[0]).toSet();
+      expect(lefts, hasLength(1));
+      expect(doc.undo(), isTrue);
+      expect(() => doc.arrangeFields([const FieldRefs('rfc')], Arrange.alignLeft), throwsA(isA<PdfException>()));
+      expect(() => doc.moveField('nada', [0, 0, 10, 10]), throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'no_such_field')));
+
+      final session = await PdfSession.open(fixture('form_hard'), libraryPath: libraryPath);
+      try {
+        expect((await session.moveField('rfc', [10, 10, 100, 30])).first, 10);
+        await session.arrangeFields([const FieldRefs('rfc'), const FieldRefs('importe')], Arrange.sameWidth);
+      } finally {
+        await session.close();
+      }
+    });
+  });
 }

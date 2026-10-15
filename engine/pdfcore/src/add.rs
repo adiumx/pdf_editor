@@ -11,7 +11,7 @@ use ttf_parser::Face;
 
 use crate::error::{Error, Result};
 use crate::fallback::{self, Embedded};
-use crate::text::apply;
+use crate::text::{apply, invert};
 use crate::Document;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,15 +190,6 @@ impl Document {
         self.pdf.get_dictionary_mut(page)?.set("Contents", Object::Array(streams));
         Ok(())
     }
-}
-
-fn invert(m: [f32; 6]) -> Option<[f32; 6]> {
-    let det = m[0] * m[3] - m[1] * m[2];
-    if det.abs() < 1e-9 {
-        return None;
-    }
-    let (a, b, c, d) = (m[3] / det, -m[1] / det, -m[2] / det, m[0] / det);
-    Some([a, b, c, d, -(m[4] * a + m[5] * c), -(m[4] * b + m[5] * d)])
 }
 
 /// Where a direction in the source space points after `m`, ignoring translation.

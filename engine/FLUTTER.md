@@ -224,6 +224,11 @@ final parte = await session.extractPages([2, 0]);             // PDF nuevo
 // Imágenes (JPEG se incrusta tal cual; PNG conserva su transparencia).
 await session.addImage(0, fotoBytes, x: 72, y: 600, width: 120);
 
+// Campos: mover/redimensionar (la cuadrícula decide la caja; el motor la mantiene en la página)
+final dondeQuedo = await session.moveField('nombre', [100, 300, 260, 322]);
+await session.arrangeFields(
+  [FieldRefs('rfc'), FieldRefs('notas'), FieldRefs('importe')], Arrange.alignLeft); // un solo deshacer
+
 // Párrafos: muestra todo el texto en un cuadro y devuélvelo completo.
 final p = await session.paragraphOf(page, run);         // null si es una línea suelta
 if (p != null) {

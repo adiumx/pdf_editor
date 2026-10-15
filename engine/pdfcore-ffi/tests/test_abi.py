@@ -26,6 +26,8 @@ lib.pdfcore_insert_pages.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_
                                      ctypes.POINTER(ctypes.c_int), ctypes.c_size_t, ctypes.c_int]
 lib.pdfcore_add_image.restype = ctypes.c_void_p
 lib.pdfcore_add_image.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p]
+lib.pdfcore_move_field.restype = ctypes.c_void_p
+lib.pdfcore_move_field.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int] + [ctypes.c_float] * 4
 lib.pdfcore_extract_pages.restype = ctypes.c_void_p
 lib.pdfcore_extract_pages.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
 lib.pdfcore_save.restype = ctypes.c_void_p
@@ -37,6 +39,7 @@ for name, args in {
     "pdfcore_replace_text_ex": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_signatures": [ctypes.c_void_p],
     "pdfcore_lines": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_arrange_fields": [ctypes.c_void_p, ctypes.c_char_p],
     "pdfcore_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_replace_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_rotate_page": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
@@ -413,4 +416,39 @@ def test_paragraphs_cross_the_boundary():
     # Ids are stale after the edit, like any edit.
     assert call("pdfcore_replace_paragraph", d.handle, 0, first, b"x", 0)["kind"] == "stale_run"
     assert call("pdfcore_replace_paragraph", d.handle, 0, 999, b"x", 0)["kind"] == "stale_run"
+    d.close()
+
+
+def test_a_moved_field_is_drawn_where_it_was_put():
+    # Rendered, on a page that is turned: the text has to be inside the new box and gone from the old.
+    for fixture in ("form", "form_rotated"):
+        d = Doc(fixture)
+        d.field("nombre", "XXXXXXXXXXXX")
+        old = d.fields()["nombre"]["widgets"][0]["display"]
+        done = call("pdfcore_move_field", d.handle, b"nombre", 0, 150.0, 400.0, 330.0, 430.0)
+        assert done["ok"] and done["display"] == [150.0, 400.0, 330.0, 430.0], done
+        pix = render(d.save())
+
+        def ink(box):
+            x0, y0, x1, y1 = (int(v) for v in box)
+            return sum(1 for x in range(x0, x1) for y in range(y0, y1) if sum(pix.pixel(x, y)) < 300)
+
+        assert ink((150, 400, 330, 430)) > 40, fixture
+        # Upright: the ink is wider than it is tall, on a turned page too.
+        dark = [(x, y) for x in range(150, 330) for y in range(400, 430) if sum(pix.pixel(x, y)) < 300]
+        xs, ys = [p[0] for p in dark], [p[1] for p in dark]
+        assert max(xs) - min(xs) > 3 * (max(ys) - min(ys)), (fixture, (min(xs), min(ys), max(xs), max(ys)))
+        assert ink(tuple(old)) == 0 or tuple(old) == (150.0, 400.0, 330.0, 430.0), fixture
+        d.close()
+
+
+def test_arranging_fields_crosses_the_boundary():
+    d = Doc("form_hard")
+    fields = [{"name": n, "widget": 0} for n in ("rfc", "notas", "importe")]
+    done = call("pdfcore_arrange_fields", d.handle, json.dumps({"fields": fields, "how": "align_left"}).encode())
+    assert done == {"ok": True}
+    lefts = {d.fields()[n]["widgets"][0]["display"][0] for n in ("rfc", "notas", "importe")}
+    assert len(lefts) == 1
+    assert call("pdfcore_arrange_fields", d.handle, json.dumps({"fields": fields, "how": "nope"}).encode())["kind"] == "bad_argument"
+    assert call("pdfcore_arrange_fields", d.handle, json.dumps({"fields": fields[:1], "how": "align_left"}).encode())["kind"] == "rejected"
     d.close()
