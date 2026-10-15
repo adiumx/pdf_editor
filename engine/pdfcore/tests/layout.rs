@@ -115,3 +115,26 @@ fn a_list_box_keeps_its_selection_when_moved() {
     assert_eq!(again.field("ramos").unwrap().value, "Vida\nAuto");
     assert!(near(shown(&again, "ramos"), [300.0, 340.0, 450.0, 430.0]));
 }
+
+#[test]
+fn field_text_aligns_left_centre_or_right_and_survives_a_save() {
+    use pdfcore::Align;
+    let mut doc = open("form_hard");
+    doc.set_field_value("importe", "1,234").unwrap();
+    doc.set_field_value("estado", "Yucatán").unwrap();
+    let names = vec!["importe".to_string(), "estado".to_string()];
+    for align in [Align::Center, Align::Right, Align::Left] {
+        doc.set_fields_alignment(&names, align).unwrap();
+        let again = reopen(&mut doc);
+        for name in &names {
+            assert_eq!(again.field(name).unwrap().text_align(), align, "{name}");
+        }
+        assert_eq!(again.field("importe").unwrap().value, "1,234");
+    }
+    // Three changes, three steps; nothing else was touched.
+    assert!(doc.undo() && doc.undo() && doc.undo());
+    assert!(matches!(doc.set_fields_alignment(&["acepto".to_string()], Align::Center), Err(Error::Rejected(_))));
+    assert!(matches!(doc.set_fields_alignment(&["nada".to_string()], Align::Center), Err(Error::NoSuchField(_))));
+    let mut signed = open("signed");
+    assert!(matches!(signed.set_fields_alignment(&["firma".to_string()], Align::Center), Err(Error::Rejected(_))));
+}

@@ -82,6 +82,15 @@ class PdfSession {
           {SearchOptions options = const SearchOptions(), bool allowFallback = false, Reflow reflow = Reflow.following}) =>
       _call<ReplaceAllResult>('replaceAll', [find, replacement, options, allowFallback, reflow]);
 
+  Future<List<PdfItem>> items(int page) => _call<List<PdfItem>>('items', [page]);
+  Future<void> moveItems(int page, List<ItemMove> moves) => _call<void>('moveItems', [page, moves]);
+  Future<void> arrangeItems(int page, List<PdfItem> items, Arrange how) => _call<void>('arrangeItems', [page, items, how]);
+  Future<void> spaceLines(int page, List<PdfItem> items, {double? leading}) =>
+      _call<void>('spaceLines', [page, items, leading]);
+  Future<void> alignParagraph(PageData page, TextRun run, TextAlign align) =>
+      _call<void>('alignParagraph', [page, run, align]);
+  Future<void> setFieldsAlignment(List<String> names, TextAlign align) => _call<void>('setFieldsAlignment', [names, align]);
+
   Future<List<double>> moveField(String name, List<double> box, {int widget = 0}) =>
       _call<List<double>>('moveField', [name, box, widget]);
 
@@ -204,6 +213,23 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
     case 'replaceAll':
       return doc.replaceAll(a[0] as String, a[1] as String,
           options: a[2] as SearchOptions, allowFallback: a[3] as bool, reflow: a[4] as Reflow);
+    case 'items':
+      return doc.items(a[0] as int);
+    case 'moveItems':
+      doc.moveItems(a[0] as int, (a[1] as List).cast<ItemMove>());
+      return null;
+    case 'arrangeItems':
+      doc.arrangeItems(a[0] as int, (a[1] as List).cast<PdfItem>(), a[2] as Arrange);
+      return null;
+    case 'spaceLines':
+      doc.spaceLines(a[0] as int, (a[1] as List).cast<PdfItem>(), leading: a[2] as double?);
+      return null;
+    case 'alignParagraph':
+      doc.alignParagraph(a[0] as PageData, a[1] as TextRun, a[2] as TextAlign);
+      return null;
+    case 'setFieldsAlignment':
+      doc.setFieldsAlignment((a[0] as List).cast<String>(), a[1] as TextAlign);
+      return null;
     case 'moveField':
       return doc.moveField(a[0] as String, (a[1] as List).cast<double>(), widget: a[2] as int);
     case 'arrangeFields':

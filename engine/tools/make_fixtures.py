@@ -359,6 +359,22 @@ doc = pymupdf.open(stream=(OUT / "form.pdf").read_bytes(), filetype="pdf")
 doc[0].set_rotation(90)
 doc.save(OUT / "form_rotated.pdf", garbage=0, deflate=False)
 
+# 20. A page of separate things, placed irregularly like a design: three texts, two
+#     pictures, a three-line paragraph and a form field.
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_text((60, 110), "Uno", fontname="helv", fontsize=12)
+page.insert_text((130, 150), "Dos mas largo", fontname="helv", fontsize=12)
+page.insert_text((200, 190), "Tres", fontname="helv", fontsize=12)
+page.insert_image(pymupdf.Rect(320, 90, 400, 130), filename=str(OUT / "img_rgb.jpg"))
+page.insert_image(pymupdf.Rect(350, 200, 390, 220), filename=str(OUT / "img_rgb.jpg"))
+for i, line in enumerate(["Primera linea del bloque", "segunda linea mas larga que la primera", "tercera"]):
+    page.insert_text((60, 300 + 15 * i), line, fontname="helv", fontsize=12)
+w = pymupdf.Widget()
+w.field_type, w.field_name, w.rect, w.text_fontsize = pymupdf.PDF_WIDGET_TYPE_TEXT, "dato", pymupdf.Rect(60, 400, 160, 420), 11
+page.add_widget(w)
+doc.save(OUT / "canvas.pdf", garbage=0, deflate=False)
+
 # 11. Encrypted copies of the simple text page. Most producers write /Encrypt as
 #     an indirect object, which MuPDF does not; `indirect_encrypt` rewrites it
 #     that way with an incremental update. One file keeps MuPDF's inline form.

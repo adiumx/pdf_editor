@@ -470,4 +470,44 @@ void main() {
       }
     });
   });
+
+  group('items, like a design tool', () {
+    test('texts, pictures and fields line up and space evenly; paragraphs and fields align their text', () async {
+      final doc = PdfDocument.open(fixture('canvas'), libraryPath: libraryPath);
+      addTearDown(doc.close);
+      var items = doc.items(0);
+      expect(items.where((i) => i.kind == PdfItemKind.text), hasLength(4));
+      expect(items.where((i) => i.kind == PdfItemKind.image), hasLength(2));
+      expect(items.where((i) => i.kind == PdfItemKind.field).single.fieldName, 'dato');
+      final block = items.firstWhere((i) => i.text.startsWith('Primera'));
+      expect(block.lines, 3);
+
+      PdfItem named(String t) => doc.items(0).firstWhere((i) => i.text.startsWith(t));
+      doc.arrangeItems(0, [named('Uno'), named('Dos mas'), named('Tres')], Arrange.alignLeft);
+      final left = doc.items(0).where((i) => ['Uno', 'Dos mas', 'Tres'].any(i.text.startsWith)).map((i) => i.display[0]);
+      expect(left.map((v) => v.round()).toSet(), hasLength(1));
+      expect(doc.undo(), isTrue);
+
+      doc.moveItems(0, [ItemMove(named('Dos mas'), 20, 5)]);
+      expect(doc.items(0).firstWhere((i) => i.text.startsWith('Dos mas')).display[0], closeTo(130 + 20, 1));
+      expect(doc.undo(), isTrue);
+
+      doc.spaceLines(0, [named('Uno'), named('Dos mas'), named('Tres')], leading: 24);
+      expect(() => doc.spaceLines(0, [named('Uno')]), throwsA(isA<PdfException>()));
+
+      var page = doc.page(0);
+      doc.alignParagraph(page, page.runs.firstWhere((r) => r.text.startsWith('Primera')), TextAlign.center);
+      doc.setFieldsAlignment(['dato'], TextAlign.right);
+      expect(doc.fields().firstWhere((f) => f.name == 'dato'), isNotNull);
+
+      final session = await PdfSession.open(fixture('canvas'), libraryPath: libraryPath);
+      try {
+        final list = await session.items(0);
+        await session.arrangeItems(0, list.where((i) => i.kind == PdfItemKind.text).take(3).toList(), Arrange.alignRight);
+        expect((await session.items(0)).isNotEmpty, isTrue);
+      } finally {
+        await session.close();
+      }
+    });
+  });
 }

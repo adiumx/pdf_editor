@@ -89,6 +89,21 @@ pub struct Field {
     q: i64,
 }
 
+impl Field {
+    pub(crate) fn id(&self) -> ObjectId {
+        self.id
+    }
+
+    /// How the field's text is aligned inside its box.
+    pub fn text_align(&self) -> crate::add::Align {
+        match self.q {
+            1 => crate::add::Align::Center,
+            2 => crate::add::Align::Right,
+            _ => crate::add::Align::Left,
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 struct Inherited {
     ft: Option<String>,

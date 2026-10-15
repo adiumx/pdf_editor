@@ -54,6 +54,15 @@ class _Native {
         moveField = lib.lookupFunction<_Str Function(_Handle, _Str, Int, Float, Float, Float, Float),
             _Str Function(_Handle, _Str, int, double, double, double, double)>('pdfcore_move_field'),
         arrangeFields = lib.lookupFunction<_Str Function(_Handle, _Str), _Str Function(_Handle, _Str)>('pdfcore_arrange_fields'),
+        items = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_items'),
+        moveItems = lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>('pdfcore_move_items'),
+        arrangeItems =
+            lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>('pdfcore_arrange_items'),
+        spaceLines = lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>('pdfcore_space_lines'),
+        alignParagraph = lib.lookupFunction<_Str Function(_Handle, Int, Int, Int), _Str Function(_Handle, int, int, int)>(
+            'pdfcore_align_paragraph'),
+        setFieldsAlignment =
+            lib.lookupFunction<_Str Function(_Handle, _Str), _Str Function(_Handle, _Str)>('pdfcore_set_fields_alignment'),
         paragraph = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_paragraph'),
         replaceParagraph = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
             _Str Function(_Handle, int, int, _Str, int)>('pdfcore_replace_paragraph'),
@@ -95,6 +104,12 @@ class _Native {
   final _Str Function(_Handle, _Str, _Str, int, int, int) replaceAll;
   final _Str Function(_Handle, _Str, int, double, double, double, double) moveField;
   final _Str Function(_Handle, _Str) arrangeFields;
+  final _Str Function(_Handle, int) items;
+  final _Str Function(_Handle, int, _Str) moveItems;
+  final _Str Function(_Handle, int, _Str) arrangeItems;
+  final _Str Function(_Handle, int, _Str) spaceLines;
+  final _Str Function(_Handle, int, int, int) alignParagraph;
+  final _Str Function(_Handle, _Str) setFieldsAlignment;
   final _Str Function(_Handle, int, int) paragraph;
   final _Str Function(_Handle, int, int, _Str, int) replaceParagraph;
   final _Str Function(_Handle, int, Pointer<Uint8>, int, _Str) addImage;
@@ -226,6 +241,55 @@ class PdfDocument implements Finalizable {
       'fields': [for (final f in fields) {'name': f.name, 'widget': f.widget}],
     });
     _withString(params, (p) => _json(_n.arrangeFields(_live, p)));
+  }
+
+  /// What can be moved on [page]: text (a paragraph is one item), pictures and
+  /// form fields, top to bottom. Read it again after any edit.
+  List<PdfItem> items(int page) => (_json(_n.items(_live, page))['items'] as List).map((i) {
+        final m = i as Map<String, dynamic>;
+        return PdfItem(
+          (m['id'] as num).toInt(),
+          const {'text': PdfItemKind.text, 'image': PdfItemKind.image, 'field': PdfItemKind.field}[m['kind']]!,
+          _box(m['display']),
+          m['text'] as String,
+          lines: (m['lines'] as num?)?.toInt() ?? 0,
+          fieldName: m['name'] as String?,
+          widget: (m['widget'] as num?)?.toInt() ?? 0,
+        );
+      }).toList();
+
+  /// Move items by the distances given, as one step for [undo]. The text near
+  /// a moved text stays where it was.
+  void moveItems(int page, List<ItemMove> moves) {
+    final params = jsonEncode({
+      'moves': [for (final m in moves) {'id': m.item.id, 'dx': m.dx, 'dy': m.dy}],
+    });
+    _withString(params, (p) => _json(_n.moveItems(_live, page, p)));
+  }
+
+  /// Line items up (or space them evenly) like a design tool does, as one step.
+  /// Texts, pictures and fields can be mixed; making sizes equal is for fields only.
+  void arrangeItems(int page, List<PdfItem> items, Arrange how) {
+    final params = jsonEncode({'ids': [for (final i in items) i.id], 'how': how.code});
+    _withString(params, (p) => _json(_n.arrangeItems(_live, page, p)));
+  }
+
+  /// An even leading for text items: the first stays and each next baseline is
+  /// [leading] points below the one before (the average of the gaps there are now when null).
+  void spaceLines(int page, List<PdfItem> items, {double? leading}) {
+    final params = jsonEncode({'ids': [for (final i in items) i.id], 'leading': leading});
+    _withString(params, (p) => _json(_n.spaceLines(_live, page, p)));
+  }
+
+  /// Align the lines of the paragraph [run] belongs to against its left edge,
+  /// centre or right edge (like a word processor's alignment buttons).
+  void alignParagraph(PageData page, TextRun run, TextAlign align) =>
+      _json(_n.alignParagraph(_live, page.index, run.id, align.index));
+
+  /// Align the text inside form fields (text, choice and list fields), as one step.
+  void setFieldsAlignment(List<String> names, TextAlign align) {
+    final params = jsonEncode({'names': names, 'align': align.name});
+    _withString(params, (p) => _json(_n.setFieldsAlignment(_live, p)));
   }
 
   /// The paragraph [run] is a line of (two lines or more of one font, evenly

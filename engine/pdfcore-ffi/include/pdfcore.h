@@ -56,6 +56,13 @@ char *pdfcore_move_field(PdfDoc *doc, const char *name, int widget, float x0, fl
    "center_horizontally"|"center_vertically"|"distribute_horizontally"|"distribute_vertically"|
    "same_width"|"same_height"} */
 char *pdfcore_arrange_fields(PdfDoc *doc, const char *params);
+/* what can be moved on a page: {"items":[{"id","kind":"text"|"image"|"field","display","text","lines"?,"name"?,"widget"?}]} */
+char *pdfcore_items(PdfDoc *doc, int page);
+char *pdfcore_move_items(PdfDoc *doc, int page, const char *params);   /* {"moves":[{"id","dx","dy"}]} */
+char *pdfcore_arrange_items(PdfDoc *doc, int page, const char *params); /* {"ids":[..],"how":"align_left"|...} */
+char *pdfcore_space_lines(PdfDoc *doc, int page, const char *params);   /* {"ids":[..],"leading":null|points} */
+char *pdfcore_align_paragraph(PdfDoc *doc, int page, int run_id, int align); /* 0 left, 1 centre, 2 right */
+char *pdfcore_set_fields_alignment(PdfDoc *doc, const char *params);    /* {"names":[..],"align":"left"|"center"|"right"} */
 char *pdfcore_signatures(PdfDoc *doc); /* {"signatures":[{"field","signer"}]} */
 
 /* Editing. */

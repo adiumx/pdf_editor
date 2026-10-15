@@ -40,6 +40,12 @@ for name, args in {
     "pdfcore_signatures": [ctypes.c_void_p],
     "pdfcore_lines": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_arrange_fields": [ctypes.c_void_p, ctypes.c_char_p],
+    "pdfcore_items": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_move_items": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
+    "pdfcore_arrange_items": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
+    "pdfcore_space_lines": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
+    "pdfcore_align_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int],
+    "pdfcore_set_fields_alignment": [ctypes.c_void_p, ctypes.c_char_p],
     "pdfcore_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_replace_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_rotate_page": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
@@ -451,4 +457,43 @@ def test_arranging_fields_crosses_the_boundary():
     assert len(lefts) == 1
     assert call("pdfcore_arrange_fields", d.handle, json.dumps({"fields": fields, "how": "nope"}).encode())["kind"] == "bad_argument"
     assert call("pdfcore_arrange_fields", d.handle, json.dumps({"fields": fields[:1], "how": "align_left"}).encode())["kind"] == "rejected"
+    d.close()
+
+
+def test_items_move_and_line_up_and_are_checked_by_rendering():
+    d = Doc("canvas")
+    items = call("pdfcore_items", d.handle, 0)["items"]
+    by_text = {i["text"]: i for i in items if i["kind"] == "text"}
+    ids = [by_text[t]["id"] for t in ("Uno", "Dos mas largo", "Tres")]
+    # Right-align the three texts: their right edges must meet on the rendered page.
+    done = call("pdfcore_arrange_items", d.handle, 0, json.dumps({"ids": ids, "how": "align_right"}).encode())
+    assert done == {"ok": True}, done
+    pix = render(d.save())
+
+    def right_edge(y0, y1):
+        xs = [x for x in range(0, 300) for y in range(y0, y1) if sum(pix.pixel(x, y)) < 300]
+        return max(xs)
+
+    edges = [right_edge(y - 12, y + 4) for y in (110, 150, 190)]
+    assert max(edges) - min(edges) <= 2, edges
+    # Ids are stale after an edit.
+    assert call("pdfcore_arrange_items", d.handle, 0, json.dumps({"ids": ids, "how": "align_left"}).encode())["kind"] == "stale_item"
+    # A text moved down by 30 points appears 30 points lower.
+    items = call("pdfcore_items", d.handle, 0)["items"]
+    uno = next(i for i in items if i["text"] == "Uno")
+    assert call("pdfcore_move_items", d.handle, 0, json.dumps({"moves": [{"id": uno["id"], "dx": 0, "dy": 30}]}).encode())["ok"]
+    after = next(i for i in call("pdfcore_items", d.handle, 0)["items"] if i["text"] == "Uno")
+    assert abs(after["display"][1] - uno["display"][1] - 30) < 0.1
+    d.close()
+
+
+def test_text_alignment_in_paragraphs_and_fields_crosses_the_boundary():
+    d = Doc("canvas")
+    runs = d.page()["runs"]
+    first = next(i for i, r in enumerate(runs) if r["text"].startswith("Primera"))
+    assert call("pdfcore_align_paragraph", d.handle, 0, first, 1)["ok"]
+    assert call("pdfcore_align_paragraph", d.handle, 0, first, 1)["kind"] == "stale_run"
+    done = call("pdfcore_set_fields_alignment", d.handle, json.dumps({"names": ["dato"], "align": "center"}).encode())
+    assert done == {"ok": True}
+    assert call("pdfcore_set_fields_alignment", d.handle, json.dumps({"names": ["dato"], "align": "middle"}).encode())["kind"] == "bad_argument"
     d.close()

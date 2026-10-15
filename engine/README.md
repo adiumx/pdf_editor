@@ -45,6 +45,7 @@ como referencia y como oráculo de pruebas.
 | 6f. Glifos verificados también en fuentes CFF, OpenType-CFF y Type 1 | **hecho** |
 | 6g. Párrafos de varias líneas: se vuelven a repartir al editar, con la misma fuente y color | **hecho** |
 | 6h. Mover, redimensionar y alinear campos de formulario (varios a la vez, un solo deshacer); texto de campo derecho también en páginas giradas | **hecho** |
+| 6i. Elementos como en un editor de diseño: textos, imágenes y campos se mueven, alinean, reparten y se les da un interlineado uniforme; alineación del texto en párrafos y campos | **hecho** |
 | 7. Anotaciones (resaltar, notas), aplanar formularios, OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee
@@ -320,6 +321,29 @@ operación que mueva varios campos a cajas distintas en un solo paso).
 En páginas giradas el texto de un campo se dibuja con `/MK /R` (la rotación del widget, o la de
 la página) para que se lea derecho; antes salía de lado y recortado. También se corrigió un
 pánico al dibujar un campo vacío cuya fuente no estaba incrustada.
+
+### Elementos, como en un editor de diseño (hito 6i)
+
+`page_items(página)` lista lo que se puede mover como una unidad: **texto** (un párrafo es un
+solo elemento; si no, una línea), **imágenes** y **campos de formulario**, de arriba abajo.
+Con ellos:
+
+| Operación | Qué hace |
+|---|---|
+| `move_items` | mueve elementos por una distancia (en puntos, como se ve la página) |
+| `arrange_items` | alinea (izquierda, derecha, arriba, abajo, centros) o reparte con huecos iguales (tres o más); se pueden mezclar textos, imágenes y campos; igualar tamaño solo con campos |
+| `space_lines` | interlineado uniforme: el primero se queda y cada línea base siguiente va a `leading` puntos de la anterior (sin dato, el promedio de los huecos actuales) |
+| `align_paragraph` | alinea las líneas de un párrafo contra su borde izquierdo, su centro o su borde derecho (como los botones de párrafo de Word) |
+| `set_fields_alignment` | alinea el texto dentro de campos de texto, de selección y listas |
+
+Todo es **un solo paso de deshacer** y los ids de los elementos caducan con cualquier edición.
+Un **texto** se mueve metiendo un `Td` antes de su operación y leyendo la página de nuevo para
+corregir lo que se movió sin querer (el mismo método del reajuste de línea), así que lo de
+alrededor no se mueve aunque el PDF coloque los textos de forma absoluta, siguiendo el cursor o
+con desplazamientos relativos (probado con las cuatro). Una **imagen** se mueve envolviendo su
+`Do` en `q`, una traslación y `Q`. Límites: el texto dentro de un formulario XObject no se mueve
+(una línea que lo contiene no aparece como elemento), y `space_lines` mide líneas base, que es el
+interlineado de verdad; repartir con huecos iguales mide cajas.
 
 ### Huecos conocidos (aún no implementados)
 

@@ -40,6 +40,16 @@ fn exercise(doc: &mut Document) {
     for page in 0..doc.page_count().min(3) {
         let _ = doc.text_lines(page);
     }
+    if let Ok(items) = doc.page_items(0) {
+        let moves: Vec<_> = items.iter().take(3).cloned().map(|i| (i, (7.0, 3.0))).collect();
+        let _ = doc.move_items(0, &moves);
+        let again = doc.page_items(0).unwrap_or_default();
+        let _ = doc.arrange_items(0, &again.iter().take(3).cloned().collect::<Vec<_>>(), pdfcore::Arrange::AlignLeft);
+        let _ = doc.space_lines(0, &again.iter().take(3).cloned().collect::<Vec<_>>(), None);
+        if let Some(run) = doc.text_runs(0).ok().and_then(|r| r.into_iter().next()) {
+            let _ = doc.align_paragraph(0, &run, pdfcore::Align::Center);
+        }
+    }
     let _ = doc.rotate_page(0, 90);
     let _ = doc.move_page(0, doc.page_count().saturating_sub(1));
     let _ = doc.extract_pages(&[0]);

@@ -263,6 +263,35 @@ class FieldRefs {
   final int widget;
 }
 
+enum PdfItemKind { text, image, field }
+
+/// Something a person moves around as a unit, like in a design tool: a block of
+/// text, a picture or a form field. Read again after any edit.
+class PdfItem {
+  PdfItem(this.id, this.kind, this.display, this.text, {this.lines = 0, this.fieldName, this.widget = 0});
+  final int id;
+  final PdfItemKind kind;
+
+  /// `[x0, y0, x1, y1]` as a reader shows the page.
+  final List<double> display;
+
+  /// A text's words, or a field's value.
+  final String text;
+
+  /// For text: how many lines it has (more than one for a paragraph).
+  final int lines;
+  final String? fieldName;
+  final int widget;
+}
+
+/// How far to move an item, in points as the page is shown.
+class ItemMove {
+  const ItemMove(this.item, this.dx, this.dy);
+  final PdfItem item;
+  final double dx;
+  final double dy;
+}
+
 /// Several lines that read as one block of text. [text] is all of it: show it
 /// in one editing box and hand the result to `replaceParagraph`.
 class PdfParagraph {

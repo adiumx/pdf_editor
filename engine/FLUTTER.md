@@ -6,9 +6,9 @@ Guía para llevar `pdfcore` a una app Flutter (Android ahora, iOS después).
 
 | Pieza | Estado |
 |---|---|
-| Motor Rust (`pdfcore`) | Probado: 125 pruebas, fuzz con ~25 mil archivos dañados, y contra PDF reales de seguros |
+| Motor Rust (`pdfcore`) | Probado: 145 pruebas, fuzz con ~25 mil archivos dañados, y contra PDF reales de seguros |
 | Capa C (`pdfcore-ffi`) | Probada llamándola desde Python (`ctypes`) y desde Dart |
-| Paquete Dart (`engine/dart`) | **Probado**: 26 pruebas con `dart test` contra la librería real, en Linux. Una versión anterior ya se integró y probó en una app Flutter en Windows y en un emulador Android (lectura, edición, formularios, guardado) |
+| Paquete Dart (`engine/dart`) | **Probado**: 28 pruebas con `dart test` contra la librería real, en Linux. Una versión anterior ya se integró y probó en una app Flutter en Windows y en un emulador Android (lectura, edición, formularios, guardado) |
 | Compilar para Android/iOS | `cargo check` pasa; **el enlazado y la ejecución en un teléfono no se han probado** (no hay NDK, Xcode ni Flutter donde se escribió) |
 | La interfaz Flutter de abajo | **Boceto sin compilar**: muestra cómo se usa la API, no es una app terminada |
 
@@ -231,6 +231,17 @@ await session.arrangeFields(
 // Ojo: arrangeFields alinea los campos entre sí, no los ajusta a la cuadrícula. Para ajustar a la
 // cuadrícula, calcula la caja de cada campo y llama a moveField por campo: cada llamada es un
 // paso de deshacer aparte.
+
+// Elementos como en Canva: textos, imágenes y campos sueltos. Un solo deshacer cada operación.
+final elementos = await session.items(0);               // texto (un párrafo = uno), imágenes, campos
+final elegidos = elementos.where((e) => seleccion.contains(e.id)).toList();
+await session.arrangeItems(0, elegidos, Arrange.alignLeft);      // o centerHorizontally, alignRight, ...
+await session.arrangeItems(0, elegidos, Arrange.distributeVertically);   // huecos iguales (3 o más)
+await session.spaceLines(0, elegidos, leading: 18);     // interlineado uniforme (null = el promedio)
+await session.moveItems(0, [ItemMove(elegidos.first, 10, -4)]);
+// Alinear el texto DENTRO de un párrafo o de un campo (botones de párrafo de Word):
+await session.alignParagraph(page, run, TextAlign.center);
+await session.setFieldsAlignment(['nombre', 'rfc'], TextAlign.right);
 
 // Párrafos: muestra todo el texto en un cuadro y devuélvelo completo.
 final p = await session.paragraphOf(page, run);         // null si es una línea suelta

@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
+use pdfcore::{Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -25,6 +25,8 @@ pub struct PdfDoc {
     /// What `pdfcore_page` last returned, so a run id can be turned back into
     /// the run it named.
     reading: HashMap<usize, Vec<TextRun>>,
+    /// What `pdfcore_items` last returned for each page.
+    items: HashMap<usize, Vec<Item>>,
 }
 
 thread_local! {
@@ -112,7 +114,7 @@ unsafe fn open_with(data: *const u8, len: usize, password: &str) -> *mut PdfDoc 
     }
     let bytes = std::slice::from_raw_parts(data, len);
     match catch_unwind(|| Document::open_with_password(bytes, password)) {
-        Ok(Ok(doc)) => Box::into_raw(Box::new(PdfDoc { doc, reading: HashMap::new() })),
+        Ok(Ok(doc)) => Box::into_raw(Box::new(PdfDoc { doc, reading: HashMap::new(), items: HashMap::new() })),
         Ok(Err(e)) => {
             remember(&e.to_string(), failure(&e)["kind"].as_str().unwrap_or("pdf"));
             std::ptr::null_mut()
@@ -290,6 +292,208 @@ pub unsafe extern "C" fn pdfcore_replace_paragraph(
     })
 }
 
+fn arrange_of(name: &str) -> Option<Arrange> {
+    Some(match name {
+        "align_left" => Arrange::AlignLeft,
+        "align_right" => Arrange::AlignRight,
+        "align_top" => Arrange::AlignTop,
+        "align_bottom" => Arrange::AlignBottom,
+        "center_horizontally" => Arrange::CenterHorizontally,
+        "center_vertically" => Arrange::CenterVertically,
+        "distribute_horizontally" => Arrange::DistributeHorizontally,
+        "distribute_vertically" => Arrange::DistributeVertically,
+        "same_width" => Arrange::SameWidth,
+        "same_height" => Arrange::SameHeight,
+        _ => return None,
+    })
+}
+
+fn align_of(name: &str) -> Option<Align> {
+    Some(match name {
+        "left" => Align::Left,
+        "center" => Align::Center,
+        "right" => Align::Right,
+        _ => return None,
+    })
+}
+
+/// What can be moved on a page, as `{"items":[{"id","kind":"text"|"image"|"field","display",
+/// "text","lines"?,"name"?,"widget"?}]}`, top to bottom. Ids are good until the next edit.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_items(doc: *mut PdfDoc, page: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let items = match d.doc.page_items(page) {
+            Ok(i) => i,
+            Err(e) => return failure(&e),
+        };
+        let listed: Vec<Value> = items
+            .iter()
+            .enumerate()
+            .map(|(id, i)| {
+                let mut out = json!({
+                    "id": id, "display": i.display, "text": i.text,
+                    "kind": match i.kind { ItemKind::Text => "text", ItemKind::Image => "image", ItemKind::Field => "field" },
+                });
+                if i.kind == ItemKind::Text {
+                    out["lines"] = json!(i.runs.len());
+                }
+                if let Some((name, widget)) = &i.field {
+                    out["name"] = json!(name);
+                    out["widget"] = json!(widget);
+                }
+                out
+            })
+            .collect();
+        d.items.insert(page, items);
+        json!({ "items": listed })
+    })
+}
+
+/// The items a JSON list of ids names, from the last `pdfcore_items` of the page.
+fn chosen(d: &PdfDoc, page: usize, ids: &Value) -> std::result::Result<Vec<Item>, Value> {
+    let stale = || json!({ "error": "esos elementos ya no están donde se leyeron: vuelve a leer la página", "kind": "stale_item" });
+    let list = d.items.get(&page).ok_or_else(stale)?;
+    let ids = ids.as_array().ok_or_else(|| json!({ "error": "faltan los elementos", "kind": "bad_argument" }))?;
+    ids.iter()
+        .map(|id| id.as_u64().and_then(|n| list.get(n as usize)).cloned().ok_or_else(stale))
+        .collect()
+}
+
+fn finished(d: &mut PdfDoc, result: pdfcore::Result<()>) -> Value {
+    match result {
+        Ok(()) => {
+            edited(d);
+            json!({ "ok": true })
+        }
+        Err(e) => failure(&e),
+    }
+}
+
+/// Move items: `{"moves":[{"id","dx","dy"}]}`, points as a reader shows the page.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_move_items(doc: *mut PdfDoc, page: c_int, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let Ok(p) = serde_json::from_str::<Value>(params) else {
+            return json!({ "error": "parámetros no válidos", "kind": "bad_argument" });
+        };
+        let Some(list) = p.get("moves").and_then(Value::as_array) else {
+            return json!({ "error": "faltan los movimientos", "kind": "bad_argument" });
+        };
+        let mut moves = Vec::new();
+        for m in list {
+            let items = match chosen(d, page, &json!([m.get("id")])) {
+                Ok(i) => i,
+                Err(e) => return e,
+            };
+            let num = |k: &str| m.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+            moves.push((items[0].clone(), (num("dx"), num("dy"))));
+        }
+        let result = d.doc.move_items(page, &moves);
+        finished(d, result)
+    })
+}
+
+/// Line items up: `{"ids":[..],"how":"align_left"|...}` (the names of `pdfcore_arrange_fields`).
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_arrange_items(doc: *mut PdfDoc, page: c_int, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let Ok(p) = serde_json::from_str::<Value>(params) else {
+            return json!({ "error": "parámetros no válidos", "kind": "bad_argument" });
+        };
+        let Some(how) = p.get("how").and_then(Value::as_str).and_then(arrange_of) else {
+            return json!({ "error": "«how» no es una forma de alinear conocida", "kind": "bad_argument" });
+        };
+        let items = match chosen(d, page, p.get("ids").unwrap_or(&Value::Null)) {
+            Ok(i) => i,
+            Err(e) => return e,
+        };
+        let result = d.doc.arrange_items(page, &items, how);
+        finished(d, result)
+    })
+}
+
+/// Even leading for text items: `{"ids":[..],"leading":null|points}`; `null` averages the gaps there are.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_space_lines(doc: *mut PdfDoc, page: c_int, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let Ok(p) = serde_json::from_str::<Value>(params) else {
+            return json!({ "error": "parámetros no válidos", "kind": "bad_argument" });
+        };
+        let items = match chosen(d, page, p.get("ids").unwrap_or(&Value::Null)) {
+            Ok(i) => i,
+            Err(e) => return e,
+        };
+        let leading = p.get("leading").and_then(Value::as_f64).map(|v| v as f32);
+        let result = d.doc.space_lines(page, &items, leading);
+        finished(d, result)
+    })
+}
+
+/// Align the lines of the paragraph a run belongs to: `align` 0 left, 1 centre, 2 right.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_align_paragraph(doc: *mut PdfDoc, page: c_int, run_id: c_int, align: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let Some(run) = d.reading.get(&page).and_then(|r| r.get(run_id.max(0) as usize)).cloned() else {
+            return json!({ "error": "ese texto ya no está donde se leyó: vuelve a leer la página", "kind": "stale_run" });
+        };
+        let align = match align {
+            1 => Align::Center,
+            2 => Align::Right,
+            _ => Align::Left,
+        };
+        let result = d.doc.align_paragraph(page, &run, align);
+        finished(d, result)
+    })
+}
+
+/// Align the text inside fields: `{"names":[..],"align":"left"|"center"|"right"}`.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_set_fields_alignment(doc: *mut PdfDoc, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else {
+            return json!({ "error": "parámetros no válidos", "kind": "bad_argument" });
+        };
+        let Some(align) = p.get("align").and_then(Value::as_str).and_then(align_of) else {
+            return json!({ "error": "«align» debe ser left, center o right", "kind": "bad_argument" });
+        };
+        let Some(names) = p.get("names").and_then(Value::as_array) else {
+            return json!({ "error": "faltan los campos", "kind": "bad_argument" });
+        };
+        let names: Vec<String> = names.iter().filter_map(|n| n.as_str().map(str::to_string)).collect();
+        let result = d.doc.set_fields_alignment(&names, align);
+        finished(d, result)
+    })
+}
+
 /// Put a field's widget (index `widget` of its widgets) in the box `x0,y0,x1,y1`, in the page
 /// as a reader shows it. The box is kept on the page; returns `{"ok":true,"display":[..]}`
 /// with where it ended up. The field is redrawn at its new size.
@@ -329,18 +533,8 @@ pub unsafe extern "C" fn pdfcore_arrange_fields(doc: *mut PdfDoc, params: *const
         let Ok(p) = serde_json::from_str::<Value>(params) else {
             return json!({ "error": "parámetros no válidos", "kind": "bad_argument" });
         };
-        let how = match p.get("how").and_then(Value::as_str) {
-            Some("align_left") => Arrange::AlignLeft,
-            Some("align_right") => Arrange::AlignRight,
-            Some("align_top") => Arrange::AlignTop,
-            Some("align_bottom") => Arrange::AlignBottom,
-            Some("center_horizontally") => Arrange::CenterHorizontally,
-            Some("center_vertically") => Arrange::CenterVertically,
-            Some("distribute_horizontally") => Arrange::DistributeHorizontally,
-            Some("distribute_vertically") => Arrange::DistributeVertically,
-            Some("same_width") => Arrange::SameWidth,
-            Some("same_height") => Arrange::SameHeight,
-            _ => return json!({ "error": "«how» no es una forma de alinear conocida", "kind": "bad_argument" }),
+        let Some(how) = p.get("how").and_then(Value::as_str).and_then(arrange_of) else {
+            return json!({ "error": "«how» no es una forma de alinear conocida", "kind": "bad_argument" });
         };
         let items: Option<Vec<FieldRef>> = p.get("fields").and_then(Value::as_array).map(|list| {
             list.iter()
@@ -463,6 +657,7 @@ pub unsafe extern "C" fn pdfcore_fields(doc: *mut PdfDoc) -> *mut c_char {
 
 fn edited(d: &mut PdfDoc) {
     d.reading.clear();
+    d.items.clear();
 }
 
 fn warning_json(w: &Warning) -> Value {

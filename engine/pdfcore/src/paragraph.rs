@@ -62,7 +62,7 @@ fn baseline(run: &TextRun) -> f32 {
 }
 
 /// Indexes of the runs of the paragraph that `start` belongs to, top to bottom.
-fn paragraph_runs(runs: &[TextRun], lines: &[Line], start: usize) -> Option<Vec<usize>> {
+pub(crate) fn paragraph_runs(runs: &[TextRun], lines: &[Line], start: usize) -> Option<Vec<usize>> {
     let mut chain = vec![start];
     let like = |a: &TextRun, b: &TextRun| {
         a.font == b.font && (a.size - b.size).abs() < 0.05 && (a.display[0] - b.display[0]).abs() <= SAME_LEFT

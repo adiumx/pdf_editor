@@ -51,7 +51,7 @@ impl Document {
         self.transaction(|d| d.place_field(name, widget, display))
     }
 
-    fn place_field(&mut self, name: &str, widget: usize, display: [f32; 4]) -> Result<[f32; 4]> {
+    pub(crate) fn place_field(&mut self, name: &str, widget: usize, display: [f32; 4]) -> Result<[f32; 4]> {
         let field = self.field(name).ok_or_else(|| Error::NoSuchField(name.to_string()))?;
         if field.signed {
             return Err(Error::Rejected(format!("«{name}» es una firma ya firmada: moverla la invalida")));
@@ -76,6 +76,35 @@ impl Document {
         let fresh = self.field(name).ok_or_else(|| Error::NoSuchField(name.to_string()))?;
         self.redraw(&fresh)?;
         Ok(clamped)
+    }
+
+    /// Align the text of text, choice and list fields left, centre or right inside their
+    /// boxes, redrawn with the value they hold; all of them as one step.
+    pub fn set_fields_alignment(&mut self, names: &[String], align: crate::add::Align) -> Result<()> {
+        let q = match align {
+            crate::add::Align::Left => 0,
+            crate::add::Align::Center => 1,
+            crate::add::Align::Right => 2,
+        };
+        // Everything is checked before anything changes.
+        for name in names {
+            let field = self.field(name).ok_or_else(|| Error::NoSuchField(name.clone()))?;
+            if !matches!(field.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
+                return Err(Error::Rejected(format!("«{name}» no es un campo de texto: no tiene alineación")));
+            }
+            if field.signed {
+                return Err(Error::Rejected(format!("«{name}» es una firma ya firmada")));
+            }
+        }
+        self.transaction(|d| {
+            for name in names {
+                let field = d.field(name).ok_or_else(|| Error::NoSuchField(name.clone()))?;
+                d.pdf.get_dictionary_mut(field.id())?.set("Q", Object::Integer(q));
+                let fresh = d.field(name).ok_or_else(|| Error::NoSuchField(name.clone()))?;
+                d.redraw(&fresh)?;
+            }
+            Ok(())
+        })
     }
 
     fn redraw(&mut self, field: &Field) -> Result<()> {
@@ -134,7 +163,7 @@ impl Document {
     }
 }
 
-fn clamp(b: [f32; 4], width: f32, height: f32) -> [f32; 4] {
+pub(crate) fn clamp(b: [f32; 4], width: f32, height: f32) -> [f32; 4] {
     let (w, h) = ((b[2] - b[0]).abs().max(MIN_SIDE).min(width), (b[3] - b[1]).abs().max(MIN_SIDE).min(height));
     let x0 = b[0].min(b[2]).clamp(0.0, (width - w).max(0.0));
     let y0 = b[1].min(b[3]).clamp(0.0, (height - h).max(0.0));
@@ -142,7 +171,7 @@ fn clamp(b: [f32; 4], width: f32, height: f32) -> [f32; 4] {
 }
 
 /// Where each box goes for `how`.
-fn arranged(boxes: &[[f32; 4]], how: Arrange) -> Vec<[f32; 4]> {
+pub(crate) fn arranged(boxes: &[[f32; 4]], how: Arrange) -> Vec<[f32; 4]> {
     let left = boxes.iter().map(|b| b[0]).fold(f32::MAX, f32::min);
     let right = boxes.iter().map(|b| b[2]).fold(f32::MIN, f32::max);
     let top = boxes.iter().map(|b| b[1]).fold(f32::MAX, f32::min);
