@@ -6,7 +6,7 @@ Guía para llevar `pdfcore` a una app Flutter (Android ahora, iOS después).
 
 | Pieza | Estado |
 |---|---|
-| Motor Rust (`pdfcore`) | Probado: 145 pruebas, fuzz con ~25 mil archivos dañados, y contra PDF reales de seguros |
+| Motor Rust (`pdfcore`) | Probado: 142 pruebas, fuzz con ~25 mil archivos dañados, y contra PDF reales de seguros |
 | Capa C (`pdfcore-ffi`) | Probada llamándola desde Python (`ctypes`) y desde Dart |
 | Paquete Dart (`engine/dart`) | **Probado**: 28 pruebas con `dart test` contra la librería real, en Linux. Una versión anterior ya se integró y probó en una app Flutter en Windows y en un emulador Android (lectura, edición, formularios, guardado) |
 | Compilar para Android/iOS | `cargo check` pasa; **el enlazado y la ejecución en un teléfono no se han probado** (no hay NDK, Xcode ni Flutter donde se escribió) |
