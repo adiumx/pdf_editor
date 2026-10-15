@@ -51,6 +51,10 @@ char *pdfcore_paragraph(PdfDoc *doc, int page, int run_id);
 /* new_text is the paragraph's whole text; {"ok":true,"lines","added","removed","fallback_chars","warnings"} */
 char *pdfcore_required_fonts(PdfDoc *doc);
 char *pdfcore_register_font(PdfDoc *doc, const uint8_t *data, size_t len);
+char *pdfcore_replace_block_ex(PdfDoc *doc, int page, int block_id, const char *new_text, const char *params_json);
+char *pdfcore_replace_range(PdfDoc *doc, int page, int block_id, int start, int end, const char *new_text, const char *params_json);
+char *pdfcore_set_block_style(PdfDoc *doc, int page, int block_id, int start, int end, const char *params_json);
+char *pdfcore_block_chars(PdfDoc *doc, int page, int block_id);
 char *pdfcore_set_substitution(PdfDoc *doc, int policy);
 char *pdfcore_blocks(PdfDoc *doc, int page);
 char *pdfcore_replace_block(PdfDoc *doc, int page, int block_id, const char *new_text, int allow_fallback);

@@ -44,7 +44,7 @@ pub use forms::{Field, FieldKind, Signature, Widget};
 pub use image::{AddedImage, NewImage};
 pub use paragraph::{Paragraph, ParagraphEdit};
 pub use layout::{Arrange, FieldRef};
-pub use block::{Block, BlockEdit, BlockLine, StyleSpan};
+pub use block::{Block, BlockEdit, BlockLine, BlockOptions, StyleChange, StyleSpan};
 pub use items::{Item, ItemKind};
 pub use placement::PagePicture;
 pub use lines::{text_lines_of, Line, Word};

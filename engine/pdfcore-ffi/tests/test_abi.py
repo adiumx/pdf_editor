@@ -48,6 +48,10 @@ for name, args in {
     "pdfcore_set_fields_alignment": [ctypes.c_void_p, ctypes.c_char_p],
     "pdfcore_required_fonts": [ctypes.c_void_p],
     "pdfcore_register_font": [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t],
+    "pdfcore_replace_block_ex": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p],
+    "pdfcore_replace_range": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p],
+    "pdfcore_set_block_style": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_char_p],
+    "pdfcore_block_chars": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_set_substitution": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_blocks": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_replace_block": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
@@ -623,4 +627,31 @@ def test_required_fonts_and_a_registered_font():
     assert call("pdfcore_required_fonts", d.handle)["fonts"][0]["registered"]
     assert d.page()["runs"][0]["substitute_similarity"] == 100
     assert call("pdfcore_register_font", d.handle, b"nope", 4)["kind"] == "unsupported"
+    d.close()
+
+
+def test_block_styles_cross_the_boundary_and_an_independent_reader_agrees():
+    import pymupdf
+    d = Doc("producer_reportlab_ttf")
+    mixed = next(b for b in call("pdfcore_blocks", d.handle, 0)["blocks"] if b["text"].startswith("Para consultar"))
+    done = call("pdfcore_set_block_style", d.handle, 0, mixed["id"], 0, 4, json.dumps({"bold": True, "color": [1, 0, 0]}).encode())
+    assert done["ok"], done
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    spans = [sp for b in page.get_text("dict")["blocks"] for l in b["lines"] for sp in l["spans"]]
+    first = next(sp for sp in spans if sp["text"].startswith("Para"))
+    assert "Bold" in first["font"] and first["color"] == 0xFF0000, first
+    # Ids are stale after the edit; a fresh reading has boxes for every letter.
+    assert call("pdfcore_set_block_style", d.handle, 0, mixed["id"], 0, 4, b"{}")["kind"] == "stale_block"
+    mixed = next(b for b in call("pdfcore_blocks", d.handle, 0)["blocks"] if b["text"].startswith("Para consultar"))
+    boxes = call("pdfcore_block_chars", d.handle, 0, mixed["id"])["boxes"]
+    assert len(boxes) == len(mixed["text"])
+    other = next(b for b in call("pdfcore_blocks", d.handle, 0)["blocks"] if b["text"].startswith("Otro"))
+    longer = (mixed["text"] + " Mas texto para que el parrafo crezca. " * 8).encode()
+    done = call("pdfcore_replace_block_ex", d.handle, 0, mixed["id"], longer, json.dumps({"push_down": True, "justify": False}).encode())
+    assert done["ok"] and done["added"] >= 1 and done["warnings"] == [], done
+    moved = next(b for b in call("pdfcore_blocks", d.handle, 0)["blocks"] if b["text"].startswith("Otro"))
+    assert moved["display"][1] > other["display"][1] + 10
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    text = " ".join(page.get_text().split())
+    assert "Otro párrafo normal" in text and "Mas texto para que el parrafo crezca" in text
     d.close()

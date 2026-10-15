@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{Substitution, Block, Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
+use pdfcore::{BlockOptions, StyleChange, Substitution, Block, Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -367,13 +367,7 @@ pub unsafe extern "C" fn pdfcore_replace_block(
         match d.doc.replace_block(page, &block, new_text, allow_fallback != 0) {
             Ok(done) => {
                 edited(d);
-                json!({
-                    "ok": true, "lines": done.lines, "kept": done.kept, "rewritten": done.rewritten,
-                    "added": done.added, "removed": done.removed,
-                    "fallback_chars": done.fallback_chars.iter().collect::<String>(),
-                    "substitutes": substitutes_json(&done.substitutes),
-                    "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>(),
-                })
+                block_edit_json(&done)
             }
             Err(e) => failure(&e),
         }
@@ -437,6 +431,160 @@ pub unsafe extern "C" fn pdfcore_register_font(doc: *mut PdfDoc, data: *const u8
     guard(|| match d.doc.register_font(bytes) {
         Ok(f) => json!({ "ok": true, "family": f.family, "bold": f.bold, "italic": f.italic }),
         Err(e) => failure(&e),
+    })
+}
+
+fn block_options(p: &Value) -> BlockOptions {
+    BlockOptions {
+        allow_fallback: p.get("allow_fallback").and_then(Value::as_bool).unwrap_or(false),
+        justify: p.get("justify").and_then(Value::as_bool),
+        push_down: p.get("push_down").and_then(Value::as_bool).unwrap_or(false),
+    }
+}
+
+fn block_edit_json(done: &pdfcore::BlockEdit) -> Value {
+    json!({
+        "ok": true, "lines": done.lines, "kept": done.kept, "rewritten": done.rewritten,
+        "added": done.added, "removed": done.removed,
+        "fallback_chars": done.fallback_chars.iter().collect::<String>(),
+        "substitutes": substitutes_json(&done.substitutes),
+        "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>(),
+    })
+}
+
+/// The block `block_id` of the last `pdfcore_blocks` reading of `page`, or the stale error.
+fn block_of(d: &PdfDoc, page: usize, block_id: c_int) -> std::result::Result<Block, Value> {
+    d.blocks.get(&page).and_then(|b| b.get(block_id.max(0) as usize)).cloned().ok_or_else(|| {
+        json!({ "error": "ese párrafo ya no está donde se leyó: vuelve a leer la página", "kind": "stale_block" })
+    })
+}
+
+fn bad_params() -> Value {
+    json!({ "error": "parámetros no válidos", "kind": "bad_argument" })
+}
+
+/// As `pdfcore_replace_block`, with options as JSON: `{"allow_fallback":bool,"justify":null|bool,
+/// "push_down":bool}`. `push_down` moves what is below the block down by the room added lines take
+/// (what would not fit on the page stays and a `below_page` warning says so). `justify` forces
+/// the lines justified (`true`) or ragged (`false`).
+///
+/// # Safety
+/// `doc` must be a live handle; `new_text` and `params` NUL-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_replace_block_ex(
+    doc: *mut PdfDoc,
+    page: c_int,
+    block_id: c_int,
+    new_text: *const c_char,
+    params: *const c_char,
+) -> *mut c_char {
+    let (Some(d), Some(new_text), Some(params)) = (handle(doc), string_arg(new_text), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else { return bad_params() };
+        let page = page.max(0) as usize;
+        let block = match block_of(d, page, block_id) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        match d.doc.replace_block_with(page, &block, new_text, block_options(&p)) {
+            Ok(done) => {
+                edited(d);
+                block_edit_json(&done)
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// Replace the letters `[start, end)` (characters of the block's `text`) with `new_text`, which takes
+/// the style of the first letter it replaces. `params` as in `pdfcore_replace_block_ex`.
+///
+/// # Safety
+/// `doc` must be a live handle; `new_text` and `params` NUL-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_replace_range(
+    doc: *mut PdfDoc,
+    page: c_int,
+    block_id: c_int,
+    start: c_int,
+    end: c_int,
+    new_text: *const c_char,
+    params: *const c_char,
+) -> *mut c_char {
+    let (Some(d), Some(new_text), Some(params)) = (handle(doc), string_arg(new_text), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else { return bad_params() };
+        let page = page.max(0) as usize;
+        let block = match block_of(d, page, block_id) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        match d.doc.replace_range(page, &block, start.max(0) as usize, end.max(0) as usize, new_text, block_options(&p)) {
+            Ok(done) => {
+                edited(d);
+                block_edit_json(&done)
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// Change the style of the letters `[start, end)` of a block: `params` has `bold`, `italic` (bool),
+/// `size` (points), `color` ([r,g,b] in 0..1), all optional, plus the options of
+/// `pdfcore_replace_block_ex`. Bold/italic use the document's own font of that face when the page
+/// has one; otherwise a bundled one, which needs `allow_fallback` (`rejected` without it).
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_set_block_style(
+    doc: *mut PdfDoc,
+    page: c_int,
+    block_id: c_int,
+    start: c_int,
+    end: c_int,
+    params: *const c_char,
+) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else { return bad_params() };
+        let page = page.max(0) as usize;
+        let block = match block_of(d, page, block_id) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        let color = p.get("color").and_then(Value::as_array).and_then(|c| {
+            let v: Vec<f32> = c.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
+            (v.len() == 3).then(|| [v[0], v[1], v[2]])
+        });
+        let change = StyleChange {
+            bold: p.get("bold").and_then(Value::as_bool),
+            italic: p.get("italic").and_then(Value::as_bool),
+            size: p.get("size").and_then(Value::as_f64).map(|v| v as f32),
+            color,
+        };
+        match d.doc.set_style(page, &block, start.max(0) as usize, end.max(0) as usize, change, block_options(&p)) {
+            Ok(done) => {
+                edited(d);
+                block_edit_json(&done)
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// Where every character of a block's text is: `{"boxes":[[x0,y0,x1,y1],...]}`, one per character
+/// of `text` as a reader shows the page. For placing a caret or a selection; the space that joins
+/// two lines is an empty box at the end of the first.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_block_chars(doc: *mut PdfDoc, page: c_int, block_id: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| match block_of(d, page.max(0) as usize, block_id) {
+        Ok(b) => json!({ "boxes": b.char_boxes }),
+        Err(e) => e,
     })
 }
 

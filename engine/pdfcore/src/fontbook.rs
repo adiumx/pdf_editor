@@ -133,9 +133,14 @@ impl Document {
     /// the same family if there is one (similarity 100, or 90 in another style), else the
     /// closest bundled one.
     pub(crate) fn pick_font(&self, base_font: &str, flags: Option<u32>) -> Choice {
+        self.pick_font_styled(base_font, flags, None, None)
+    }
+
+    /// As [`pick_font`](Self::pick_font), with bold and italic stated instead of read from the name.
+    pub(crate) fn pick_font_styled(&self, base_font: &str, flags: Option<u32>, bold: Option<bool>, italic: Option<bool>) -> Choice {
         let normal = normalized(base_font);
-        let bold = ["bold", "black", "heavy", "demi"].iter().any(|w| normal.contains(w)) || flags.is_some_and(|f| f & (1 << 18) != 0);
-        let italic = ["italic", "oblique"].iter().any(|w| normal.contains(w)) || flags.is_some_and(|f| f & (1 << 6) != 0);
+        let bold = bold.unwrap_or_else(|| ["bold", "black", "heavy", "demi"].iter().any(|w| normal.contains(w)) || flags.is_some_and(|f| f & (1 << 18) != 0));
+        let italic = italic.unwrap_or_else(|| ["italic", "oblique"].iter().any(|w| normal.contains(w)) || flags.is_some_and(|f| f & (1 << 6) != 0));
         let of_family = || self.registered.iter().filter(|r| normal.starts_with(&r.family) || normal.contains(&r.family));
         if let Some(r) = of_family().find(|r| r.bold == bold && r.italic == italic) {
             return Choice { key: r.key, data: r.data, similarity: 100 };
@@ -143,7 +148,7 @@ impl Document {
         if let Some(r) = of_family().next() {
             return Choice { key: r.key, data: r.data, similarity: 90 };
         }
-        crate::fallback::pick(base_font, flags)
+        crate::fallback::pick_with(base_font, flags, Some(bold), Some(italic))
     }
 
     /// The font that would draw letters `run`'s font lacks, and how close it is (0-100): the

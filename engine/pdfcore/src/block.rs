@@ -74,6 +74,9 @@ pub struct Block {
     styles: Vec<RunStyle>,
     /// The style of every character of `text`.
     char_style: Vec<usize>,
+    /// Where every character of `text` is, `[x0, y0, x1, y1]` as a reader shows the page. The
+    /// space that joins two lines is an empty box at the end of the first.
+    pub char_boxes: Vec<[f32; 4]>,
 }
 
 #[derive(Debug, Clone)]
@@ -83,11 +86,15 @@ struct RunStyle {
     tf_size: f32,
     size: f32,
     fill: Vec<Operation>,
+    /// Drawn with a bundled (or registered) font instead of the page's: a bold or italic the
+    /// document has no font for. `font` is empty then.
+    bundled: Option<fallback::Choice>,
 }
 
 impl RunStyle {
     fn same(&self, other: &RunStyle) -> bool {
         self.font == other.font
+            && self.bundled.map(|b| b.key) == other.bundled.map(|b| b.key)
             && (self.tf_size - other.tf_size).abs() < 0.01
             && self.fill.len() == other.fill.len()
             && self.fill.iter().zip(&other.fill).all(|(a, b)| a.operator == b.operator && a.operands == b.operands)
@@ -228,6 +235,7 @@ impl Document {
         let mut run_line: Vec<usize> = Vec::new();
         let mut styles: Vec<RunStyle> = Vec::new();
         let mut char_style: Vec<usize> = Vec::new();
+        let mut char_boxes: Vec<[f32; 4]> = Vec::new();
         let mut text = String::new();
         let mut block_lines: Vec<BlockLine> = Vec::new();
         let mut display = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
@@ -237,6 +245,9 @@ impl Document {
             if n > 0 {
                 text.push(' ');
                 char_style.push(*char_style.last().unwrap_or(&0));
+                let end = char_boxes.last().map_or(line.display[0], |b: &[f32; 4]| b[2]);
+                let (top, bottom) = char_boxes.last().map_or((line.display[1], line.display[3]), |b| (b[1], b[3]));
+                char_boxes.push([end, top, end, bottom]);
             }
             for &ri in &line.runs {
                 let run = &runs[ri];
@@ -246,6 +257,7 @@ impl Document {
                     tf_size: run.tf_size,
                     size: run.size,
                     fill: run.fill.clone(),
+                    bundled: None,
                 };
                 let id = match styles.iter().position(|s| s.same(&style)) {
                     Some(id) => id,
@@ -261,6 +273,7 @@ impl Document {
             for c in &line.chars {
                 text.push(c.ch);
                 char_style.push(style_of_run.get(&c.run).copied().unwrap_or(0));
+                char_boxes.push([c.x0, c.y.0, c.x1, c.y.1]);
             }
             let base = self.to_display_point(page, runs[line.runs[0]].origin).map(|p| p.1).unwrap_or(line.display[3]);
             block_lines.push(BlockLine { text: line.text.clone(), display: line.display, baseline: base });
@@ -285,7 +298,7 @@ impl Document {
         let justified = rights.len() >= 2 && rights.iter().all(|r| (r - rights[0]).abs() <= 0.6);
         let first_line_indent = if block_lines.len() > 1 { block_lines[0].display[0] - block_lines[1].display[0] } else { 0.0 };
         let not_editable = block_runs.iter().find_map(|r| r.not_editable);
-        Block { text, display, lines: block_lines, spans, justified, first_line_indent, not_editable, runs: block_runs, run_line, styles, char_style }
+        Block { text, display, lines: block_lines, spans, justified, first_line_indent, not_editable, runs: block_runs, run_line, styles, char_style, char_boxes }
     }
 }
 
@@ -306,6 +319,13 @@ pub struct BlockEdit {
     /// How every letter the fonts lacked was drawn (see [`Substitute`]).
     pub substitutes: Vec<Substitute>,
     pub warnings: Vec<Warning>,
+}
+
+fn unchanged(block: &Block) -> BlockEdit {
+    BlockEdit {
+        lines: block.lines.len(), kept: block.lines.len(), rewritten: 0, added: 0, removed: 0,
+        fallback_chars: Vec::new(), substitutes: Vec::new(), warnings: Vec::new(),
+    }
 }
 
 /// Collects the operations of one line: strings and the numbers between them as a `TJ`.
@@ -442,6 +462,64 @@ fn tf(name: &str, size: f32) -> Operation {
     Operation::new("Tf", vec![Object::Name(name.as_bytes().to_vec()), Object::Real(size)])
 }
 
+/// What may be asked of an edit besides the new text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlockOptions {
+    /// Draw letters the fonts lack with a bundled one (see `Substitute`).
+    pub allow_fallback: bool,
+    /// `Some(true)` justifies the lines, `Some(false)` makes them ragged; `None` keeps what the
+    /// block had.
+    pub justify: Option<bool>,
+    /// When the block grows, move what is below it down by the room it takes (what would not fit
+    /// on the page stays and is reported).
+    pub push_down: bool,
+}
+
+/// A change of style for a range of letters; `None` leaves that property as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StyleChange {
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    /// New size on the page, in points.
+    pub size: Option<f32>,
+    /// New fill colour as red, green, blue in 0..=1.
+    pub color: Option<[f32; 3]>,
+}
+
+/// The styles a block will have and the style of each letter of its new text.
+struct Plan {
+    styles: Vec<RunStyle>,
+    letters: Vec<(char, usize)>,
+}
+
+/// Runs of white space become one space, and the ends are trimmed: a line break is a space.
+fn collapse_spaces(letters: Vec<(char, usize)>) -> Vec<(char, usize)> {
+    let mut out: Vec<(char, usize)> = Vec::with_capacity(letters.len());
+    for (c, s) in letters {
+        if c.is_whitespace() {
+            if out.last().is_some_and(|l| l.0 != ' ') {
+                out.push((' ', s));
+            }
+        } else {
+            out.push((c, s));
+        }
+    }
+    while out.last().is_some_and(|l| l.0 == ' ') {
+        out.pop();
+    }
+    out
+}
+
+/// The name of a face without its style words: `ABCDEF+Arial-BoldMT` and `Arial` share a core.
+fn style_core(base_font: &str) -> String {
+    let mut name: String =
+        base_font.rsplit('+').next().unwrap_or(base_font).chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    for word in ["semibold", "demibold", "extrabold", "bold", "black", "heavy", "italic", "oblique", "regular", "mt", "ps"] {
+        name = name.replace(word, "");
+    }
+    name
+}
+
 impl Document {
     /// Replace the whole text of a block, keeping the style of every letter that stays and
     /// laying the text out again within the width the block had. Fails with
@@ -449,59 +527,187 @@ impl Document {
     /// neither font has it), with `NotEditable` for text that cannot be reproduced; in both
     /// cases nothing changes. One step to undo.
     pub fn replace_block(&mut self, page: usize, block: &Block, new_text: &str, allow_fallback: bool) -> Result<BlockEdit> {
-        let wanted: String = new_text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if wanted == block.text {
-            return Ok(BlockEdit {
-                lines: block.lines.len(), kept: block.lines.len(), rewritten: 0, added: 0, removed: 0,
-                fallback_chars: Vec::new(), substitutes: Vec::new(), warnings: Vec::new(),
-            });
-        }
-        self.transaction(|d| d.relay_block(page, block, &wanted, allow_fallback))
+        self.replace_block_with(page, block, new_text, BlockOptions { allow_fallback, ..Default::default() })
     }
 
-    fn relay_block(&mut self, page: usize, block: &Block, wanted: &str, allow_fallback: bool) -> Result<BlockEdit> {
-        if let Some(reason) = block.not_editable {
-            return Err(Error::NotEditable(reason.into()));
+    /// As [`replace_block`](Self::replace_block), with [`BlockOptions`].
+    pub fn replace_block_with(&mut self, page: usize, block: &Block, new_text: &str, options: BlockOptions) -> Result<BlockEdit> {
+        let wanted: String = new_text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if wanted == block.text && options.justify.is_none_or(|j| j == block.justified) {
+            return Ok(unchanged(block));
         }
-        if wanted.chars().any(crate::text::is_rtl_char) {
-            return Err(Error::NotEditable("rtl_text".into()));
-        }
-        if wanted.is_empty() {
-            return Err(Error::Unsupported("el texto nuevo está vacío".into()));
-        }
-        let id = self.page_id(page)?;
         // Every letter keeps its style; what is typed takes the style of the letter before it.
         let old: Vec<char> = block.text.chars().collect();
         let new: Vec<char> = wanted.chars().collect();
         let carried = carry_styles(&old, &new, &block.char_style);
-        let letters: Vec<(char, usize)> = (0..new.len()).map(|i| (new[i], carried[i])).collect();
+        let plan = Plan { styles: block.styles.clone(), letters: new.iter().copied().zip(carried).collect() };
+        self.transaction(|d| d.relay_block(page, block, plan, options))
+    }
+
+    /// Replace the letters `[start, end)` of a block's text (counted in characters) with `text`,
+    /// which takes the style of the letter before it. The rest of the block is left as it is.
+    pub fn replace_range(&mut self, page: usize, block: &Block, start: usize, end: usize, text: &str, options: BlockOptions) -> Result<BlockEdit> {
+        let chars: Vec<char> = block.text.chars().collect();
+        if start > end || end > chars.len() {
+            return Err(Error::Rejected(format!("el rango {start}..{end} no está dentro del texto ({} letras)", chars.len())));
+        }
+        // The new letters take the style of the first letter they replace (of the one before them
+        // when nothing is replaced), as a word processor does with a selection.
+        let inherit = *block.char_style.get(start).filter(|_| start < end).or_else(|| block.char_style.get(start.wrapping_sub(1))).unwrap_or(&block.char_style[0]);
+        let mut letters: Vec<(char, usize)> = chars[..start].iter().copied().zip(block.char_style[..start].iter().copied()).collect();
+        letters.extend(text.chars().map(|c| (c, inherit)));
+        letters.extend(chars[end..].iter().copied().zip(block.char_style[end..].iter().copied()));
+        let letters = collapse_spaces(letters);
+        if letters.iter().map(|l| l.0).eq(chars.iter().copied()) && options.justify.is_none_or(|j| j == block.justified) {
+            return Ok(unchanged(block));
+        }
+        let plan = Plan { styles: block.styles.clone(), letters };
+        self.transaction(|d| d.relay_block(page, block, plan, options))
+    }
+
+    /// Change the style (bold, italic, size, colour) of the letters `[start, end)`; the block is
+    /// laid out again with the new widths. Bold and italic use the document's own font of that
+    /// face when it has one on the page, else a bundled one (needs `allow_fallback`). One undo step.
+    pub fn set_style(&mut self, page: usize, block: &Block, start: usize, end: usize, change: StyleChange, options: BlockOptions) -> Result<BlockEdit> {
+        let chars: Vec<char> = block.text.chars().collect();
+        if start >= end || end > chars.len() {
+            return Err(Error::Rejected(format!("el rango {start}..{end} no está dentro del texto ({} letras)", chars.len())));
+        }
+        if change == StyleChange::default() {
+            return Ok(unchanged(block));
+        }
+        let mut styles = block.styles.clone();
+        let mut char_style = block.char_style.clone();
+        let mut derived: HashMap<usize, usize> = HashMap::new();
+        for slot in &mut char_style[start..end] {
+            let id = match derived.get(slot) {
+                Some(id) => *id,
+                None => {
+                    let style = self.derive_style(page, &styles[*slot], &change)?;
+                    let id = match styles.iter().position(|s| s.same(&style)) {
+                        Some(found) => found,
+                        None => {
+                            styles.push(style);
+                            styles.len() - 1
+                        }
+                    };
+                    derived.insert(*slot, id);
+                    id
+                }
+            };
+            *slot = id;
+        }
+        if char_style == block.char_style && options.justify.is_none_or(|j| j == block.justified) {
+            return Ok(unchanged(block));
+        }
+        let plan = Plan { styles, letters: chars.into_iter().zip(char_style).collect() };
+        self.transaction(|d| d.relay_block(page, block, plan, options))
+    }
+
+    /// `style` with `change` applied.
+    fn derive_style(&self, page: usize, style: &RunStyle, change: &StyleChange) -> Result<RunStyle> {
+        let mut out = style.clone();
+        if let Some([r, g, b]) = change.color {
+            out.fill = vec![Operation::new("rg", vec![Object::Real(r), Object::Real(g), Object::Real(b)])];
+        }
+        if let Some(size) = change.size {
+            if size <= 0.0 || size > 1000.0 {
+                return Err(Error::Rejected("el tamaño no es válido".into()));
+            }
+            out.tf_size = style.tf_size * size / style.size.max(0.01);
+            out.size = size;
+        }
+        let (was_bold, was_italic) = weight_words(&style.base_font);
+        let (bold, italic) = (change.bold.unwrap_or(was_bold), change.italic.unwrap_or(was_italic));
+        if (bold, italic) != (was_bold, was_italic) {
+            let id = self.page_id(page)?;
+            let fonts = fonts_of(&self.pdf, &self.resources(id));
+            let core = style_core(&style.base_font);
+            let sibling = fonts.values().find(|f| f.not_editable().is_none() && style_core(&f.base_font) == core && weight_words(&f.base_font) == (bold, italic));
+            match sibling {
+                Some(f) => {
+                    out.font = f.resource.clone();
+                    out.base_font = f.base_font.clone();
+                    out.bundled = None;
+                }
+                None => {
+                    let flags = fonts.get(&style.font).and_then(|f| f.flags());
+                    let choice = self.pick_font_styled(&style.base_font, flags, Some(bold), Some(italic));
+                    out.font = String::new();
+                    out.base_font = choice.key.to_string();
+                    out.bundled = Some(choice);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn relay_block(&mut self, page: usize, block: &Block, plan: Plan, options: BlockOptions) -> Result<BlockEdit> {
+        let allow_fallback = options.allow_fallback;
+        let Plan { styles, letters } = plan;
+        if let Some(reason) = block.not_editable {
+            return Err(Error::NotEditable(reason.into()));
+        }
+        if letters.iter().any(|(c, _)| crate::text::is_rtl_char(*c)) {
+            return Err(Error::NotEditable("rtl_text".into()));
+        }
+        if letters.is_empty() {
+            return Err(Error::Unsupported("el texto nuevo está vacío".into()));
+        }
+        if !allow_fallback && letters.iter().any(|(_, s)| styles[*s].bundled.is_some()) {
+            return Err(Error::Rejected("el documento no trae esa variante de la fuente: permite la fuente de respaldo para usarla".into()));
+        }
+        let id = self.page_id(page)?;
+
+        // What is below the block, to move down with it.
+        let below: Vec<crate::items::Item> = if options.push_down {
+            self.page_items(page)?
+                .into_iter()
+                .filter(|it| {
+                    it.display[1] >= block.display[3] - 0.5
+                        && it.display[0] < block.display[2]
+                        && it.display[2] > block.display[0]
+                        && !it.runs.iter().any(|r| block.runs.iter().any(|m| m.op_index == r.op_index && m.xobject == r.xobject))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // Fonts the reader draws itself learn the letters they lack (same face, no bundled font).
-        let wanted: Vec<(String, String)> = block
-            .styles
+        let wanted: Vec<(String, String)> = styles
             .iter()
             .enumerate()
+            .filter(|(_, st)| st.bundled.is_none())
             .map(|(sid, st)| (st.font.clone(), letters.iter().filter(|(_, s)| *s == sid).map(|(c, _)| *c).collect::<String>()))
             .collect();
         let taught = self.teach_fonts(id, &wanted)?;
         let page_runs = self.text_runs(page)?;
         let mut fonts = fonts_of(&self.pdf, &self.resources(id));
-        for style in &block.styles {
+        for style in styles.iter().filter(|s| s.bundled.is_none()) {
             let font = fonts.get_mut(&style.font).ok_or_else(|| Error::Unsupported(format!("no se encontró la fuente {}", style.font)))?;
             font.allow_seen(page_runs.iter().filter(|r| r.font == style.font).flat_map(|r| r.glyphs.iter().map(|g| g.code)));
         }
 
+        // The bundled (or registered) font each style falls back to, or is drawn with.
+        let choices: Vec<fallback::Choice> =
+            styles.iter().map(|st| st.bundled.unwrap_or_else(|| self.pick_font(&st.base_font, fonts.get(&st.font).and_then(|f| f.flags())))).collect();
+
         // The new text has to be drawable before anything changes.
         let mut lacking: Vec<char> = Vec::new();
-        for (sid, style) in block.styles.iter().enumerate() {
+        for (sid, style) in styles.iter().enumerate() {
             let text: String = letters.iter().filter(|(_, s)| *s == sid).map(|(c, _)| *c).collect();
-            let font = &fonts[&style.font];
-            let unfit: Vec<char> = font.segments(&text).iter().filter(|(_, b)| b.is_none()).flat_map(|(t, _)| t.chars()).collect();
+            if text.is_empty() {
+                continue;
+            }
+            let unfit: Vec<char> = match style.bundled {
+                Some(_) => text.chars().collect(),
+                None => fonts[&style.font].segments(&text).iter().filter(|(_, b)| b.is_none()).flat_map(|(t, _)| t.chars()).collect(),
+            };
             if unfit.is_empty() {
                 continue;
             }
-            let (_, data) = self.pick_font(&style.base_font, font.flags()).into_pair();
-            let missing = if allow_fallback { fallback::lacks(data, &unfit.iter().collect::<String>()) } else { unfit };
+            let missing = if allow_fallback { fallback::lacks(choices[sid].data, &unfit.iter().collect::<String>()) } else { unfit };
             lacking.extend(missing);
         }
         if !lacking.is_empty() {
@@ -512,21 +718,23 @@ impl Document {
 
         // Width of a letter in its style (kerning ignored), cached.
         let mut cache: HashMap<(usize, char), f32> = HashMap::new();
-        // The bundled (or registered) font each style falls back to.
-        let choices: Vec<fallback::Choice> =
-            block.styles.iter().map(|st| self.pick_font(&st.base_font, fonts[&st.font].flags())).collect();
         let mut advance = |sid: usize, ch: char| -> f32 {
             *cache.entry((sid, ch)).or_insert_with(|| {
-                let style = &block.styles[sid];
-                let font = &fonts[&style.font];
+                let style = &styles[sid];
                 let piece = ch.to_string();
-                font.segments(&piece)
-                    .iter()
-                    .map(|(t, b)| match b {
-                        Some(bytes) => font.advance_of(bytes, style.size),
-                        None => fallback::advance(choices[sid].data, t, style.size),
-                    })
-                    .sum()
+                match style.bundled {
+                    Some(c) => fallback::advance(c.data, &piece, style.size),
+                    None => {
+                        let font = &fonts[&style.font];
+                        font.segments(&piece)
+                            .iter()
+                            .map(|(t, b)| match b {
+                                Some(bytes) => font.advance_of(bytes, style.size),
+                                None => fallback::advance(choices[sid].data, t, style.size),
+                            })
+                            .sum()
+                    }
+                }
             })
         };
 
@@ -536,6 +744,7 @@ impl Document {
         let first_left = block.lines[0].display[0];
         let right = block.lines.iter().map(|l| l.display[2]).fold(f32::MIN, f32::max);
         let flowing = old_count > 1;
+        let justified = options.justify.unwrap_or(block.justified);
         let left_of = |i: usize| if i == 0 { first_left } else { rest_left };
 
         // Greedy wrap by words.
@@ -573,25 +782,27 @@ impl Document {
             }
         }
 
-        // Which lines stay untouched: same text and same styles as the old line at that place.
+        // Which lines stay untouched: same text and same styles as the old line at that place
+        // (and, when justification changes, only the last line).
         let mut offsets = Vec::new();
         let mut at = 0usize;
         for l in &block.lines {
             offsets.push(at);
             at += l.text.chars().count() + 1;
         }
+        let new_count = lines.len();
+        let respace = justified != block.justified;
         let kept: Vec<bool> = lines
             .iter()
             .enumerate()
             .map(|(i, l)| {
-                i < old_count && {
+                i < old_count && !(respace && i + 1 < new_count) && {
                     let old_line: Vec<char> = block.lines[i].text.chars().collect();
                     let text_same = old_line.len() == l.len() && old_line.iter().zip(l).all(|(a, (b, _))| a == b);
                     text_same && (0..l.len()).all(|k| block.char_style.get(offsets[i] + k) == Some(&l[k].1))
                 }
             })
             .collect();
-        let new_count = lines.len();
 
         // Leading and baselines.
         let leading = if old_count > 1 {
@@ -625,7 +836,7 @@ impl Document {
             let avail = right - left_of(i);
             let natural: f32 = trimmed.iter().map(|&(ch, s)| advance(s, ch)).sum();
             let spaces = trimmed.iter().filter(|(ch, _)| *ch == ' ').count();
-            let stretch = flowing && block.justified && i + 1 < new_count && spaces > 0 && natural <= avail && natural >= 0.6 * avail;
+            let stretch = flowing && justified && i + 1 < new_count && spaces > 0 && natural <= avail && natural >= 0.6 * avail;
             let extra = if stretch { (avail - natural) / spaces as f32 } else { 0.0 };
 
             let (ox, oy) = apply(to_user, left_of(i), baseline_of(i));
@@ -640,9 +851,8 @@ impl Document {
                 let sid = trimmed[start].1;
                 let end = trimmed[start..].iter().position(|(_, s)| *s != sid).map_or(trimmed.len(), |n| start + n);
                 let text: String = trimmed[start..end].iter().map(|(c, _)| *c).collect();
-                let style = &block.styles[sid];
-                let font: &Font = &fonts[&style.font];
-                if current_fill.map_or(true, |f| !block.styles[f].same(style) || block.styles[f].fill.len() != style.fill.len()) {
+                let style = &styles[sid];
+                if current_fill.map_or(true, |f| !styles[f].same(style) || styles[f].fill.len() != style.fill.len()) {
                     for op in &style.fill {
                         w.op(op.clone());
                     }
@@ -650,7 +860,12 @@ impl Document {
                 }
                 let choice = choices[sid];
                 let (key, data) = (choice.key, choice.data);
-                for (piece, bytes) in font.segments(&text) {
+                let font: Option<&Font> = if style.bundled.is_some() { None } else { Some(&fonts[&style.font]) };
+                let pieces: Vec<(String, Option<Vec<u8>>)> = match font {
+                    Some(f) => f.segments(&text),
+                    None => vec![(text.clone(), None)],
+                };
+                for (piece, bytes) in pieces {
                     let (name, size) = match &bytes {
                         Some(_) => (style.font.clone(), style.tf_size),
                         None => {
@@ -665,8 +880,8 @@ impl Document {
                         current_font = Some((name, size));
                     }
                     let shift = -extra / style.size.max(0.1) * 1000.0;
-                    match bytes {
-                        Some(bytes) => {
+                    match (bytes, font) {
+                        (Some(bytes), Some(font)) => {
                             for g in font.decode(&bytes) {
                                 let code: Vec<u8> = (0..font.code_bytes().max(1)).rev().map(|k| (g.code >> (8 * k)) as u8).collect();
                                 w.bytes.extend(code);
@@ -675,7 +890,7 @@ impl Document {
                                 }
                             }
                         }
-                        None => {
+                        _ => {
                             let embedded = self.fallbacks.get_mut(key).expect("just ensured");
                             let (written, _) = embedded.write(&mut self.pdf, &piece, style.size)?;
                             used_fallback.extend(piece.chars());
@@ -712,12 +927,40 @@ impl Document {
             self.append_to_page(id, &Content { operations: ops })?;
         }
 
-        // Does the block, grown, run over what is below it?
+        // Does the block, grown, run over what is below it? Or push that down.
         let mut warnings = Vec::new();
-        if new_count > old_count {
+        let page_height = self.page_size(page)?.height;
+        let mut moved_below = false;
+        if new_count > old_count && options.push_down && !below.is_empty() {
+            let delta = (new_count - old_count) as f32 * leading;
+            // The lines drawn since may have shifted the page's operations: find each text run
+            // again by what it says and where it is.
+            let fresh = self.text_runs(page)?;
+            let mut moves: Vec<(crate::items::Item, (f32, f32))> = Vec::new();
+            for item in &below {
+                if item.display[3] + delta > page_height {
+                    warnings.push(Warning::BelowPage { by: item.display[3] + delta - page_height });
+                    continue;
+                }
+                let mut item = item.clone();
+                item.runs = item
+                    .runs
+                    .iter()
+                    .filter_map(|old| {
+                        fresh.iter().find(|r| {
+                            r.xobject == old.xobject && r.text == old.text && (r.origin.0 - old.origin.0).abs() < 0.5 && (r.origin.1 - old.origin.1).abs() < 0.5
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                moves.push((item, (0.0, delta)));
+            }
+            self.apply_moves(page, &moves, None)?;
+            moved_below = warnings.is_empty();
+        }
+        if new_count > old_count && !moved_below {
             let bottom = baseline_of(new_count - 1) + 0.25 * block.styles[block.char_style[0]].size;
             let area = [rest_left.min(first_left), block.lines[old_count - 1].baseline, right, bottom];
-            let page_height = self.page_size(page)?.height;
             let ours = |r: &TextRun| block.runs.iter().any(|m| m.op_index == r.op_index && m.xobject == r.xobject);
             for other in page_runs.iter().filter(|r| !ours(r) && r.render_mode != 3 && !r.text.trim().is_empty()) {
                 let d = other.display;
@@ -725,7 +968,7 @@ impl Document {
                     warnings.push(Warning::OverlapsText { text: other.text.clone() });
                 }
             }
-            if bottom > page_height {
+            if bottom > page_height && !warnings.iter().any(|w| matches!(w, Warning::BelowPage { .. })) {
                 warnings.push(Warning::BelowPage { by: bottom - page_height });
             }
         }
@@ -742,11 +985,11 @@ impl Document {
                 .iter()
                 .map(|&(ch, via)| Substitute { ch, via, font: block.styles[0].base_font.clone(), similarity: 100 })
                 .chain(used_fallback.iter().map(|&ch| Substitute {
-                ch,
-                via: Via::BundledFont,
-                font: fallback_key.unwrap_or_default().to_string(),
-                similarity: fallback_similarity,
-            }))
+                    ch,
+                    via: Via::BundledFont,
+                    font: fallback_key.unwrap_or_default().to_string(),
+                    similarity: fallback_similarity,
+                }))
                 .collect(),
             fallback_chars: used_fallback,
             warnings,

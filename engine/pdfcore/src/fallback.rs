@@ -83,6 +83,11 @@ fn contains_any(name: &str, words: &[&str]) -> bool {
 /// `/Flags`: an exact clone scores 100, a family named by kind (a serif, a monospaced one) 70-75,
 /// one guessed from the flags alone 55-60, nothing known 40.
 pub(crate) fn pick(base_font: &str, flags: Option<u32>) -> Choice {
+    pick_with(base_font, flags, None, None)
+}
+
+/// As [`pick`], with bold and italic stated instead of read from the name.
+pub(crate) fn pick_with(base_font: &str, flags: Option<u32>, bold: Option<bool>, italic: Option<bool>) -> Choice {
     let raw = base_font.rsplit('+').next().unwrap_or(base_font).to_ascii_lowercase();
     let name: String = raw.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     let sans_word = name.contains("sans") || name.contains("gothic");
@@ -112,16 +117,10 @@ pub(crate) fn pick(base_font: &str, flags: Option<u32>) -> Choice {
     } else {
         (Family::Sans, 40)
     };
-    let bold = contains_any(&name, &["bold", "black", "heavy", "demi"]) || flags.is_some_and(|f| f & (1 << 18) != 0);
-    let italic = contains_any(&name, &["italic", "oblique"]) || flags.is_some_and(|f| f & (1 << 6) != 0);
+    let bold = bold.unwrap_or_else(|| contains_any(&name, &["bold", "black", "heavy", "demi"]) || flags.is_some_and(|f| f & (1 << 18) != 0));
+    let italic = italic.unwrap_or_else(|| contains_any(&name, &["italic", "oblique"]) || flags.is_some_and(|f| f & (1 << 6) != 0));
     let (key, data) = by_family(family, bold, italic);
     Choice { key, data, similarity }
-}
-
-impl Choice {
-    pub fn into_pair(self) -> (&'static str, &'static [u8]) {
-        (self.key, self.data)
-    }
 }
 
 /// The bundled font closest in style to `base_font`, by name alone.

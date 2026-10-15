@@ -106,7 +106,7 @@ impl Document {
     }
 
     /// `targets`, when given, are the boxes fields end up in (so they can be resized as well).
-    fn apply_moves(&mut self, page: usize, moves: &[(Item, (f32, f32))], targets: Option<&[[f32; 4]]>) -> Result<()> {
+    pub(crate) fn apply_moves(&mut self, page: usize, moves: &[(Item, (f32, f32))], targets: Option<&[[f32; 4]]>) -> Result<()> {
         let mut text: Vec<(TextRun, (f32, f32))> = Vec::new();
         let mut pictures: Vec<(PagePicture, (f32, f32))> = Vec::new();
         for (n, (item, delta)) in moves.iter().enumerate() {

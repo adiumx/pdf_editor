@@ -276,6 +276,25 @@ lo que se escribe toma el de la letra anterior, las líneas que no cambian no se
 - Las listas y columnas de etiquetas (casillas, "Nombre / Teléfono") no se unen en un párrafo.
 - No verificado: PDF cuyo párrafo está dibujado con una línea por operador en orden distinto al visual.
 
+### Estilo por tramo, reemplazar un rango, empujar lo de abajo
+
+Sobre un `PdfBlock` (siempre uno por párrafo o por línea suelta):
+
+- `setBlockStyle(page, block, start, end, bold:, italic:, size:, color:)`: cambia el estilo de las letras
+  `[start, end)`. La negrita o cursiva usa la fuente del propio documento si la página la trae
+  (`Arial` → `Arial-BoldMT`); si no, una incluida, que exige `allowFallback` (si no: `rejected`) y sale
+  en `substitutes`. Tamaño y color se aplican a las letras elegidas y el párrafo se recoloca.
+- `replaceRange(page, block, start, end, text)`: reemplaza solo ese rango; el texto nuevo toma el
+  estilo de la primera letra que reemplaza (como una selección en un procesador de texto).
+- `replaceBlock(..., justify: true|false, pushDown: true)`: `justify` fuerza justificado o bandera;
+  `pushDown` baja lo que hay debajo (texto, imágenes, campos) tanto como ocupan las líneas añadidas;
+  lo que no cabría en la página se queda y avisa con `below_page`. Sin `pushDown`, si el párrafo
+  crece sobre otro texto, `overlaps_text`.
+- `blockChars(page, block)`: caja de cada letra para colocar el cursor o una selección.
+
+Todo es un paso de deshacer, y los ids caducan con cualquier edición. Si un texto no es un párrafo
+(una sola línea) funciona igual con un bloque de una línea.
+
 ## 6. Fidelidad de fuentes: qué se puede editar y cómo se avisa
 
 Cada `TextRun` trae (JSON → Dart): `font_kind` → `fontKind` (`embedded_full`, `embedded_subset`,

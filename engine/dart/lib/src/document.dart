@@ -66,6 +66,13 @@ class _Native {
         requiredFonts = lib.lookupFunction<_Str Function(_Handle), _Str Function(_Handle)>('pdfcore_required_fonts'),
         registerFont = lib.lookupFunction<_Str Function(_Handle, Pointer<Uint8>, Size),
             _Str Function(_Handle, Pointer<Uint8>, int)>('pdfcore_register_font'),
+        replaceBlockEx = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, _Str),
+            _Str Function(_Handle, int, int, _Str, _Str)>('pdfcore_replace_block_ex'),
+        replaceRange = lib.lookupFunction<_Str Function(_Handle, Int, Int, Int, Int, _Str, _Str),
+            _Str Function(_Handle, int, int, int, int, _Str, _Str)>('pdfcore_replace_range'),
+        setBlockStyle = lib.lookupFunction<_Str Function(_Handle, Int, Int, Int, Int, _Str),
+            _Str Function(_Handle, int, int, int, int, _Str)>('pdfcore_set_block_style'),
+        blockChars = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_block_chars'),
         setSubstitution = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_set_substitution'),
         blocks = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_blocks'),
         replaceBlock = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
@@ -119,6 +126,10 @@ class _Native {
   final _Str Function(_Handle, _Str) setFieldsAlignment;
   final _Str Function(_Handle) requiredFonts;
   final _Str Function(_Handle, Pointer<Uint8>, int) registerFont;
+  final _Str Function(_Handle, int, int, _Str, _Str) replaceBlockEx;
+  final _Str Function(_Handle, int, int, int, int, _Str, _Str) replaceRange;
+  final _Str Function(_Handle, int, int, int, int, _Str) setBlockStyle;
+  final _Str Function(_Handle, int, int) blockChars;
   final _Str Function(_Handle, int) setSubstitution;
   final _Str Function(_Handle, int) blocks;
   final _Str Function(_Handle, int, int, _Str, int) replaceBlock;
@@ -367,22 +378,72 @@ class PdfDocument implements Finalizable {
   /// Lay [block] out again with [text] as all of its text, keeping the style of
   /// each letter that stays; only the lines that change are rewritten. One undo
   /// step. Invalidates every id.
-  BlockResult replaceBlock(int page, PdfBlock block, String text, {bool allowFallback = false}) =>
-      replaceBlockById(page, block.id, text, allowFallback: allowFallback);
+  BlockResult replaceBlock(int page, PdfBlock block, String text,
+          {bool allowFallback = false, bool? justify, bool pushDown = false}) =>
+      replaceBlockById(page, block.id, text, allowFallback: allowFallback, justify: justify, pushDown: pushDown);
 
-  BlockResult replaceBlockById(int page, int blockId, String text, {bool allowFallback = false}) {
-    final j = _withString(text, (t) => _json(_n.replaceBlock(_live, page, blockId, t, allowFallback ? 1 : 0)));
-    return BlockResult(
-      (j['lines'] as num).toInt(),
-      (j['kept'] as num).toInt(),
-      (j['rewritten'] as num).toInt(),
-      (j['added'] as num).toInt(),
-      (j['removed'] as num).toInt(),
-      j['fallback_chars'] as String,
-      (j['warnings'] as List).map((w) => PdfWarning.fromJson(w as Map<String, dynamic>)).toList(),
-      substitutes: FontSubstitute.list(j['substitutes']),
-    );
+  /// [justify] forces the lines justified (`true`) or ragged (`false`); [pushDown] moves what is
+  /// below the block down by the room the added lines take (what would not fit on the page stays,
+  /// with a `below_page` warning).
+  BlockResult replaceBlockById(int page, int blockId, String text,
+      {bool allowFallback = false, bool? justify, bool pushDown = false}) {
+    final Map<String, dynamic> j;
+    if (justify == null && !pushDown) {
+      j = _withString(text, (t) => _json(_n.replaceBlock(_live, page, blockId, t, allowFallback ? 1 : 0)));
+    } else {
+      final params = jsonEncode({'allow_fallback': allowFallback, 'justify': justify, 'push_down': pushDown});
+      j = _withString(text, (t) => _withString(params, (p) => _json(_n.replaceBlockEx(_live, page, blockId, t, p))));
+    }
+    return _blockResult(j);
   }
+
+  /// Replace the letters `[start, end)` of [block]'s text (characters) with [text], which takes the
+  /// style of the first letter it replaces. One undo step.
+  BlockResult replaceRange(int page, PdfBlock block, int start, int end, String text,
+      {bool allowFallback = false, bool? justify, bool pushDown = false}) {
+    final params = jsonEncode({'allow_fallback': allowFallback, 'justify': justify, 'push_down': pushDown});
+    return _blockResult(_withString(
+        text, (t) => _withString(params, (p) => _json(_n.replaceRange(_live, page, block.id, start, end, t, p)))));
+  }
+
+  /// Change the style of the letters `[start, end)` of [block]: bold, italic, [size] in points,
+  /// [color] as `[r, g, b]` in 0..1. Bold and italic use the document's own font of that face when
+  /// the page has one; otherwise a bundled one, which needs [allowFallback] (`rejected` without it).
+  BlockResult setBlockStyle(int page, PdfBlock block, int start, int end,
+      {bool? bold,
+      bool? italic,
+      double? size,
+      List<double>? color,
+      bool allowFallback = false,
+      bool? justify,
+      bool pushDown = false}) {
+    final params = jsonEncode({
+      'bold': bold,
+      'italic': italic,
+      'size': size,
+      'color': color,
+      'allow_fallback': allowFallback,
+      'justify': justify,
+      'push_down': pushDown,
+    });
+    return _blockResult(_withString(params, (p) => _json(_n.setBlockStyle(_live, page, block.id, start, end, p))));
+  }
+
+  /// Where every character of [block]'s text is, `[x0, y0, x1, y1]` as the page is shown: for a
+  /// caret or a selection. The space that joins two lines is an empty box at the end of the first.
+  List<List<double>> blockChars(int page, PdfBlock block) =>
+      (_json(_n.blockChars(_live, page, block.id))['boxes'] as List).map((b) => _box(b)).toList();
+
+  BlockResult _blockResult(Map<String, dynamic> j) => BlockResult(
+        (j['lines'] as num).toInt(),
+        (j['kept'] as num).toInt(),
+        (j['rewritten'] as num).toInt(),
+        (j['added'] as num).toInt(),
+        (j['removed'] as num).toInt(),
+        j['fallback_chars'] as String,
+        (j['warnings'] as List).map((w) => PdfWarning.fromJson(w as Map<String, dynamic>)).toList(),
+        substitutes: FontSubstitute.list(j['substitutes']),
+      );
 
   /// The page as lines of words, top to bottom. Reads the page again, so the
   /// run ids in each line are the current ones.

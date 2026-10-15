@@ -105,8 +105,19 @@ class PdfSession {
 
   Future<List<PdfBlock>> blocks(int page) => _call<List<PdfBlock>>('blocks', [page]);
 
-  Future<BlockResult> replaceBlock(int page, PdfBlock block, String text, {bool allowFallback = false}) =>
-      _call<BlockResult>('replaceBlock', [page, block.id, text, allowFallback]);
+  Future<BlockResult> replaceBlock(int page, PdfBlock block, String text,
+          {bool allowFallback = false, bool? justify, bool pushDown = false}) =>
+      _call<BlockResult>('replaceBlock', [page, block.id, text, allowFallback, justify, pushDown]);
+
+  Future<BlockResult> replaceRange(int page, PdfBlock block, int start, int end, String text,
+          {bool allowFallback = false, bool? justify, bool pushDown = false}) =>
+      _call<BlockResult>('replaceRange', [page, block, start, end, text, allowFallback, justify, pushDown]);
+
+  Future<BlockResult> setBlockStyle(int page, PdfBlock block, int start, int end,
+          {bool? bold, bool? italic, double? size, List<double>? color, bool allowFallback = false, bool? justify, bool pushDown = false}) =>
+      _call<BlockResult>('setBlockStyle', [page, block, start, end, bold, italic, size, color, allowFallback, justify, pushDown]);
+
+  Future<List<List<double>>> blockChars(int page, PdfBlock block) => _call<List<List<double>>>('blockChars', [page, block]);
 
   Future<PdfParagraph?> paragraphOf(PageData page, TextRun run) => _call<PdfParagraph?>('paragraph', [page.index, run.id]);
 
@@ -257,7 +268,17 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
     case 'blocks':
       return doc.blocks(a[0] as int);
     case 'replaceBlock':
-      return doc.replaceBlockById(a[0] as int, a[1] as int, a[2] as String, allowFallback: a[3] as bool);
+      return doc.replaceBlockById(a[0] as int, a[1] as int, a[2] as String,
+          allowFallback: a[3] as bool, justify: a[4] as bool?, pushDown: a[5] as bool);
+    case 'replaceRange':
+      return doc.replaceRange(a[0] as int, a[1] as PdfBlock, a[2] as int, a[3] as int, a[4] as String,
+          allowFallback: a[5] as bool, justify: a[6] as bool?, pushDown: a[7] as bool);
+    case 'setBlockStyle':
+      return doc.setBlockStyle(a[0] as int, a[1] as PdfBlock, a[2] as int, a[3] as int,
+          bold: a[4] as bool?, italic: a[5] as bool?, size: a[6] as double?, color: (a[7] as List?)?.cast<double>(),
+          allowFallback: a[8] as bool, justify: a[9] as bool?, pushDown: a[10] as bool);
+    case 'blockChars':
+      return doc.blockChars(a[0] as int, a[1] as PdfBlock);
     case 'paragraph':
       return doc.paragraphById(a[0] as int, a[1] as int);
     case 'replaceParagraph':

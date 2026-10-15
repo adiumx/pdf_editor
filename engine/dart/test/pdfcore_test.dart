@@ -428,6 +428,28 @@ void main() {
     });
   });
 
+  group('block styles', () {
+    test('a range is made bold and red, replaced, and what is below is pushed down', () {
+      final doc = open('producer_reportlab_ttf');
+      addTearDown(doc.close);
+      var block = doc.blocks(0).firstWhere((b) => b.text.startsWith('Para consultar'));
+      doc.setBlockStyle(0, block, 0, 4, bold: true, color: [1, 0, 0]);
+      block = doc.blocks(0).firstWhere((b) => b.text.startsWith('Para consultar'));
+      expect(block.spans.first.bold, isTrue);
+      expect(block.spans.first.color, [1, 0, 0]);
+      expect(() => doc.setBlockStyle(0, block, 0, 4, italic: true),
+          throwsA(isA<PdfException>().having((e) => e.kind, 'kind', 'rejected')));
+      expect(doc.blockChars(0, block), hasLength(block.text.length));
+      doc.replaceRange(0, block, 0, 4, 'Para');
+      block = doc.blocks(0).firstWhere((b) => b.text.startsWith('Para consultar'));
+      final other = doc.blocks(0).firstWhere((b) => b.text.startsWith('Otro'));
+      doc.replaceBlock(0, block, '${block.text} ${'Texto agregado para ocupar mas lineas. ' * 8}', pushDown: true);
+      final moved = doc.blocks(0).firstWhere((b) => b.text.startsWith('Otro'));
+      expect(moved.display[1], greaterThan(other.display[1] + 10));
+      doc.replaceBlock(0, doc.blocks(0).first, doc.blocks(0).first.text, justify: false);
+    });
+  });
+
   group('blocks', () {
     test('a paragraph with bold words is one block and keeps its styles when edited', () async {
       final doc = open('producer_reportlab_ttf');
