@@ -97,6 +97,11 @@ class PdfSession {
 
   Future<void> arrangeFields(List<FieldRefs> fields, Arrange how) => _call<void>('arrangeFields', [fields, how]);
 
+  Future<List<PdfBlock>> blocks(int page) => _call<List<PdfBlock>>('blocks', [page]);
+
+  Future<BlockResult> replaceBlock(int page, PdfBlock block, String text, {bool allowFallback = false}) =>
+      _call<BlockResult>('replaceBlock', [page, block.id, text, allowFallback]);
+
   Future<PdfParagraph?> paragraphOf(PageData page, TextRun run) => _call<PdfParagraph?>('paragraph', [page.index, run.id]);
 
   Future<ParagraphResult> replaceParagraph(PageData page, TextRun run, String text, {bool allowFallback = false}) =>
@@ -236,6 +241,10 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
     case 'arrangeFields':
       doc.arrangeFields((a[0] as List).cast<FieldRefs>(), a[1] as Arrange);
       return null;
+    case 'blocks':
+      return doc.blocks(a[0] as int);
+    case 'replaceBlock':
+      return doc.replaceBlockById(a[0] as int, a[1] as int, a[2] as String, allowFallback: a[3] as bool);
     case 'paragraph':
       return doc.paragraphById(a[0] as int, a[1] as int);
     case 'replaceParagraph':

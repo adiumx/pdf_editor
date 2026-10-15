@@ -359,6 +359,18 @@ doc = pymupdf.open(stream=(OUT / "form.pdf").read_bytes(), filetype="pdf")
 doc[0].set_rotation(90)
 doc.save(OUT / "form_rotated.pdf", garbage=0, deflate=False)
 
+def wrap_text(text, width, font="helv", size=12):
+    lines, current = [], ""
+    for word in text.split():
+        trial = f"{current} {word}".strip()
+        if current and pymupdf.get_text_length(trial, fontname=font, fontsize=size) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = trial
+    return lines + [current]
+
+
 # 20. A page of separate things, placed irregularly like a design: three texts, two
 #     pictures, a three-line paragraph and a form field.
 doc = pymupdf.open()
@@ -368,7 +380,8 @@ page.insert_text((130, 150), "Dos mas largo", fontname="helv", fontsize=12)
 page.insert_text((200, 190), "Tres", fontname="helv", fontsize=12)
 page.insert_image(pymupdf.Rect(320, 90, 400, 130), filename=str(OUT / "img_rgb.jpg"))
 page.insert_image(pymupdf.Rect(350, 200, 390, 220), filename=str(OUT / "img_rgb.jpg"))
-for i, line in enumerate(["Primera linea del bloque", "segunda linea mas larga que la primera", "tercera"]):
+FLOW = "Primera linea del bloque que fluye de verdad, y su segunda linea mas larga que la primera, hasta tercera."
+for i, line in enumerate(wrap_text(FLOW, 190)):
     page.insert_text((60, 300 + 15 * i), line, fontname="helv", fontsize=12)
 w = pymupdf.Widget()
 w.field_type, w.field_name, w.rect, w.text_fontsize = pymupdf.PDF_WIDGET_TYPE_TEXT, "dato", pymupdf.Rect(60, 400, 160, 420), 11
@@ -575,6 +588,26 @@ content = (f"BT /F1 14 Tf 72 700 Td [{array}] TJ ET\n"
            "BT /F1 14 Tf 72 670 Td (Una segunda linea sin kerning) Tj ET")
 (OUT / "kerned.pdf").write_bytes(one_font_page(
     b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>", content.encode()))
+
+# 25. Blocks: a list of short lines that must NOT be taken for a paragraph, and a justified
+#     paragraph with a first-line indent and bold words (ReportLab).
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+for i, line in enumerate(["Nombre: Juan Perez", "Telefono: 555 123 4567", "Direccion: Calle Falsa 123, Colonia Centro, Ciudad", "Correo: juan@correo.com"]):
+    page.insert_text((72, 100 + 15 * i), line, fontname="helv", fontsize=12)
+doc.save(OUT / "blocks_list.pdf", garbage=0, deflate=False)
+try:
+    from reportlab.lib.pagesizes import A4 as _A4
+    from reportlab.platypus import SimpleDocTemplate as _Doc, Paragraph as _P
+    from reportlab.lib.styles import ParagraphStyle as _Style
+    from reportlab.lib.enums import TA_JUSTIFY as _J
+    _style = _Style("i", fontName="Helvetica", fontSize=11, leading=15, alignment=_J, firstLineIndent=24)
+    _Doc(str(OUT / "producer_reportlab_indent.pdf"), pagesize=_A4, leftMargin=72, rightMargin=72, topMargin=72, invariant=1).build(
+        [_P("Texto con <b>sangria en la primera linea</b> y justificado, lo bastante largo para llenar varias lineas completas "
+            "y mostrar que un parrafo sigue siendo un solo bloque aunque cambie de <b>tipo de letra</b> a mitad de linea, "
+            "como hace cualquier procesador de texto.", _style)])
+except ImportError:
+    pass
 
 # 23. Other producers, with the case that matters most: a justified paragraph with bold
 #     words in the middle. Needs reportlab (dev only); skipped when it is not installed.

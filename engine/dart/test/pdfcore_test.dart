@@ -410,6 +410,23 @@ void main() {
     });
   });
 
+  group('blocks', () {
+    test('a paragraph with bold words is one block and keeps its styles when edited', () async {
+      final doc = open('producer_reportlab_ttf');
+      addTearDown(doc.close);
+      final block = doc.blocks(0).firstWhere((b) => b.text.startsWith('Para consultar'));
+      expect(block.lines, hasLength(4));
+      expect(block.justified, isTrue);
+      final bold = [for (final s in block.spans.where((s) => s.bold)) block.text.substring(s.start, s.end)];
+      expect(bold.last, '55 893 24827');
+      final done = doc.replaceBlock(0, block, block.text.replaceFirst('24827', '24828'));
+      expect(done.rewritten, greaterThanOrEqualTo(1));
+      expect(() => doc.replaceBlock(0, block, 'x'), throwsA(isA<PdfException>().having((e) => e.isStaleBlock, 'stale', true)));
+      final after = doc.blocks(0).firstWhere((b) => b.text.startsWith('Para consultar'));
+      expect(after.spans.where((s) => s.bold).map((s) => after.text.substring(s.start, s.end)).last, '55 893 24828');
+    });
+  });
+
   group('paragraphs', () {
     test('a paragraph is found, re-laid out longer and shorter, and undone', () async {
       final doc = open('paragraph');

@@ -6,7 +6,6 @@ use crate::add::Align;
 use crate::error::{Error, Result};
 use crate::layout::{arranged, Arrange};
 use crate::lines::build_lines;
-use crate::paragraph::paragraph_runs;
 use crate::placement::PagePicture;
 use crate::text::TextRun;
 use crate::Document;
@@ -44,22 +43,35 @@ impl Document {
     /// lines), pictures and form fields, top to bottom.
     pub fn page_items(&self, page: usize) -> Result<Vec<Item>> {
         let runs = self.text_runs(page)?;
-        let lines = build_lines(&runs);
         let mut taken = vec![false; runs.len()];
         let mut items: Vec<Item> = Vec::new();
+        // Blocks first: a paragraph is one item however many strings and fonts draw it.
+        for block in self.blocks(page)? {
+            for r in &block.runs {
+                if let Some(i) = runs.iter().position(|x| x.op_index == r.op_index && x.xobject == r.xobject) {
+                    taken[i] = true;
+                }
+            }
+            items.push(Item {
+                kind: ItemKind::Text,
+                display: block.display,
+                text: block.text.clone(),
+                runs: block.runs.clone(),
+                picture: None,
+                field: None,
+            });
+        }
+        // What blocks leave out (text that runs sideways, say) goes in a line at a time.
+        let lines = build_lines(&runs);
         for line in &lines {
             // Text inside a form XObject cannot be moved, so a line with some is left out.
             if line.invisible || line.runs.iter().any(|&r| taken[r] || runs[r].xobject.is_some()) {
                 continue;
             }
-            let group: Vec<usize> = match line.runs.first().and_then(|&r| paragraph_runs(&runs, &lines, r)) {
-                Some(chain) if chain.iter().all(|&r| !taken[r]) => chain,
-                _ => line.runs.clone(),
-            };
-            for &r in &group {
+            for &r in &line.runs {
                 taken[r] = true;
             }
-            let members: Vec<TextRun> = group.iter().map(|&r| runs[r].clone()).collect();
+            let members: Vec<TextRun> = line.runs.iter().map(|&r| runs[r].clone()).collect();
             items.push(Item {
                 kind: ItemKind::Text,
                 display: union(members.iter().map(|m| m.display)),

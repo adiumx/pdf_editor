@@ -46,6 +46,8 @@ for name, args in {
     "pdfcore_space_lines": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
     "pdfcore_align_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int],
     "pdfcore_set_fields_alignment": [ctypes.c_void_p, ctypes.c_char_p],
+    "pdfcore_blocks": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_replace_block": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
     "pdfcore_replace_paragraph": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
     "pdfcore_rotate_page": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
@@ -422,6 +424,27 @@ def test_paragraphs_cross_the_boundary():
     # Ids are stale after the edit, like any edit.
     assert call("pdfcore_replace_paragraph", d.handle, 0, first, b"x", 0)["kind"] == "stale_run"
     assert call("pdfcore_replace_paragraph", d.handle, 0, 999, b"x", 0)["kind"] == "stale_run"
+    d.close()
+
+
+def test_blocks_keep_the_style_of_each_word():
+    import pymupdf
+    d = Doc("producer_reportlab_ttf")
+    blocks = call("pdfcore_blocks", d.handle, 0)["blocks"]
+    mixed = next(b for b in blocks if b["text"].startswith("Para consultar"))
+    assert mixed["justified"] and len(mixed["lines"]) == 4 and mixed["editable"]
+    bold = [mixed["text"][s["start"]:s["end"]] for s in mixed["spans"] if s["bold"]]
+    assert bold[-1] == "55 893 24827"
+    text = mixed["text"].replace("55 893 24827", "55 111 22233 y 9").encode()
+    done = call("pdfcore_replace_block", d.handle, 0, mixed["id"], text, 0)
+    assert done["ok"] and done["rewritten"] >= 1, done
+    # Ids are stale after the edit.
+    assert call("pdfcore_replace_block", d.handle, 0, mixed["id"], b"x", 0)["kind"] == "stale_block"
+    # An independent reader sees the new text, in bold where it was bold.
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    assert "55 111 22233 y 9" in " ".join(page.get_text().split())
+    spans = [sp for b in page.get_text("dict")["blocks"] for l in b.get("lines", []) for sp in l["spans"]]
+    assert any("Bold" in sp["font"] and "22233" in sp["text"] for sp in spans)
     d.close()
 
 

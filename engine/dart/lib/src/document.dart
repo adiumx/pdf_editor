@@ -63,6 +63,9 @@ class _Native {
             'pdfcore_align_paragraph'),
         setFieldsAlignment =
             lib.lookupFunction<_Str Function(_Handle, _Str), _Str Function(_Handle, _Str)>('pdfcore_set_fields_alignment'),
+        blocks = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_blocks'),
+        replaceBlock = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
+            _Str Function(_Handle, int, int, _Str, int)>('pdfcore_replace_block'),
         paragraph = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_paragraph'),
         replaceParagraph = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
             _Str Function(_Handle, int, int, _Str, int)>('pdfcore_replace_paragraph'),
@@ -110,6 +113,8 @@ class _Native {
   final _Str Function(_Handle, int, _Str) spaceLines;
   final _Str Function(_Handle, int, int, int) alignParagraph;
   final _Str Function(_Handle, _Str) setFieldsAlignment;
+  final _Str Function(_Handle, int) blocks;
+  final _Str Function(_Handle, int, int, _Str, int) replaceBlock;
   final _Str Function(_Handle, int, int) paragraph;
   final _Str Function(_Handle, int, int, _Str, int) replaceParagraph;
   final _Str Function(_Handle, int, Pointer<Uint8>, int, _Str) addImage;
@@ -315,6 +320,31 @@ class PdfDocument implements Finalizable {
     final j = _withString(text, (t) => _json(_n.replaceParagraph(_live, page, runId, t, allowFallback ? 1 : 0)));
     return ParagraphResult(
       (j['lines'] as num).toInt(),
+      (j['added'] as num).toInt(),
+      (j['removed'] as num).toInt(),
+      j['fallback_chars'] as String,
+      (j['warnings'] as List).map((w) => PdfWarning.fromJson(w as Map<String, dynamic>)).toList(),
+    );
+  }
+
+  /// The paragraphs of [page], each as ONE block with the style of every stretch
+  /// of its text (a paragraph with bold words is not split). Ids are good until
+  /// the next edit.
+  List<PdfBlock> blocks(int page) =>
+      (_json(_n.blocks(_live, page))['blocks'] as List).map((b) => PdfBlock.fromJson(b as Map<String, dynamic>)).toList();
+
+  /// Lay [block] out again with [text] as all of its text, keeping the style of
+  /// each letter that stays; only the lines that change are rewritten. One undo
+  /// step. Invalidates every id.
+  BlockResult replaceBlock(int page, PdfBlock block, String text, {bool allowFallback = false}) =>
+      replaceBlockById(page, block.id, text, allowFallback: allowFallback);
+
+  BlockResult replaceBlockById(int page, int blockId, String text, {bool allowFallback = false}) {
+    final j = _withString(text, (t) => _json(_n.replaceBlock(_live, page, blockId, t, allowFallback ? 1 : 0)));
+    return BlockResult(
+      (j['lines'] as num).toInt(),
+      (j['kept'] as num).toInt(),
+      (j['rewritten'] as num).toInt(),
       (j['added'] as num).toInt(),
       (j['removed'] as num).toInt(),
       j['fallback_chars'] as String,

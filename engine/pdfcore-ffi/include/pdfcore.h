@@ -49,6 +49,8 @@ uint8_t *pdfcore_extract_pages(PdfDoc *doc, const int *pages, size_t n_pages, si
 /* {"paragraph":null} or {"paragraph":{"text","runs","display"}} */
 char *pdfcore_paragraph(PdfDoc *doc, int page, int run_id);
 /* new_text is the paragraph's whole text; {"ok":true,"lines","added","removed","fallback_chars","warnings"} */
+char *pdfcore_blocks(PdfDoc *doc, int page);
+char *pdfcore_replace_block(PdfDoc *doc, int page, int block_id, const char *new_text, int allow_fallback);
 char *pdfcore_replace_paragraph(PdfDoc *doc, int page, int run_id, const char *new_text, int allow_fallback);
 /* box in the page as shown; {"ok":true,"display":[x0,y0,x1,y1]} with where it ended up */
 char *pdfcore_move_field(PdfDoc *doc, const char *name, int widget, float x0, float y0, float x1, float y1);

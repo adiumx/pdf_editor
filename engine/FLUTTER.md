@@ -261,6 +261,21 @@ Qué hay que tener presente:
 - Tras cualquier operación de las anteriores, los `run.id` caducan: vuelve a leer la página.
 - Ajustar campos a una cuadrícula con `moveField` deja un paso de deshacer por campo; `arrangeFields` sí es uno solo, pero no usa la cuadrícula.
 
+### Párrafos con varios estilos: un solo recuadro
+
+Un párrafo que mezcla negritas, tamaños o colores NO se parte en recuadros: es un
+`PdfBlock` con `text` completo y `spans` (`start`/`end` en caracteres, `bold`, `italic`,
+`size`, `color`). Muestra un solo cuadro de edición y, al terminar, llama a
+`doc.replaceBlock(page, block, nuevoTexto)`: cada letra que se queda conserva su estilo,
+lo que se escribe toma el de la letra anterior, las líneas que no cambian no se tocan
+(`kept`) y el justificado y la sangría se mantienen. Es un paso de deshacer.
+
+- JSON: `pdfcore_blocks` → `{"blocks":[{id,text,display,lines,spans,justified,first_line_indent,editable,reason}]}`;
+  `pdfcore_replace_block` → `{ok,lines,kept,rewritten,added,removed,fallback_chars,warnings}`.
+- Error `stale_block` (`PdfException.isStaleBlock`): los ids caducan con cualquier edición; vuelve a llamar a `blocks`.
+- Las listas y columnas de etiquetas (casillas, "Nombre / Teléfono") no se unen en un párrafo.
+- No verificado: PDF cuyo párrafo está dibujado con una línea por operador en orden distinto al visual.
+
 ## 6. Fidelidad de fuentes: qué se puede editar y cómo se avisa
 
 Cada `TextRun` trae (JSON → Dart): `font_kind` → `fontKind` (`embedded_full`, `embedded_subset`,

@@ -28,7 +28,7 @@ fn a_page_lists_its_texts_pictures_and_fields() {
     // The paragraph is one item of three lines.
     let block = item_with(&items, "Primera linea");
     assert_eq!(block.runs.len(), 3);
-    assert_eq!(block.text, "Primera linea del bloque segunda linea mas larga que la primera tercera");
+    assert_eq!(block.text, "Primera linea del bloque que fluye de verdad, y su segunda linea mas larga que la primera, hasta tercera.");
     assert!(items.iter().filter(|i| i.kind == ItemKind::Image).all(|i| i.picture.is_some()));
     let tops: Vec<f32> = items.iter().map(|i| i.display[1]).collect();
     assert!(tops.windows(2).all(|w| w[0] <= w[1]), "{tops:?}");
@@ -197,7 +197,7 @@ fn a_paragraph_aligns_its_lines_left_centre_or_right() {
         let [_, _, right, _] = doc.paragraph_of(0, &run).unwrap().unwrap().display;
         doc.align_paragraph(0, &run, align).unwrap();
         let runs = doc.text_runs(0).unwrap();
-        let lines: Vec<[f32; 4]> = ["Primera", "segunda", "tercera"].iter().map(|s| runs.iter().find(|r| r.text.starts_with(s)).unwrap().display).collect();
+        let lines: Vec<[f32; 4]> = ["Primera", "de verdad", "larga que"].iter().map(|s| runs.iter().find(|r| r.text.starts_with(s)).unwrap().display).collect();
         assert!(check(&lines[0], &lines[1]) && check(&lines[1], &lines[2]), "{align:?}: {lines:?}");
         // The block keeps its extent: the longest line stays where it was.
         assert!(lines.iter().map(|l| l[2]).fold(f32::MIN, f32::max) <= right + 0.1);

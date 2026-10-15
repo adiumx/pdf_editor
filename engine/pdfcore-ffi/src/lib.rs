@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
+use pdfcore::{Block, Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -27,6 +27,8 @@ pub struct PdfDoc {
     reading: HashMap<usize, Vec<TextRun>>,
     /// What `pdfcore_items` last returned for each page.
     items: HashMap<usize, Vec<Item>>,
+    /// What `pdfcore_blocks` last returned for each page.
+    blocks: HashMap<usize, Vec<Block>>,
 }
 
 thread_local! {
@@ -119,7 +121,7 @@ unsafe fn open_with(data: *const u8, len: usize, password: &str) -> *mut PdfDoc 
     }
     let bytes = std::slice::from_raw_parts(data, len);
     match catch_unwind(|| Document::open_with_password(bytes, password)) {
-        Ok(Ok(doc)) => Box::into_raw(Box::new(PdfDoc { doc, reading: HashMap::new(), items: HashMap::new() })),
+        Ok(Ok(doc)) => Box::into_raw(Box::new(PdfDoc { doc, reading: HashMap::new(), items: HashMap::new(), blocks: HashMap::new() })),
         Ok(Err(e)) => {
             remember(&e.to_string(), failure(&e)["kind"].as_str().unwrap_or("pdf"));
             std::ptr::null_mut()
@@ -290,6 +292,80 @@ pub unsafe extern "C" fn pdfcore_replace_paragraph(
                 edited(d);
                 json!({
                     "ok": true, "lines": done.lines, "added": done.added, "removed": done.removed,
+                    "fallback_chars": done.fallback_chars.iter().collect::<String>(),
+                    "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>(),
+                })
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// The paragraphs of a page, each with the style of every stretch of its text:
+/// `{"blocks":[{"id","text","display","lines":[{"text","display","baseline"}],
+/// "spans":[{"start","end","font","base_font","size","color","bold","italic"}],
+/// "justified","first_line_indent","editable","reason"?}]}`. `start`/`end` count characters
+/// of `text`. Ids are good until the next edit.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_blocks(doc: *mut PdfDoc, page: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let blocks = match d.doc.blocks(page) {
+            Ok(b) => b,
+            Err(e) => return failure(&e),
+        };
+        let listed: Vec<Value> = blocks
+            .iter()
+            .enumerate()
+            .map(|(id, b)| {
+                json!({
+                    "id": id, "text": b.text, "display": b.display,
+                    "lines": b.lines.iter().map(|l| json!({ "text": l.text, "display": l.display, "baseline": l.baseline })).collect::<Vec<_>>(),
+                    "spans": b.spans.iter().map(|s| json!({
+                        "start": s.start, "end": s.end, "font": s.font, "base_font": s.base_font,
+                        "size": s.size, "color": s.color, "bold": s.bold, "italic": s.italic,
+                    })).collect::<Vec<_>>(),
+                    "justified": b.justified, "first_line_indent": b.first_line_indent,
+                    "editable": b.not_editable.is_none(), "reason": b.not_editable,
+                })
+            })
+            .collect();
+        d.blocks.insert(page, blocks);
+        json!({ "blocks": listed })
+    })
+}
+
+/// Lay a block out again with `new_text` as its whole text, every letter keeping its style
+/// (typed letters take the style of the one before): `{"ok":true,"lines","kept","rewritten",
+/// "added","removed","fallback_chars","warnings"}`. Error kind `stale_block` when the block
+/// was read before an edit.
+///
+/// # Safety
+/// `doc` must be a live handle; `new_text` a NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_replace_block(
+    doc: *mut PdfDoc,
+    page: c_int,
+    block_id: c_int,
+    new_text: *const c_char,
+    allow_fallback: c_int,
+) -> *mut c_char {
+    let (Some(d), Some(new_text)) = (handle(doc), string_arg(new_text)) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let Some(block) = d.blocks.get(&page).and_then(|b| b.get(block_id.max(0) as usize)).cloned() else {
+            return json!({ "error": "ese párrafo ya no está donde se leyó: vuelve a leer la página", "kind": "stale_block" });
+        };
+        match d.doc.replace_block(page, &block, new_text, allow_fallback != 0) {
+            Ok(done) => {
+                edited(d);
+                json!({
+                    "ok": true, "lines": done.lines, "kept": done.kept, "rewritten": done.rewritten,
+                    "added": done.added, "removed": done.removed,
                     "fallback_chars": done.fallback_chars.iter().collect::<String>(),
                     "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>(),
                 })
@@ -665,6 +741,7 @@ pub unsafe extern "C" fn pdfcore_fields(doc: *mut PdfDoc) -> *mut c_char {
 fn edited(d: &mut PdfDoc) {
     d.reading.clear();
     d.items.clear();
+    d.blocks.clear();
 }
 
 fn warning_json(w: &Warning) -> Value {

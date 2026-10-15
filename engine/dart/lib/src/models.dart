@@ -8,7 +8,7 @@ class PdfException implements Exception {
 
   /// `pdf`, `no_such_page`, `missing_glyphs`, `no_such_field`, `rejected`,
   /// `unsupported`, `not_editable`, `password_required`, `wrong_password`,
-  /// `stale_run`, `stale_item`, `bad_argument` or `panic`.
+  /// `stale_run`, `stale_item`, `stale_block`, `bad_argument` or `panic`.
   final String kind;
   final String message;
 
@@ -23,6 +23,8 @@ class PdfException implements Exception {
 
   /// The run ids of the last reading are no longer valid: read the page again.
   bool get isStaleRun => kind == 'stale_run';
+  /// The block ids of the last `blocks` reading are no longer valid.
+  bool get isStaleBlock => kind == 'stale_block';
   bool get isMissingGlyphs => kind == 'missing_glyphs';
 
   factory PdfException.fromJson(Map<String, dynamic> json) => PdfException(
@@ -507,4 +509,94 @@ class History {
   History(this.canUndo, this.canRedo);
   final bool canUndo;
   final bool canRedo;
+}
+
+/// A stretch of a [PdfBlock]'s text in one style (JSON `spans`). `start`/`end`
+/// count characters of [PdfBlock.text], `[start, end)`.
+class StyleSpan {
+  StyleSpan(this.start, this.end, this.font, this.baseFont, this.size, this.color, this.bold, this.italic);
+  final int start;
+  final int end;
+  final String font;
+  final String baseFont;
+  final double size;
+
+  /// Red, green, blue in 0..1 when the fill is a plain colour.
+  final List<double>? color;
+
+  /// From the font's name; show them in your editor as B / I.
+  final bool bold;
+  final bool italic;
+
+  factory StyleSpan.fromJson(Map<String, dynamic> j) => StyleSpan(
+        (j['start'] as num).toInt(),
+        (j['end'] as num).toInt(),
+        j['font'] as String,
+        j['base_font'] as String,
+        (j['size'] as num).toDouble(),
+        j['color'] == null ? null : _box(j['color']),
+        j['bold'] as bool,
+        j['italic'] as bool,
+      );
+}
+
+class BlockLine {
+  BlockLine(this.text, this.display, this.baseline);
+  final String text;
+  final List<double> display;
+  final double baseline;
+}
+
+/// A paragraph (or a single line) as ONE unit, even when it mixes fonts, sizes
+/// or colours: edit it with [PdfDocument.replaceBlock]; every letter that stays
+/// keeps its style, typed letters take the style of the letter before them.
+class PdfBlock {
+  PdfBlock(this.id, this.text, this.display, this.lines, this.spans, this.justified, this.firstLineIndent,
+      this.editable, this.reason);
+
+  /// Good until the next edit (then `stale_block`).
+  final int id;
+
+  /// The lines joined by single spaces.
+  final String text;
+  final List<double> display;
+  final List<BlockLine> lines;
+  final List<StyleSpan> spans;
+
+  /// Re-laid text is justified too.
+  final bool justified;
+
+  /// Negative: hanging.
+  final double firstLineIndent;
+  final bool editable;
+
+  /// When not [editable]: `type3`, `vertical_writing`, `symbolic_font` or `rtl_text`.
+  final String? reason;
+
+  factory PdfBlock.fromJson(Map<String, dynamic> j) => PdfBlock(
+        (j['id'] as num).toInt(),
+        j['text'] as String,
+        _box(j['display']),
+        (j['lines'] as List)
+            .map((l) => BlockLine(l['text'] as String, _box(l['display']), (l['baseline'] as num).toDouble()))
+            .toList(),
+        (j['spans'] as List).map((s) => StyleSpan.fromJson(s as Map<String, dynamic>)).toList(),
+        j['justified'] as bool,
+        (j['first_line_indent'] as num).toDouble(),
+        j['editable'] as bool,
+        j['reason'] as String?,
+      );
+}
+
+/// What `replaceBlock` did (JSON `lines`, `kept`, `rewritten`, `added`, `removed`,
+/// `fallback_chars`, `warnings`). Lines [kept] are not touched at all.
+class BlockResult {
+  BlockResult(this.lines, this.kept, this.rewritten, this.added, this.removed, this.fallbackChars, this.warnings);
+  final int lines;
+  final int kept;
+  final int rewritten;
+  final int added;
+  final int removed;
+  final String fallbackChars;
+  final List<PdfWarning> warnings;
 }
