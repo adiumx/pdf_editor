@@ -25,6 +25,7 @@ mod lines;
 mod reflow;
 mod search;
 mod standard_widths;
+mod substitute;
 mod text;
 
 use lopdf::{Dictionary, Document as Raw, Object, ObjectId};
@@ -35,6 +36,7 @@ pub use error::{Error, Result};
 pub use font::{glyph_name_text, Font, FontClass, FontKind, Glyph};
 pub use add::{Added, Align, Anchor, NewText};
 pub use edit::{ReplaceOptions, Replaced};
+pub use substitute::{Substitute, Via};
 pub use reflow::{Alignment, Reflow, Warning};
 pub use forms::{Field, FieldKind, Signature, Widget};
 pub use image::{AddedImage, NewImage};

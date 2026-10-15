@@ -366,6 +366,25 @@ impl Font {
         }
     }
 
+    /// A font the reader draws from its own copy of the face (a standard one, or one that is not
+    /// embedded): letters its encoding lacks can be added to the encoding and the reader will
+    /// still draw them in that face.
+    pub fn can_extend_encoding(&self) -> bool {
+        self.kind == FontKind::Simple && !self.embedded && !self.type3 && !self.symbols && !self.base_font.starts_with("Symbol")
+    }
+
+    /// Codes of a simple font no letter is assigned to, high ones first so that nothing
+    /// that reads the low ones as ASCII is confused.
+    pub fn unused_codes(&self) -> Vec<u32> {
+        (128..256u32).chain(1..32).filter(|c| self.simple_text.get(*c as usize).map_or(true, |t| t.is_none())).collect()
+    }
+
+    /// Whether the font states a width for `code` (a font with no `/Widths` at all is measured
+    /// from its family, so it always does).
+    pub fn has_width(&self, code: u32) -> bool {
+        self.widths.is_empty() || code.checked_sub(self.first_char).is_some_and(|i| (i as usize) < self.widths.len())
+    }
+
     pub fn code_bytes(&self) -> usize {
         self.code_bytes
     }
@@ -611,6 +630,16 @@ pub fn glyph_name_text(name: &str) -> Option<String> {
         text.push_str(&component_text(part)?);
     }
     Some(text)
+}
+
+/// The Adobe glyph name of a letter (`ñ` is `ntilde`), the plainest one the list has.
+pub fn glyph_name_of(letter: char) -> Option<&'static str> {
+    let wanted = letter.to_string();
+    encodings_data::AGL
+        .iter()
+        .filter(|(name, text)| *text == wanted && !name.starts_with("uni") && !name.ends_with("small") && !name.contains('.'))
+        .map(|(name, _)| *name)
+        .min_by_key(|n| n.len())
 }
 
 fn component_text(part: &str) -> Option<String> {

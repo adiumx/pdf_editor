@@ -367,6 +367,7 @@ pub unsafe extern "C" fn pdfcore_replace_block(
                     "ok": true, "lines": done.lines, "kept": done.kept, "rewritten": done.rewritten,
                     "added": done.added, "removed": done.removed,
                     "fallback_chars": done.fallback_chars.iter().collect::<String>(),
+                    "substitutes": substitutes_json(&done.substitutes),
                     "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>(),
                 })
             }
@@ -744,6 +745,11 @@ fn edited(d: &mut PdfDoc) {
     d.blocks.clear();
 }
 
+/// `[{"char":"ñ","via":"encoding"|"bundled_font"}]`: letters the original font lacked.
+fn substitutes_json(list: &[pdfcore::Substitute]) -> Vec<Value> {
+    list.iter().map(|s| json!({ "char": s.ch.to_string(), "via": s.via.as_str() })).collect()
+}
+
 fn warning_json(w: &Warning) -> Value {
     match w {
         Warning::ExceedsPage { by } => json!({ "kind": "exceeds_page", "by": by }),
@@ -777,6 +783,7 @@ fn replace(d: &mut PdfDoc, page: c_int, run_id: c_int, new_text: &str, allow_fal
             json!({
                 "ok": true, "old_width": done.old_width, "new_width": done.new_width,
                 "fallback_chars": done.fallback_chars.iter().collect::<String>(),
+                "substitutes": substitutes_json(&done.substitutes),
                 "reread": done.reread, "moved": done.moved,
                 "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>(),
             })

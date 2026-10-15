@@ -572,3 +572,20 @@ def test_encodings_agree_with_an_independent_reader_before_and_after_editing():
         assert "error" not in reply and not reply["fallback_chars"], (fixture, reply)
         assert oracle_text(d.save()) == unicodedata.normalize("NFC", new_text), (fixture, oracle_text(d.save()))
         d.close()
+
+
+def test_a_standard_font_keeps_its_face_for_a_new_letter():
+    import pymupdf
+    d = Doc("font_standardenc")
+    d.page()
+    done = d.replace(0, "mañana")
+    assert done["ok"] and done["fallback_chars"] == ""
+    assert done["substitutes"] == [{"char": "ñ", "via": "encoding"}], done
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    spans = [sp for b in page.get_text("dict")["blocks"] for l in b["lines"] for sp in l["spans"]]
+    assert "mañana" in " ".join(sp["text"] for sp in spans)
+    # An independent renderer draws ink where the letter is (not a box, not blank).
+    clip = page.search_for("mañana")[0]
+    pix = page.get_pixmap(clip=clip, dpi=200)
+    assert sum(1 for i in range(0, len(pix.samples), pix.n) if pix.samples[i] < 128) > 50
+    d.close()

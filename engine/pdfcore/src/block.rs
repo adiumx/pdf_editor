@@ -22,6 +22,7 @@ use crate::fallback::{self, Embedded};
 use crate::font::Font;
 use crate::lines::{build_lines, is_upright, Line};
 use crate::reflow::Warning;
+use crate::substitute::{Substitute, Via};
 use crate::text::{apply, fonts_of, invert, TextRun};
 use crate::Document;
 
@@ -302,6 +303,8 @@ pub struct BlockEdit {
     pub removed: usize,
     /// Letters drawn with the bundled font because the document's font lacks them.
     pub fallback_chars: Vec<char>,
+    /// How every letter the fonts lacked was drawn (see [`Substitute`]).
+    pub substitutes: Vec<Substitute>,
     pub warnings: Vec<Warning>,
 }
 
@@ -450,7 +453,7 @@ impl Document {
         if wanted == block.text {
             return Ok(BlockEdit {
                 lines: block.lines.len(), kept: block.lines.len(), rewritten: 0, added: 0, removed: 0,
-                fallback_chars: Vec::new(), warnings: Vec::new(),
+                fallback_chars: Vec::new(), substitutes: Vec::new(), warnings: Vec::new(),
             });
         }
         self.transaction(|d| d.relay_block(page, block, &wanted, allow_fallback))
@@ -467,18 +470,26 @@ impl Document {
             return Err(Error::Unsupported("el texto nuevo está vacío".into()));
         }
         let id = self.page_id(page)?;
+        // Every letter keeps its style; what is typed takes the style of the letter before it.
+        let old: Vec<char> = block.text.chars().collect();
+        let new: Vec<char> = wanted.chars().collect();
+        let carried = carry_styles(&old, &new, &block.char_style);
+        let letters: Vec<(char, usize)> = (0..new.len()).map(|i| (new[i], carried[i])).collect();
+
+        // Fonts the reader draws itself learn the letters they lack (same face, no bundled font).
+        let wanted: Vec<(String, String)> = block
+            .styles
+            .iter()
+            .enumerate()
+            .map(|(sid, st)| (st.font.clone(), letters.iter().filter(|(_, s)| *s == sid).map(|(c, _)| *c).collect::<String>()))
+            .collect();
+        let taught = self.teach_fonts(id, &wanted)?;
         let page_runs = self.text_runs(page)?;
         let mut fonts = fonts_of(&self.pdf, &self.resources(id));
         for style in &block.styles {
             let font = fonts.get_mut(&style.font).ok_or_else(|| Error::Unsupported(format!("no se encontró la fuente {}", style.font)))?;
             font.allow_seen(page_runs.iter().filter(|r| r.font == style.font).flat_map(|r| r.glyphs.iter().map(|g| g.code)));
         }
-
-        // Every letter keeps its style; what is typed takes the style of the letter before it.
-        let old: Vec<char> = block.text.chars().collect();
-        let new: Vec<char> = wanted.chars().collect();
-        let carried = carry_styles(&old, &new, &block.char_style);
-        let letters: Vec<(char, usize)> = (0..new.len()).map(|i| (new[i], carried[i])).collect();
 
         // The new text has to be drawable before anything changes.
         let mut lacking: Vec<char> = Vec::new();
@@ -721,6 +732,11 @@ impl Document {
             rewritten: new_count - kept_count,
             added: new_count.saturating_sub(old_count),
             removed: old_count.saturating_sub(new_count),
+            substitutes: taught
+                .iter()
+                .map(|&ch| Substitute { ch, via: Via::Encoding })
+                .chain(used_fallback.iter().map(|&ch| Substitute { ch, via: Via::BundledFont }))
+                .collect(),
             fallback_chars: used_fallback,
             warnings,
         })

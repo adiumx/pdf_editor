@@ -349,6 +349,7 @@ class PdfDocument implements Finalizable {
       (j['removed'] as num).toInt(),
       j['fallback_chars'] as String,
       (j['warnings'] as List).map((w) => PdfWarning.fromJson(w as Map<String, dynamic>)).toList(),
+      substitutes: FontSubstitute.list(j['substitutes']),
     );
   }
 

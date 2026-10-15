@@ -16,6 +16,7 @@ use lopdf::{Dictionary, Object, Stream};
 use crate::error::{Error, Result};
 use crate::fallback::{self, Embedded};
 use crate::reflow::{Reflow, Warning};
+use crate::substitute::{Substitute, Via};
 use crate::text::{fonts_of, TextRun};
 use crate::Document;
 
@@ -30,6 +31,9 @@ pub struct Replaced {
     /// Characters drawn with the bundled font because the document's own could
     /// not. Empty when the original font did it all; worth telling the person.
     pub fallback_chars: Vec<char>,
+    /// Every letter the original font did not have and how it was drawn instead: added to the
+    /// font's own encoding (the reader draws it in the same face) or with the bundled font.
+    pub substitutes: Vec<Substitute>,
     /// The page's operations were renumbered: read its runs again before the
     /// next edit on it.
     pub reread: bool,
@@ -79,7 +83,7 @@ impl Document {
         // The same text changes nothing: not a single operation is rewritten, and no step is recorded.
         if new_text == run.text && run.not_editable.is_none() && run.xobject.is_none() {
             let width = ((run.end.0 - run.origin.0).powi(2) + (run.end.1 - run.origin.1).powi(2)).sqrt();
-            return Ok(Replaced { old_width: width, new_width: width, fallback_chars: Vec::new(), reread: false, moved: 0, warnings: Vec::new() });
+            return Ok(Replaced { old_width: width, new_width: width, fallback_chars: Vec::new(), substitutes: Vec::new(), reread: false, moved: 0, warnings: Vec::new() });
         }
         self.transaction(|d| d.replace(page, run, new_text, options))
     }
@@ -98,6 +102,8 @@ impl Document {
             ));
         }
         let id = self.page_id(page)?;
+        // A font the reader draws itself can learn the letters it lacks, and stays the same face.
+        let taught = self.teach_fonts(id, &[(run.font.clone(), new_text.to_string())])?;
         let mut fonts = fonts_of(&self.pdf, &self.resources(id));
         let page_runs = self.text_runs(page).ok();
         let font = fonts
@@ -171,10 +177,13 @@ impl Document {
             (moved, corrections, warnings) = (outcome.moved, outcome.corrections, outcome.warnings);
         }
         self.set_page_content(id, &content)?;
+        let mut substitutes: Vec<Substitute> = taught.iter().map(|&ch| Substitute { ch, via: Via::Encoding }).collect();
+        substitutes.extend(used_fallback.iter().map(|&ch| Substitute { ch, via: Via::BundledFont }));
         Ok(Replaced {
             old_width,
             new_width,
             fallback_chars: used_fallback,
+            substitutes,
             reread: reread || corrections > 0,
             moved,
             warnings,

@@ -161,7 +161,7 @@ class PdfWarning {
 
 class EditResult {
   EditResult(this.oldWidth, this.newWidth, this.fallbackChars, this.reread,
-      {this.moved = 0, this.warnings = const []});
+      {this.moved = 0, this.warnings = const [], this.substitutes = const []});
   final double oldWidth;
   final double newWidth;
 
@@ -179,11 +179,15 @@ class EditResult {
   /// The page's operations were renumbered: read it again.
   final bool reread;
 
+  /// Every letter the original font lacked and how it was drawn (JSON `substitutes`).
+  final List<FontSubstitute> substitutes;
+
   factory EditResult.fromJson(Map<String, dynamic> j) => EditResult(
         (j['old_width'] as num).toDouble(),
         (j['new_width'] as num).toDouble(),
         j['fallback_chars'] as String,
         j['reread'] as bool,
+        substitutes: FontSubstitute.list(j['substitutes']),
         moved: (j['moved'] as int?) ?? 0,
         warnings: ((j['warnings'] as List?) ?? const [])
             .map((w) => PdfWarning.fromJson(w as Map<String, dynamic>))
@@ -591,7 +595,9 @@ class PdfBlock {
 /// What `replaceBlock` did (JSON `lines`, `kept`, `rewritten`, `added`, `removed`,
 /// `fallback_chars`, `warnings`). Lines [kept] are not touched at all.
 class BlockResult {
-  BlockResult(this.lines, this.kept, this.rewritten, this.added, this.removed, this.fallbackChars, this.warnings);
+  BlockResult(this.lines, this.kept, this.rewritten, this.added, this.removed, this.fallbackChars, this.warnings,
+      {this.substitutes = const []});
+  final List<FontSubstitute> substitutes;
   final int lines;
   final int kept;
   final int rewritten;
@@ -599,4 +605,19 @@ class BlockResult {
   final int removed;
   final String fallbackChars;
   final List<PdfWarning> warnings;
+}
+
+/// A letter the document's font could not draw, and what drew it instead (JSON
+/// `{"char","via"}`). `via` is `encoding` (added to the font's own encoding: the
+/// reader draws it in the same face) or `bundled_font` (a Liberation font of the
+/// closest style). Tell the person about every one.
+class FontSubstitute {
+  FontSubstitute(this.char, this.via);
+  final String char;
+  final String via;
+  bool get isBundledFont => via == 'bundled_font';
+
+  static List<FontSubstitute> list(Object? raw) => ((raw as List?) ?? const [])
+      .map((s) => FontSubstitute((s as Map)['char'] as String, s['via'] as String))
+      .toList();
 }
