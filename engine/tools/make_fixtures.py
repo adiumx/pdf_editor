@@ -426,4 +426,135 @@ for name, user, algo in [
     (OUT / f"{name}.pdf").write_bytes(indirect_encrypt(raw))
     if name == "encrypted_owner":
         (OUT / "encrypted_inline.pdf").write_bytes(raw)
+# 21. Font audit fixtures (prefix font_): one PDF per kind of font a real file may use,
+#     written by hand where no tool will produce the kind (Type 3, MMType1, MacRoman...).
+def raw_pdf(objects):
+    """A PDF from {number: body bytes}; object 1 is the catalog."""
+    out, offsets = b"%PDF-1.7\n", {}
+    for number in sorted(objects):
+        offsets[number] = len(out)
+        out += b"%d 0 obj\n" % number + objects[number] + b"\nendobj\n"
+    start, size = len(out), max(objects) + 1
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % size
+    for number in range(1, size):
+        out += b"%010d 00000 n \n" % offsets[number]
+    return out + b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (size, start)
+
+
+def stream(body, extra=b""):
+    return b"<<" + extra + b"/Length %d>>\nstream\n" % len(body) + body + b"\nendstream"
+
+
+def one_font_page(font_dict, content, extra_objects=None, name=b"F1"):
+    objects = {
+        1: b"<</Type/Catalog/Pages 2 0 R>>",
+        2: b"<</Type/Pages/Count 1/Kids[3 0 R]>>",
+        3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 4 0 R/Resources<</Font<</" + name + b" 5 0 R>>>>>>",
+        4: stream(content),
+        5: font_dict,
+    }
+    objects.update(extra_objects or {})
+    return raw_pdf(objects)
+
+
+def helv_widths(first=32, last=126):
+    return b"[" + b" ".join(b"%d" % round(pymupdf.get_text_length(chr(c), fontname="helv", fontsize=1000)) for c in range(first, last + 1)) + b"]"
+
+
+SHOW = b"BT /F1 14 Tf 72 700 Td (%s) Tj ET"
+(OUT / "font_nonstd_notembedded.pdf").write_bytes(one_font_page(
+    b"<</Type/Font/Subtype/Type1/BaseFont/Verdana/Encoding/WinAnsiEncoding/FirstChar 32/LastChar 126/Widths " + helv_widths() + b">>",
+    SHOW % b"Hola Verdana sin incrustar"))
+(OUT / "font_truetype_notembedded.pdf").write_bytes(one_font_page(
+    b"<</Type/Font/Subtype/TrueType/BaseFont/Calibri-Bold/Encoding/WinAnsiEncoding/FirstChar 32/LastChar 126/Widths " + helv_widths()
+    + b"/FontDescriptor 6 0 R>>",
+    SHOW % b"Hola Calibri negrita sin incrustar",
+    {6: b"<</Type/FontDescriptor/FontName/Calibri-Bold/Flags 32/FontBBox[-500 -300 1200 1000]/ItalicAngle 0/Ascent 750/Descent -250/CapHeight 640/StemV 140/FontWeight 700>>"}))
+(OUT / "font_mmtype1.pdf").write_bytes(one_font_page(
+    b"<</Type/Font/Subtype/MMType1/BaseFont/MyriadMM_400_600_/Encoding/WinAnsiEncoding/FirstChar 32/LastChar 126/Widths " + helv_widths() + b">>",
+    SHOW % b"Hola multiple master"))
+# MacRoman without ToUnicode: e-acute is 0x8E, n-tilde 0x96, u-acute 0x9C.
+(OUT / "font_macroman.pdf").write_bytes(one_font_page(
+    b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/MacRomanEncoding>>",
+    SHOW % b"caf\\216 \\226and\\234"))
+# No /Encoding: StandardEncoding. 0xAE is the ligature fi, 0xAF fl, 0xA1 exclamdown.
+(OUT / "font_standardenc.pdf").write_bytes(one_font_page(
+    b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    SHOW % b"o\\256ce \\257or \\241hola"))
+(OUT / "font_symbol.pdf").write_bytes(one_font_page(b"<</Type/Font/Subtype/Type1/BaseFont/Symbol>>", SHOW % b"abg"))
+(OUT / "font_zapf.pdf").write_bytes(one_font_page(b"<</Type/Font/Subtype/Type1/BaseFont/ZapfDingbats>>", SHOW % b"34l"))
+# Type 3: two glyphs drawn as boxes, no font program, no ToUnicode.
+(OUT / "font_type3.pdf").write_bytes(one_font_page(
+    b"<</Type/Font/Subtype/Type3/FontBBox[0 0 700 700]/FontMatrix[0.001 0 0 0.001 0 0]/CharProcs<</sq 6 0 R/tri 7 0 R>>"
+    b"/Encoding<</Type/Encoding/Differences[65/sq/tri]>>/FirstChar 65/LastChar 66/Widths[800 800]>>",
+    SHOW % b"ABAB",
+    {6: stream(b"800 0 0 0 700 700 d1 0 0 700 700 re f"), 7: stream(b"800 0 0 0 700 700 d1 0 0 m 700 0 l 350 700 l f")}))
+
+# Composite fonts made from the embedded Type0 fixture.
+base = pymupdf.open(OUT / "embedded.pdf")
+font_xref = base[0].get_fonts(full=True)[0][0]
+base.xref_set_key(font_xref, "Encoding", "/Identity-V")
+base.save(OUT / "font_type0_identity_v.pdf", garbage=0, deflate=False)
+
+# CIDToGIDMap that is not the identity: the codes in the text are CIDs (glyph + 0x100)
+# and a stream maps each CID back to its glyph. ToUnicode and /W are rewritten to match.
+import re as _re
+base = pymupdf.open(OUT / "embedded.pdf")
+page = base[0]
+font_xref = page.get_fonts(full=True)[0][0]
+content_xref = page.get_contents()[0]
+content = base.xref_stream(content_xref).decode("latin-1")
+glyphs = sorted({int(h[i:i + 4], 16) for h in _re.findall(r"<([0-9A-Fa-f]+)>", content) for i in range(0, len(h), 4)})
+tu = int(base.xref_get_key(font_xref, "ToUnicode")[1].split()[0])
+old = {}
+text = base.xref_stream(tu).decode()
+for lo, hi, dst in _re.findall(r"<([0-9a-fA-F]{4})> <([0-9a-fA-F]{4})> <([0-9a-fA-F]{4})>", text):
+    for g in range(int(lo, 16), int(hi, 16) + 1):
+        old[g] = int(dst, 16) + g - int(lo, 16)
+for g, dst in _re.findall(r"^<([0-9a-fA-F]{4})> <([0-9a-fA-F]{4})>$", text, _re.M):
+    old[int(g, 16)] = int(dst, 16)
+shift = 0x100
+new_content = _re.sub(r"<([0-9A-Fa-f]+)>", lambda m: "<" + "".join("%04X" % (int(m.group(1)[i:i + 4], 16) + shift) for i in range(0, len(m.group(1)), 4)) + ">", content)
+base.update_stream(content_xref, new_content.encode("latin-1"))
+chars = "".join(f"<{g + shift:04X}> <{old[g]:04X}>\n" for g in glyphs)
+base.update_stream(tu, ("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /X def\n/CMapType 2 def\n"
+                        "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n%d beginbfchar\n%sendbfchar\nendcmap\nend\nend" % (len(glyphs), chars)).encode())
+descendant = int(base.xref_get_key(font_xref, "DescendantFonts")[1].strip("[] R0").split()[0])
+loma = pymupdf.Font(fontfile=SANS)
+widths = " ".join(f"{g + shift} [{round(loma.glyph_advance(old[g]) * 1000)}]" for g in glyphs)
+base.xref_set_key(descendant, "W", f"[{widths}]")
+top = max(glyphs) + shift + 1
+mapping = bytearray(top * 2)
+for g in glyphs:
+    mapping[(g + shift) * 2:(g + shift) * 2 + 2] = g.to_bytes(2, "big")
+map_xref = base.get_new_xref()
+base.update_object(map_xref, "<<>>")
+base.update_stream(map_xref, bytes(mapping))
+base.xref_set_key(descendant, "CIDToGIDMap", f"{map_xref} 0 R")
+base.save(OUT / "font_type0_cidtogid.pdf", garbage=0, deflate=False)
+
+# Whole (not subset) fonts, simple and composite, and scripts a Latin font cannot show.
+for name, simple in (("font_tt_full_simple", True), ("font_tt_full_type0", False)):
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_font(fontname="F0", fontfile=SANS, set_simple=simple)
+    page.insert_text((72, 200), "Poliza numero 12345 y una linea mas", fontname="F0", fontsize=12)
+    doc.save(OUT / f"{name}.pdf", garbage=0, deflate=False)
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_font(fontname="F0", fontfile=SANS)
+page.insert_text((72, 200), "Привет мир, Ελληνικά", fontname="F0", fontsize=12)
+doc.save(OUT / "font_cyrillic_greek.pdf", garbage=0, deflate=False)
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_font(fontname="F0", fontfile="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+page.insert_text((72, 200), "\u0645\u0631\u062d\u0628\u0627 \u0628\u0627\u0644\u0639\u0627\u0644\u0645", fontname="F0", fontsize=14)
+doc.save(OUT / "font_rtl_arabic.pdf", garbage=0, deflate=False)
+doc = pymupdf.open()
+page = doc.new_page(width=595, height=842)
+page.insert_font(fontname="F0", fontfile="/usr/share/fonts/opentype/unifont/unifont_jp_sample.otf")
+page.insert_text((72, 200), "\u6f22\u5b57 CJK", fontname="F0", fontsize=14)
+doc.subset_fonts()
+doc.save(OUT / "font_cjk.pdf", garbage=3, deflate=True)
+
 print("fixtures in", OUT)
