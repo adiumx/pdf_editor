@@ -79,6 +79,18 @@ pub struct TextRun {
     /// `0.2 0.2 0.8 rg`, or a `cs` with its `scn`): repeat them to draw more
     /// text that matches.
     pub fill: Vec<Operation>,
+    /// Whether the font program is in the file (subset or whole), as opposed to named only.
+    pub font_embedded: bool,
+    /// How faithfully this font can be reproduced when text is added to it.
+    pub font_kind: crate::font::FontClass,
+    /// Why this text cannot be edited, when it cannot: `type3`, `vertical_writing`,
+    /// `symbolic_font` or `rtl_text`. It can still be read, moved and aligned.
+    pub not_editable: Option<&'static str>,
+}
+
+/// Hebrew and Arabic: written right to left, which needs shaping the engine does not do.
+pub(crate) fn is_rtl_char(c: char) -> bool {
+    matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF)
 }
 
 struct State {
@@ -333,6 +345,7 @@ fn show(
         corners.iter().map(|c| c.1).fold(f32::MIN, f32::max),
     ];
 
+    let rtl = text.chars().any(is_rtl_char);
     runs.push(TextRun {
         text,
         font: name.to_string(),
@@ -349,6 +362,9 @@ fn show(
         text_linear: [linear[0], linear[1], linear[2], linear[3]],
         glyphs,
         fill: state.fill.clone(),
+        font_embedded: font.embedded,
+        font_kind: font.class,
+        not_editable: font.not_editable().or_else(|| rtl.then_some("rtl_text")),
     });
 }
 

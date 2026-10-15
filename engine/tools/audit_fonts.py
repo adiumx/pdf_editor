@@ -49,14 +49,14 @@ def oracle_text(data, page=0):
 
 
 def outcome(reply):
-    return reply["kind"] if "error" in reply else ("ok" + (f"+resp[{reply['fallback_chars']}]" if reply.get("fallback_chars") else ""))
+    return (reply["kind"] + (f"({reply['reason']})" if reply.get("reason") else "")) if "error" in reply else ("ok" + (f"+resp[{reply['fallback_chars']}]" if reply.get("fallback_chars") else ""))
 
 
 def audit(name):
     d = t.Doc(name)
     original = (t.FIXTURES / f"{name}.pdf").read_bytes()
     runs = d.page()["runs"]
-    row = {"runs": len(runs), "font": runs[0]["base_font"] if runs else "-"}
+    row = {"runs": len(runs), "font": (runs[0]["base_font"] + f" [{runs[0]['font_kind']}]") if runs else "-"}
     mine = norm(" ".join(r["text"] for r in runs))
     theirs = oracle_text(original)
     row["lee"] = "igual" if mine == theirs else f"DIFIERE: motor={mine!r} oráculo={theirs!r}"

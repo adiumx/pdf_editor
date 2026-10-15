@@ -557,4 +557,11 @@ page.insert_text((72, 200), "\u6f22\u5b57 CJK", fontname="F0", fontsize=14)
 doc.subset_fonts()
 doc.save(OUT / "font_cjk.pdf", garbage=3, deflate=True)
 
+# 22. Embedded fonts that carry their own encoding (no /Encoding in the PDF): a Type 1
+#     program with `dup n /name put` or StandardEncoding, and a bare CFF.
+for source, target in (("type1_simple", "font_type1_noenc"), ("cff_bare", "font_cff_noenc"), ("cff_simple", "font_otf_noenc")):
+    doc = pymupdf.open(OUT / f"{source}.pdf")
+    doc.xref_set_key(doc[0].get_fonts(full=True)[0][0], "Encoding", "null")
+    doc.save(OUT / f"{target}.pdf", garbage=0, deflate=False)
+
 print("fixtures in", OUT)

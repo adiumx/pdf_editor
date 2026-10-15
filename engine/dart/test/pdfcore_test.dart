@@ -510,4 +510,43 @@ void main() {
       }
     });
   });
+
+  group('font fidelity', () {
+    test('runs say how reproducible their font is, and what cannot be edited says why', () async {
+      final macroman = open('font_macroman');
+      addTearDown(macroman.close);
+      expect(macroman.page(0).runs.first.text, 'café ñandú');
+      expect(macroman.page(0).runs.first.fontKind, 'standard');
+      expect(macroman.page(0).runs.first.editable, isTrue);
+
+      final subset = open('embedded');
+      addTearDown(subset.close);
+      expect([subset.page(0).runs.first.fontKind, subset.page(0).runs.first.fontEmbedded], ['embedded_subset', true]);
+
+      for (final entry in {'font_type3': 'type3', 'font_type0_identity_v': 'vertical_writing', 'font_zapf': 'symbolic_font', 'font_rtl_arabic': 'rtl_text'}.entries) {
+        final doc = open(entry.key);
+        addTearDown(doc.close);
+        final page = doc.page(0);
+        expect(page.runs.first.editable, isFalse, reason: entry.key);
+        expect(page.runs.first.notEditable, entry.value, reason: entry.key);
+        expect(
+            () => doc.replaceText(page, page.runs.first, 'Hola'),
+            throwsA(isA<PdfException>()
+                .having((e) => e.kind, 'kind', 'not_editable')
+                .having((e) => e.reason, 'reason', entry.value)
+                .having((e) => e.isNotEditable, 'isNotEditable', isTrue)),
+            reason: entry.key);
+        expect(doc.history.canUndo, isFalse);
+      }
+
+      final session = await PdfSession.open(fixture('font_type3'), libraryPath: libraryPath);
+      try {
+        final page = await session.page(0);
+        await expectLater(session.replaceText(page, page.runs.first, 'Hola'),
+            throwsA(isA<PdfException>().having((e) => e.reason, 'reason across the isolate', 'type3')));
+      } finally {
+        await session.close();
+      }
+    });
+  });
 }

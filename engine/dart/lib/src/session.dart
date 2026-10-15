@@ -69,6 +69,7 @@ class PdfSession {
   Future<PageData> page(int index) => _call<PageData>('page', [index]);
   Future<List<FormField>> fields() => _call<List<FormField>>('fields');
 
+  /// Fails with a `not_editable` [PdfException] (see [TextRun.editable]) for text that cannot be reproduced.
   Future<EditResult> replaceText(PageData page, TextRun run, String text,
           {bool allowFallback = false, Reflow reflow = Reflow.following}) =>
       _call<EditResult>('replaceText', [page.index, run.id, text, allowFallback, reflow]);
@@ -145,9 +146,9 @@ class PdfSession {
 }
 
 PdfException _exception(Map<Object?, Object?> m) =>
-    PdfException(m['kind'] as String, m['error'] as String, chars: (m['chars'] as String?) ?? '');
+    PdfException(m['kind'] as String, m['error'] as String, chars: (m['chars'] as String?) ?? '', reason: m['reason'] as String?);
 
-Map<String, Object?> _describe(PdfException e) => {'kind': e.kind, 'error': e.message, 'chars': e.chars};
+Map<String, Object?> _describe(PdfException e) => {'kind': e.kind, 'error': e.message, 'chars': e.chars, 'reason': e.reason};
 
 class _Start {
   _Start(this.reply, this.bytes, this.libraryPath, this.password);

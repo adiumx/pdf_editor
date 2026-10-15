@@ -261,7 +261,41 @@ Qué hay que tener presente:
 - Tras cualquier operación de las anteriores, los `run.id` caducan: vuelve a leer la página.
 - Ajustar campos a una cuadrícula con `moveField` deja un paso de deshacer por campo; `arrangeFields` sí es uno solo, pero no usa la cuadrícula.
 
-## 6. Boceto de pantalla de edición (sin compilar)
+## 6. Fidelidad de fuentes: qué se puede editar y cómo se avisa
+
+Cada `TextRun` trae (JSON → Dart): `font_kind` → `fontKind` (`embedded_full`, `embedded_subset`,
+`standard`, `not_embedded`, `type3`), `font_embedded` → `fontEmbedded`, y `editable` /
+`not_editable` → `editable` / `notEditable`. Úsalos para avisar «esta fuente no se puede
+reproducir exactamente» (`not_embedded`, `embedded_subset`) y para no ofrecer editar lo que no se puede.
+
+Editar un texto no editable falla con `PdfException.kind == 'not_editable'` y `reason`
+(`isNotEditable`): `type3` (glifos que son dibujos), `vertical_writing` (CMap `-V`),
+`symbolic_font` (ZapfDingbats) o `rtl_text` (árabe, hebreo: se lee, pero escribirlo exige
+formas contextuales). La edición se rechaza entera: nada cambia y no queda paso de deshacer.
+Leer, mover, alinear y buscar siguen funcionando; `replaceAll` los deja como están y los cuenta en `skipped`.
+
+Soporte por tipo de fuente (probado con fixtures en `pdfcore/tests/fixtures`, auditoría con
+`python3 tools/audit_fonts.py`):
+
+| Fuente | Lee | Reemplaza | Guarda sin editar |
+|---|---|---|---|
+| Type1/TrueType/MMType1 sin incrustar, WinAnsi | sí | sí; lo que la codificación no trae → fuente de respaldo (avisado) | idéntico |
+| Sin incrustar con **MacRoman** o **StandardEncoding** | sí, con su tabla (antes se leía como WinAnsi) | sí, con los códigos de su codificación | idéntico |
+| **Symbol** | sí (α β γ…) | solo letras que tiene; las latinas → respaldo (avisado), nunca se vuelven griegas | idéntico |
+| **ZapfDingbats** | sin texto (los glifos son símbolos) | no (`symbolic_font`) | idéntico |
+| **Type3** | texto = letra del código, como otros lectores | no (`type3`) | idéntico |
+| TrueType simple / Type0 incrustada, completa | sí | sí | idéntico |
+| …subconjunto | sí | letras ausentes → respaldo (avisado) | idéntico |
+| Type0 con `CIDToGIDMap` | sí | igual | idéntico |
+| OpenType-CFF, CFF desnudo (`Type1C`), Type1 (PFB) | sí; sin `/Encoding` usa la del programa | sí; lo ausente → respaldo | idéntico |
+| **Vertical** (`Identity-V`) | sí | no (`vertical_writing`) | idéntico |
+| **Derecha a izquierda** | en orden de dibujo (no lógico) | no (`rtl_text`) | idéntico |
+| CJK, cirílico, griego (incrustadas) | sí | lo que el subconjunto trae; el resto → respaldo | idéntico |
+
+Nombres de glifo: lista completa de Adobe (4281 nombres, BSD-3), `uniXXXX`, `uXXXX`, ligaduras
+con `_` y variantes con `.` (`pdfcore::glyph_name_text`). No leídas todavía: MacExpertEncoding.
+
+## 7. Boceto de pantalla de edición (sin compilar)
 
 Muestra la idea: imagen de fondo + un `Positioned` por texto, con `display * zoom`.
 

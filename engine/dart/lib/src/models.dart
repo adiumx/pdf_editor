@@ -4,15 +4,22 @@
 library;
 
 class PdfException implements Exception {
-  PdfException(this.kind, this.message, {this.chars = ''});
+  PdfException(this.kind, this.message, {this.chars = '', this.reason});
 
   /// `pdf`, `no_such_page`, `missing_glyphs`, `no_such_field`, `rejected`,
-  /// `unsupported`, `stale_run`, `bad_argument` or `panic`.
+  /// `unsupported`, `not_editable`, `password_required`, `wrong_password`,
+  /// `stale_run`, `stale_item`, `bad_argument` or `panic`.
   final String kind;
   final String message;
 
   /// For `missing_glyphs`: the characters no available font can draw.
   final String chars;
+
+  /// For `not_editable` (JSON `reason`): why the text cannot be edited, one of
+  /// `type3`, `vertical_writing`, `symbolic_font` or `rtl_text`. The text can
+  /// still be read, moved and aligned.
+  final String? reason;
+  bool get isNotEditable => kind == 'not_editable';
 
   /// The run ids of the last reading are no longer valid: read the page again.
   bool get isStaleRun => kind == 'stale_run';
@@ -22,6 +29,7 @@ class PdfException implements Exception {
         json['kind'] as String? ?? 'unknown',
         json['error'] as String? ?? 'error desconocido',
         chars: json['chars'] as String? ?? '',
+        reason: json['reason'] as String?,
       );
 
   @override
@@ -41,6 +49,10 @@ class TextRun {
     required this.display,
     required this.origin,
     required this.invisible,
+    this.editable = true,
+    this.notEditable,
+    this.fontEmbedded = false,
+    this.fontKind = 'not_embedded',
   });
 
   /// Names this run in the *last reading of its page*; any edit, undo or redo
@@ -56,6 +68,20 @@ class TextRun {
   /// Invisible text: the hidden layer of a scanned page.
   final bool invisible;
 
+  /// JSON `editable` / `not_editable`: false, with the reason (`type3`,
+  /// `vertical_writing`, `symbolic_font` or `rtl_text`), when the text can be read
+  /// but `replaceText` would refuse it with a `not_editable` error.
+  final bool editable;
+  final String? notEditable;
+
+  /// JSON `font_embedded`: the font program is in the file (subset or whole).
+  final bool fontEmbedded;
+
+  /// JSON `font_kind`: `embedded_full`, `embedded_subset`, `standard`,
+  /// `not_embedded` or `type3`. Use it to warn that a font cannot be reproduced
+  /// exactly (`not_embedded`, `embedded_subset`).
+  final String fontKind;
+
   factory TextRun.fromJson(Map<String, dynamic> j) => TextRun(
         id: j['id'] as int,
         text: j['text'] as String,
@@ -65,6 +91,10 @@ class TextRun {
         display: _box(j['display']),
         origin: _box(j['origin']),
         invisible: j['invisible'] as bool,
+        editable: j['editable'] as bool? ?? true,
+        notEditable: j['not_editable'] as String?,
+        fontEmbedded: j['font_embedded'] as bool? ?? false,
+        fontKind: j['font_kind'] as String? ?? 'not_embedded',
       );
 }
 

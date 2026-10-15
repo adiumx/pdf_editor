@@ -81,6 +81,12 @@ impl Document {
 
     pub(crate) fn replace(&mut self, page: usize, run: &TextRun, new_text: &str, options: ReplaceOptions) -> Result<Replaced> {
         let allow_fallback = options.allow_fallback;
+        if let Some(reason) = run.not_editable {
+            return Err(Error::NotEditable(reason.into()));
+        }
+        if new_text.chars().any(crate::text::is_rtl_char) {
+            return Err(Error::NotEditable("rtl_text".into()));
+        }
         if run.xobject.is_some() {
             return Err(Error::Unsupported(
                 "editar texto dentro de un formulario XObject aún no está soportado".into(),

@@ -497,3 +497,55 @@ def test_text_alignment_in_paragraphs_and_fields_crosses_the_boundary():
     assert done == {"ok": True}
     assert call("pdfcore_set_fields_alignment", d.handle, json.dumps({"names": ["dato"], "align": "middle"}).encode())["kind"] == "bad_argument"
     d.close()
+
+
+# -- font fidelity ---------------------------------------------------------------
+
+def oracle_text(data):
+    import pymupdf, unicodedata
+    return " ".join(unicodedata.normalize("NFC", pymupdf.open(stream=data, filetype="pdf")[0].get_text()).split())
+
+
+def test_runs_say_how_their_font_can_be_reproduced():
+    expected = {
+        "standard": ("standard", False, True), "font_nonstd_notembedded": ("not_embedded", False, True),
+        "embedded": ("embedded_subset", True, True), "font_tt_full_type0": ("embedded_full", True, True),
+        "font_type3": ("type3", False, False), "font_zapf": ("standard", False, False),
+        "font_type0_identity_v": ("embedded_subset", True, False), "font_rtl_arabic": ("embedded_full", True, False),
+    }
+    for fixture, (kind, embedded, editable) in expected.items():
+        d = Doc(fixture)
+        run = d.page()["runs"][0]
+        assert (run["font_kind"], run["font_embedded"], run["editable"]) == (kind, embedded, editable), fixture
+        assert (run["not_editable"] is None) == editable, fixture
+        d.close()
+
+
+def test_what_cannot_be_edited_gives_a_stable_kind_and_reason():
+    for fixture, reason in (("font_type3", "type3"), ("font_type0_identity_v", "vertical_writing"),
+                            ("font_zapf", "symbolic_font"), ("font_rtl_arabic", "rtl_text")):
+        d = Doc(fixture)
+        d.page()
+        reply = d.replace_ex(0, "Hola", 1, 1)
+        assert reply["kind"] == "not_editable" and reply["reason"] == reason and "error" in reply, (fixture, reply)
+        assert call("pdfcore_history", d.handle)["can_undo"] is False, fixture   # a refusal is not a step
+        d.close()
+    # Replace-all leaves such text alone and says so.
+    d = Doc("font_type3")
+    done = call("pdfcore_replace_all", d.handle, b"AB", b"XY", 1, 0, 1)
+    assert done == {"ok": True, "replaced": 0, "skipped": 2}, done
+    assert call("pdfcore_history", d.handle)["can_undo"] is False
+    d.close()
+
+
+def test_encodings_agree_with_an_independent_reader_before_and_after_editing():
+    for fixture, new_text in (("font_macroman", "Camión ñandú ÁÉÍÓÚ"), ("font_standardenc", "ﬁnal ﬂor"),
+                              ("font_symbol", "αβ π"), ("font_type1_noenc", "Hola æ")):
+        d = Doc(fixture)
+        engine = " ".join(r["text"] for r in d.page()["runs"])
+        import unicodedata
+        assert unicodedata.normalize("NFC", engine) == oracle_text(d.save()), fixture
+        reply = d.replace_ex(0, new_text, 0, 0)
+        assert "error" not in reply and not reply["fallback_chars"], (fixture, reply)
+        assert oracle_text(d.save()) == unicodedata.normalize("NFC", new_text), (fixture, oracle_text(d.save()))
+        d.close()

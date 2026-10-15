@@ -46,6 +46,7 @@ como referencia y como oráculo de pruebas.
 | 6g. Párrafos de varias líneas: se vuelven a repartir al editar, con la misma fuente y color | **hecho** |
 | 6h. Mover, redimensionar y alinear campos de formulario (varios a la vez, un solo deshacer); texto de campo derecho también en páginas giradas | **hecho** |
 | 6i. Elementos como en un editor de diseño: textos, imágenes y campos se mueven, alinean, reparten y se les da un interlineado uniforme; alineación del texto en párrafos y campos | **hecho** |
+| 6j. Fidelidad de codificaciones: MacRoman, Standard, Symbol y la codificación propia de Type1/CFF; lista completa de glifos de Adobe; clase de fuente por tramo; texto que no se puede reproducir (Type3, vertical, derecha a izquierda, símbolos) se lee y se rechaza con `not_editable` | **hecho** |
 | 7. Anotaciones (resaltar, notas), aplanar formularios, OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee
@@ -344,6 +345,18 @@ con desplazamientos relativos (probado con las cuatro). Una **imagen** se mueve 
 `Do` en `q`, una traslación y `Q`. Límites: el texto dentro de un formulario XObject no se mueve
 (una línea que lo contiene no aparece como elemento), y `space_lines` mide líneas base, que es el
 interlineado de verdad; repartir con huecos iguales mide cajas.
+
+### Fidelidad de codificaciones (hito 6j)
+
+Antes, toda fuente simple se leía como WinAnsi: un PDF con MacRoman o StandardEncoding daba
+`cafŽ –andœ` al leer y **escribía en silencio** letras equivocadas. Ahora la tabla base sale del
+`/Encoding` (o de su `/BaseEncoding`); sin ninguno, Symbol usa la suya, una fuente incrustada Type1/CFF
+usa la codificación de su programa y el resto, la que dice la especificación (Standard; WinAnsi para
+TrueType y Type 3). Las tablas están en `src/encodings_data.rs`, generadas por
+`tools/gen_encodings.py` (Symbol medida con MuPDF como oráculo; nombres de glifo: Adobe Glyph List,
+BSD-3, licencia en `fonts/`). Las anchuras de las fuentes estándar sin `/Widths` se miden por letra, no
+por código. Lo que no se puede reproducir (`type3`, `vertical_writing`, `symbolic_font`, `rtl_text`) se
+lee y se rechaza con el error `not_editable` (`reason`). `tools/audit_fonts.py` repite la auditoría.
 
 ### Huecos conocidos (aún no implementados)
 

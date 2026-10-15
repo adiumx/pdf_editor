@@ -141,6 +141,12 @@ impl Document {
         let chain = paragraph_runs(&runs, &lines, start)
             .ok_or_else(|| Error::Unsupported("ese texto no es un párrafo de varias líneas parecidas".into()))?;
         let members: Vec<TextRun> = chain.iter().map(|&i| runs[i].clone()).collect();
+        if let Some(reason) = members.iter().find_map(|m| m.not_editable) {
+            return Err(Error::NotEditable(reason.into()));
+        }
+        if new_text.chars().any(crate::text::is_rtl_char) {
+            return Err(Error::NotEditable("rtl_text".into()));
+        }
         let first = &members[0];
 
         let mut fonts = fonts_of(&self.pdf, &self.resources(id));

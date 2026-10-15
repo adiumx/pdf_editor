@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use lopdf::{Dictionary, Document, Object};
 
 use crate::cmap::CMap;
+use crate::encodings_data;
 use crate::program;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +52,56 @@ pub struct Font {
     /// Codes of an embedded simple font known to be drawn: checked in the font
     /// program, or seen drawn on the page. Nothing else may be written with it.
     verified: std::collections::HashSet<u32>,
+    /// What kind of font this is, for telling the person whether it can be reproduced exactly.
+    pub class: FontClass,
+    /// Written top to bottom (a `-V` CMap): read, not edited.
+    vertical: bool,
+    /// Type 3 glyphs are drawings, not letters: read, not edited.
+    type3: bool,
+    /// ZapfDingbats and the like: the glyphs are symbols, not text.
+    symbols: bool,
+}
+
+/// How faithfully a font can be reproduced when text is added to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontClass {
+    /// The whole font program is in the file: any letter it has can be written.
+    EmbeddedFull,
+    /// A subset: only the letters the document already uses are in the file.
+    EmbeddedSubset,
+    /// One of the 14 standard fonts (or the names every reader maps to them).
+    Standard,
+    /// Named but not in the file: the reader picks a font, and so does whoever opens it.
+    NotEmbedded,
+    /// Type 3: glyphs are drawings.
+    Type3,
+}
+
+impl FontClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FontClass::EmbeddedFull => "embedded_full",
+            FontClass::EmbeddedSubset => "embedded_subset",
+            FontClass::Standard => "standard",
+            FontClass::NotEmbedded => "not_embedded",
+            FontClass::Type3 => "type3",
+        }
+    }
+}
+
+/// `ABCDEF+Name`: the prefix that marks a subset.
+fn has_subset_prefix(base_font: &str) -> bool {
+    base_font.split_once('+').is_some_and(|(tag, _)| tag.len() == 6 && tag.chars().all(|c| c.is_ascii_uppercase()))
+}
+
+fn is_standard_font(base_font: &str) -> bool {
+    let name: String = base_font.rsplit('+').next().unwrap_or(base_font).chars().filter(|c| !c.is_whitespace() && *c != ',' && *c != '-').collect();
+    ["Helvetica", "Arial", "TimesRoman", "TimesNewRoman", "Times", "Courier", "CourierNew", "Symbol", "ZapfDingbats"]
+        .iter()
+        .any(|family| {
+            name.strip_prefix(family)
+                .is_some_and(|rest| matches!(rest, "" | "Bold" | "Italic" | "Oblique" | "BoldItalic" | "BoldOblique" | "MT" | "BoldMT" | "ItalicMT" | "BoldItalicMT" | "PSMT" | "PS-BoldMT"))
+        })
 }
 
 impl Font {
@@ -78,6 +129,10 @@ impl Font {
             cid_widths: HashMap::new(),
             blank: Default::default(),
             verified: Default::default(),
+            class: FontClass::NotEmbedded,
+            vertical: false,
+            type3: subtype == "Type3",
+            symbols: false,
         };
 
         match kind {
@@ -85,7 +140,32 @@ impl Font {
             FontKind::Simple => font.read_simple(doc, dict),
         }
         font.find_blank_glyphs(doc, dict);
+        font.vertical = kind == FontKind::Type0 && name_of(doc, dict, b"Encoding").is_some_and(|e| e.ends_with("-V"));
+        font.symbols = font.base_font.rsplit('+').next().is_some_and(|n| n.starts_with("ZapfDingbats"));
+        font.class = if font.type3 {
+            FontClass::Type3
+        } else if font.embedded {
+            if has_subset_prefix(&font.base_font) { FontClass::EmbeddedSubset } else { FontClass::EmbeddedFull }
+        } else if is_standard_font(&font.base_font) {
+            FontClass::Standard
+        } else {
+            FontClass::NotEmbedded
+        };
         font
+    }
+
+    /// Why text in this font cannot be edited, if it cannot: the glyphs are drawings
+    /// (`type3`), run top to bottom (`vertical_writing`) or are symbols (`symbolic_font`).
+    pub fn not_editable(&self) -> Option<&'static str> {
+        if self.type3 {
+            Some("type3")
+        } else if self.vertical {
+            Some("vertical_writing")
+        } else if self.symbols {
+            Some("symbolic_font")
+        } else {
+            None
+        }
     }
 
     fn read_composite(&mut self, doc: &Document, dict: &Dictionary) {
@@ -146,7 +226,9 @@ impl Font {
                 self.missing_width = w;
             }
         }
-        self.simple_text = simple_encoding(doc, dict);
+        let subtype = name_of(doc, dict, b"Subtype").unwrap_or_default();
+        let built_in = dict_of(doc, dict, b"FontDescriptor").filter(|_| self.embedded).and_then(|d| built_in_encoding(doc, d));
+        self.simple_text = simple_encoding(doc, dict, &subtype, &self.base_font, built_in);
     }
 
     fn read_descriptor(&mut self, descriptor: &Dictionary) {
@@ -333,7 +415,10 @@ impl Font {
                     return *w;
                 }
                 if self.widths.is_empty() && !self.embedded {
-                    return standard_width(&self.base_font, code);
+                    // The widths are those of WinAnsi codes: find the code of the letter this one
+                    // stands for, so MacRoman and Standard texts measure right too.
+                    let letter = self.simple_text.get(code as usize).and_then(|t| t.as_deref()).and_then(|t| t.chars().next());
+                    return standard_width(&self.base_font, letter.and_then(win_ansi_code).unwrap_or(code));
                 }
                 self.missing_width
             }
@@ -443,24 +528,53 @@ fn standard_width(base_font: &str, code: u32) -> f32 {
     }
 }
 
-const WIN_ANSI_HIGH: [char; 32] = [
-    '€', '\u{0}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{0}', 'Ž', '\u{0}',
-    '\u{0}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{0}', 'ž', 'Ÿ',
-];
+/// The WinAnsi code that shows `letter`, if there is one.
+fn win_ansi_code(letter: char) -> Option<u32> {
+    let text = letter.to_string();
+    encodings_data::WIN_ANSI.iter().position(|t| *t == text).map(|i| i as u32)
+}
 
-fn simple_encoding(doc: &Document, dict: &Dictionary) -> Vec<Option<String>> {
-    let mut table: Vec<Option<String>> = (0..256u32)
-        .map(|c| match c {
-            32..=126 | 160..=255 => char::from_u32(c).map(|ch| ch.to_string()),
-            128..=159 => {
-                let ch = WIN_ANSI_HIGH[(c - 128) as usize];
-                (ch != '\u{0}').then(|| ch.to_string())
-            }
-            _ => None,
-        })
-        .collect();
+/// A table of the glyph each code of a base encoding stands for ("" = none).
+fn table_of(table: &[&str; 256]) -> Vec<Option<String>> {
+    table.iter().map(|t| (!t.is_empty()).then(|| t.to_string())).collect()
+}
 
-    if let Some(Object::Dictionary(encoding)) = dict.get(b"Encoding").ok().map(|o| resolve(doc, o)) {
+/// The simple font's text for each code: its base encoding with `/Differences` on top.
+///
+/// Base encoding: the `/Encoding` name or its `/BaseEncoding`; with neither, Symbol has its
+/// own, an embedded font's program has its built-in one, TrueType and Type 3 fonts are read
+/// as WinAnsi, and any other Type 1 as StandardEncoding (the specification's default).
+fn simple_encoding(
+    doc: &Document,
+    dict: &Dictionary,
+    subtype: &str,
+    base_font: &str,
+    built_in: Option<program::BuiltIn>,
+) -> Vec<Option<String>> {
+    let family = base_font.rsplit('+').next().unwrap_or(base_font);
+    let encoding = dict.get(b"Encoding").ok().map(|o| resolve(doc, o));
+    let named = match encoding {
+        Some(Object::Name(n)) => Some(String::from_utf8_lossy(n).into_owned()),
+        Some(Object::Dictionary(d)) => name_of(doc, d, b"BaseEncoding"),
+        _ => None,
+    };
+    let mut table = match named.as_deref() {
+        Some("WinAnsiEncoding") => table_of(&encodings_data::WIN_ANSI),
+        Some("MacRomanEncoding") => table_of(&encodings_data::MAC_ROMAN),
+        Some("StandardEncoding") => table_of(&encodings_data::STANDARD),
+        // MacExpertEncoding is for small caps and old-style figures: left unread, not guessed.
+        Some(_) => vec![None; 256],
+        None if family.starts_with("Symbol") => table_of(&encodings_data::SYMBOL),
+        // ZapfDingbats has no Unicode table here: its glyphs are not text.
+        None if family.starts_with("ZapfDingbats") => vec![None; 256],
+        None => match built_in {
+            Some(program::BuiltIn::Names(names)) => names.iter().map(|n| n.as_deref().and_then(glyph_name_text)).collect(),
+            Some(program::BuiltIn::Standard) => table_of(&encodings_data::STANDARD),
+            None if subtype == "TrueType" || subtype == "Type3" => table_of(&encodings_data::WIN_ANSI),
+            None => table_of(&encodings_data::STANDARD),
+        },
+    };
+    if let Some(Object::Dictionary(encoding)) = encoding {
         if let Some(list) = array_of(doc, encoding, b"Differences") {
             let mut code = 0usize;
             for item in &list {
@@ -468,7 +582,12 @@ fn simple_encoding(doc: &Document, dict: &Dictionary) -> Vec<Option<String>> {
                     Object::Integer(n) => code = *n as usize,
                     Object::Name(name) => {
                         if let Some(slot) = table.get_mut(code) {
-                            *slot = glyph_name_text(&String::from_utf8_lossy(name));
+                            let text = glyph_name_text(&String::from_utf8_lossy(name));
+                            // A Type 3 glyph has a name of the producer's own invention; keep what the
+                            // code means in the base table rather than lose the text altogether.
+                            if text.is_some() || subtype != "Type3" {
+                                *slot = text;
+                            }
                         }
                         code += 1;
                     }
@@ -480,28 +599,33 @@ fn simple_encoding(doc: &Document, dict: &Dictionary) -> Vec<Option<String>> {
     table
 }
 
-fn glyph_name_text(name: &str) -> Option<String> {
-    if let Some(hex) = name.strip_prefix("uni") {
-        if let Some(c) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32) {
-            return Some(c.to_string());
-        }
+/// The text a glyph name stands for, by the Adobe Glyph List rules: a component
+/// per `_` (ligatures), nothing after a `.` (variants), `uniXXXX` and `uXXXX`.
+pub fn glyph_name_text(name: &str) -> Option<String> {
+    let base = name.split('.').next().unwrap_or(name);
+    if base.is_empty() {
+        return None;
     }
-    let mut chars = name.chars();
-    if let (Some(c), None) = (chars.next(), chars.next()) {
-        return Some(c.to_string());
+    let mut text = String::new();
+    for part in base.split('_') {
+        text.push_str(&component_text(part)?);
     }
-    const NAMES: &[(&str, char)] = &[
-        ("space", ' '), ("period", '.'), ("comma", ','), ("hyphen", '-'), ("colon", ':'),
-        ("semicolon", ';'), ("slash", '/'), ("parenleft", '('), ("parenright", ')'),
-        ("zero", '0'), ("one", '1'), ("two", '2'), ("three", '3'), ("four", '4'),
-        ("five", '5'), ("six", '6'), ("seven", '7'), ("eight", '8'), ("nine", '9'),
-        ("aacute", 'á'), ("eacute", 'é'), ("iacute", 'í'), ("oacute", 'ó'), ("uacute", 'ú'),
-        ("Aacute", 'Á'), ("Eacute", 'É'), ("Iacute", 'Í'), ("Oacute", 'Ó'), ("Uacute", 'Ú'),
-        ("ntilde", 'ñ'), ("Ntilde", 'Ñ'), ("udieresis", 'ü'), ("Udieresis", 'Ü'),
-        ("questiondown", '¿'), ("exclamdown", '¡'), ("bullet", '•'), ("endash", '–'),
-        ("emdash", '—'), ("quotedblleft", '“'), ("quotedblright", '”'),
-    ];
-    NAMES.iter().find(|(n, _)| *n == name).map(|(_, c)| c.to_string())
+    Some(text)
+}
+
+fn component_text(part: &str) -> Option<String> {
+    if let Ok(found) = encodings_data::AGL.binary_search_by(|(n, _)| (*n).cmp(part)) {
+        return Some(encodings_data::AGL[found].1.to_string());
+    }
+    if let Some(hex) = part.strip_prefix("uni").filter(|h| h.len() >= 4 && h.len() % 4 == 0 && h.chars().all(|c| c.is_ascii_hexdigit())) {
+        return (0..hex.len() / 4)
+            .map(|i| u32::from_str_radix(&hex[i * 4..i * 4 + 4], 16).ok().and_then(char::from_u32))
+            .collect();
+    }
+    if let Some(hex) = part.strip_prefix('u').filter(|h| (4..=6).contains(&h.len()) && h.chars().all(|c| c.is_ascii_hexdigit())) {
+        return u32::from_str_radix(hex, 16).ok().and_then(char::from_u32).map(|c| c.to_string());
+    }
+    None
 }
 
 // -- reading loosely-typed PDF objects -------------------------------------
@@ -580,6 +704,21 @@ fn difference_names(doc: &Document, dict: &Dictionary) -> Vec<Option<String>> {
         }
     }
     names
+}
+
+/// The encoding an embedded Type 1 or CFF program carries itself.
+fn built_in_encoding(doc: &Document, descriptor: &Dictionary) -> Option<program::BuiltIn> {
+    match embedded_program(doc, descriptor)? {
+        Program::Cff(data) => program::CffGlyphs::built_in_names(&data).map(program::BuiltIn::Names),
+        Program::Sfnt(data) => {
+            let face = ttf_parser::Face::parse(&data, 0).ok()?;
+            let table = face.tables().cff?;
+            let names: Vec<Option<String>> =
+                (0..=255u8).map(|c| table.glyph_index(c).and_then(|g| table.glyph_name(g)).map(str::to_string)).collect();
+            names.iter().any(Option::is_some).then_some(program::BuiltIn::Names(names))
+        }
+        Program::Type1(data) => program::type1_encoding(&data),
+    }
 }
 
 fn first_descendant<'a>(doc: &'a Document, dict: &'a Dictionary) -> Option<&'a Dictionary> {

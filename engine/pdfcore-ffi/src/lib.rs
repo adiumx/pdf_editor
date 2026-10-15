@@ -50,12 +50,17 @@ fn failure(error: &Error) -> Value {
         Error::NoSuchPage(_) => "no_such_page",
         Error::MissingGlyphs(_) => "missing_glyphs",
         Error::NoSuchField(_) => "no_such_field",
+        Error::NotEditable(_) => "not_editable",
         Error::Rejected(_) => "rejected",
         Error::Unsupported(_) => "unsupported",
     };
     let mut out = json!({ "error": error.to_string(), "kind": kind });
     if let Error::MissingGlyphs(chars) = error {
         out["chars"] = json!(chars.iter().collect::<String>());
+    }
+    // Why text cannot be edited: type3, vertical_writing, symbolic_font or rtl_text.
+    if let Error::NotEditable(reason) = error {
+        out["reason"] = json!(reason);
     }
     out
 }
@@ -200,6 +205,8 @@ pub unsafe extern "C" fn pdfcore_page(doc: *mut PdfDoc, page: c_int) -> *mut c_c
                     "id": id, "text": r.text, "font": r.font, "base_font": r.base_font,
                     "size": r.size, "display": r.display, "origin": [r.origin.0, r.origin.1],
                     "invisible": r.render_mode == 3,
+                    "editable": r.not_editable.is_none(), "not_editable": r.not_editable,
+                    "font_embedded": r.font_embedded, "font_kind": r.font_kind.as_str(),
                 })
             })
             .collect();

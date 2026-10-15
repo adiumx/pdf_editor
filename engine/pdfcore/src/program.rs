@@ -53,6 +53,16 @@ impl CffGlyphs {
         CffGlyphs { draws, by_name, by_cid: (!cids.is_empty()).then_some(cids), built_in }
     }
 
+    /// The glyph name the font's own encoding gives each code.
+    pub fn built_in_names(data: &[u8]) -> Option<Vec<Option<String>>> {
+        let table = cff::Table::parse(data)?;
+        let mut names = vec![None; 256];
+        for code in 0..=255u8 {
+            names[code as usize] = table.glyph_index(code).and_then(|g| table.glyph_name(g)).map(str::to_string);
+        }
+        names.iter().any(Option::is_some).then_some(names)
+    }
+
     pub fn parse(data: &[u8]) -> Option<CffGlyphs> {
         Some(CffGlyphs::from_table(&cff::Table::parse(data)?))
     }
@@ -129,6 +139,48 @@ pub(crate) fn type1_glyph_names(data: &[u8]) -> Option<HashSet<String>> {
         names.insert(name);
     }
     (!names.is_empty()).then_some(names)
+}
+
+/// What a Type 1 font says about its own encoding.
+pub(crate) enum BuiltIn {
+    /// `/Encoding StandardEncoding def`.
+    Standard,
+    /// An explicit `dup <code> /<name> put` list.
+    Names(Vec<Option<String>>),
+}
+
+/// The cleartext part of a Type 1 font (a PFB's first segment, or what comes before `eexec`).
+fn type1_cleartext(data: &[u8]) -> Option<&[u8]> {
+    if data.first() == Some(&0x80) {
+        let length = u32::from_le_bytes(data.get(2..6)?.try_into().ok()?) as usize;
+        return data.get(6..6 + length);
+    }
+    let end = find(data, b"eexec").unwrap_or(data.len());
+    data.get(..end)
+}
+
+pub(crate) fn type1_encoding(data: &[u8]) -> Option<BuiltIn> {
+    let text = type1_cleartext(data)?;
+    let at = find(text, b"/Encoding")? + b"/Encoding".len();
+    let rest = &text[at..];
+    let head = String::from_utf8_lossy(&rest[..rest.len().min(40)]);
+    if head.trim_start().starts_with("StandardEncoding") {
+        return Some(BuiltIn::Standard);
+    }
+    let end = find(rest, b"readonly def").or_else(|| find(rest, b" def")).unwrap_or(rest.len());
+    let body = String::from_utf8_lossy(&rest[..end]).into_owned();
+    let mut names = vec![None; 256];
+    let tokens: Vec<&str> = body.split_whitespace().collect();
+    for window in tokens.windows(4) {
+        if window[0] == "dup" && window[3] == "put" {
+            if let (Ok(code), Some(name)) = (window[1].parse::<usize>(), window[2].strip_prefix('/')) {
+                if code < 256 {
+                    names[code] = Some(name.to_string());
+                }
+            }
+        }
+    }
+    names.iter().any(Option::is_some).then_some(BuiltIn::Names(names))
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {

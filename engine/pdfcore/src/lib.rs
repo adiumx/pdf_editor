@@ -6,6 +6,7 @@
 mod add;
 mod cmap;
 mod edit;
+mod encodings_data;
 mod error;
 mod fallback;
 mod font;
@@ -29,7 +30,7 @@ use lopdf::{Dictionary, Document as Raw, Object, ObjectId};
 use journal::{Patch, Tracked};
 
 pub use error::{Error, Result};
-pub use font::{Font, FontKind, Glyph};
+pub use font::{glyph_name_text, Font, FontClass, FontKind, Glyph};
 pub use add::{Added, Align, Anchor, NewText};
 pub use edit::{ReplaceOptions, Replaced};
 pub use reflow::{Alignment, Reflow, Warning};

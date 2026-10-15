@@ -213,6 +213,9 @@ class PdfDocument implements Finalizable {
   /// default what follows on the line moves with it ([Reflow.following]); the
   /// result's `warnings` say if that pushed the line past the margin. Invalidates
   /// every run id: read the page again.
+  ///
+  /// Throws a `not_editable` [PdfException] (`reason`: `type3`, `vertical_writing`, `symbolic_font`,
+  /// `rtl_text`) for text that cannot be reproduced; check [TextRun.editable] first.
   EditResult replaceText(PageData page, TextRun run, String text,
           {bool allowFallback = false, Reflow reflow = Reflow.following}) =>
       replaceTextById(page.index, run.id, text, allowFallback: allowFallback, reflow: reflow);
