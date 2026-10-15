@@ -68,7 +68,7 @@ pub struct Block {
     /// Why the text cannot be edited, if it cannot (`type3`, `rtl_text`...).
     pub not_editable: Option<&'static str>,
     /// The strings it is drawn with, line by line.
-    pub(crate) runs: Vec<TextRun>,
+    pub runs: Vec<TextRun>,
     /// Which line (index in `lines`) each run belongs to.
     run_line: Vec<usize>,
     styles: Vec<RunStyle>,
@@ -463,7 +463,7 @@ fn tf(name: &str, size: f32) -> Operation {
 }
 
 /// What may be asked of an edit besides the new text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct BlockOptions {
     /// Draw letters the fonts lack with a bundled one (see `Substitute`).
     pub allow_fallback: bool,
@@ -473,6 +473,9 @@ pub struct BlockOptions {
     /// When the block grows, move what is below it down by the room it takes (what would not fit
     /// on the page stays and is reported).
     pub push_down: bool,
+    /// Lay the text out within this width (points) instead of the one the block had: how a text
+    /// box is resized. A single line wraps when it does not fit.
+    pub width: Option<f32>,
 }
 
 /// A change of style for a range of letters; `None` leaves that property as it is.
@@ -533,7 +536,7 @@ impl Document {
     /// As [`replace_block`](Self::replace_block), with [`BlockOptions`].
     pub fn replace_block_with(&mut self, page: usize, block: &Block, new_text: &str, options: BlockOptions) -> Result<BlockEdit> {
         let wanted: String = new_text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if wanted == block.text && options.justify.is_none_or(|j| j == block.justified) {
+        if wanted == block.text && options.justify.is_none_or(|j| j == block.justified) && options.width.is_none() {
             return Ok(unchanged(block));
         }
         // Every letter keeps its style; what is typed takes the style of the letter before it.
@@ -742,8 +745,11 @@ impl Document {
         let old_count = block.lines.len();
         let rest_left = if old_count > 1 { block.lines[1].display[0] } else { block.lines[0].display[0] };
         let first_left = block.lines[0].display[0];
-        let right = block.lines.iter().map(|l| l.display[2]).fold(f32::MIN, f32::max);
-        let flowing = old_count > 1;
+        let right = match options.width {
+            Some(w) => first_left.min(rest_left) + w.max(1.0),
+            None => block.lines.iter().map(|l| l.display[2]).fold(f32::MIN, f32::max),
+        };
+        let flowing = old_count > 1 || options.width.is_some();
         let justified = options.justify.unwrap_or(block.justified);
         let left_of = |i: usize| if i == 0 { first_left } else { rest_left };
 
@@ -997,7 +1003,7 @@ impl Document {
     }
 
     /// Make runs draw nothing, keeping each operation (so no operation's index moves).
-    fn blank_runs(&mut self, page: lopdf::ObjectId, runs: &[&TextRun]) -> Result<()> {
+    pub(crate) fn blank_runs(&mut self, page: lopdf::ObjectId, runs: &[&TextRun]) -> Result<()> {
         if runs.is_empty() {
             return Ok(());
         }

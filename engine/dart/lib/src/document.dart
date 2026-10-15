@@ -73,6 +73,13 @@ class _Native {
         setBlockStyle = lib.lookupFunction<_Str Function(_Handle, Int, Int, Int, Int, _Str),
             _Str Function(_Handle, int, int, int, int, _Str)>('pdfcore_set_block_style'),
         blockChars = lib.lookupFunction<_Str Function(_Handle, Int, Int), _Str Function(_Handle, int, int)>('pdfcore_block_chars'),
+        hitTest = lib.lookupFunction<_Str Function(_Handle, Int, Float, Float), _Str Function(_Handle, int, double, double)>('pdfcore_hit_test'),
+        deleteItems = lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>('pdfcore_delete_items'),
+        resizeItem = lib.lookupFunction<_Str Function(_Handle, Int, Int, Float, Float, Float, Float),
+            _Str Function(_Handle, int, int, double, double, double, double)>('pdfcore_resize_item'),
+        refreshAppearances =
+            lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_refresh_appearances'),
+        batch = lib.lookupFunction<_Str Function(_Handle, _Str), _Str Function(_Handle, _Str)>('pdfcore_batch'),
         setSubstitution = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_set_substitution'),
         blocks = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_blocks'),
         replaceBlock = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
@@ -130,6 +137,11 @@ class _Native {
   final _Str Function(_Handle, int, int, int, int, _Str, _Str) replaceRange;
   final _Str Function(_Handle, int, int, int, int, _Str) setBlockStyle;
   final _Str Function(_Handle, int, int) blockChars;
+  final _Str Function(_Handle, int, double, double) hitTest;
+  final _Str Function(_Handle, int, _Str) deleteItems;
+  final _Str Function(_Handle, int, int, double, double, double, double) resizeItem;
+  final _Str Function(_Handle, int) refreshAppearances;
+  final _Str Function(_Handle, _Str) batch;
   final _Str Function(_Handle, int) setSubstitution;
   final _Str Function(_Handle, int) blocks;
   final _Str Function(_Handle, int, int, _Str, int) replaceBlock;
@@ -291,6 +303,52 @@ class PdfDocument implements Finalizable {
       'moves': [for (final m in moves) {'id': m.item.id, 'dx': m.dx, 'dy': m.dy}],
     });
     _withString(params, (p) => _json(_n.moveItems(_live, page, p)));
+  }
+
+  /// What is under the point ([x], [y] as the page is shown): a field before text before a picture.
+  /// For text it says which block, which letter and where the caret goes. Reads the page's items
+  /// and blocks again, so the ids in the answer are the current ones.
+  PdfHit? hitTest(int page, double x, double y) {
+    final h = _json(_n.hitTest(_live, page, x, y))['hit'] as Map<String, dynamic>?;
+    if (h == null) return null;
+    return PdfHit(
+      const {'text': PdfItemKind.text, 'image': PdfItemKind.image, 'field': PdfItemKind.field}[h['kind']]!,
+      (h['id'] as num).toInt(),
+      _box(h['display']),
+      fieldName: h['name'] as String?,
+      widget: (h['widget'] as num?)?.toInt() ?? 0,
+      block: (h['block'] as num?)?.toInt(),
+      char: (h['char'] as num?)?.toInt(),
+      caret: (h['caret'] as num?)?.toInt(),
+    );
+  }
+
+  /// Take items off the page (text stops drawing, a picture is cancelled, a field leaves the page
+  /// and the form), as one step for [undo].
+  void deleteItems(int page, List<PdfItem> items) {
+    final params = jsonEncode({'ids': [for (final i in items) i.id]});
+    _withString(params, (p) => _json(_n.deleteItems(_live, page, p)));
+  }
+
+  /// Resize [item] to [box] (`[x0, y0, x1, y1]` as the page is shown): a picture is scaled, a field
+  /// gets the box, text is laid out again within the width (its height follows from the text).
+  void resizeItem(int page, PdfItem item, List<double> box) =>
+      _json(_n.resizeItem(_live, page, item.id, box[0], box[1], box[2], box[3]));
+
+  /// Build the look of the form's fields again from their values; with [onlyMissing] just the ones
+  /// with a widget that has none (a reader that builds none of its own shows empty boxes).
+  RefreshResult refreshAppearances({bool onlyMissing = true}) {
+    final j = _json(_n.refreshAppearances(_live, onlyMissing ? 1 : 0));
+    return RefreshResult((j['rebuilt'] as num).toInt(), (j['skipped'] as num).toInt());
+  }
+
+  /// Several edits as ONE undo step: if any fails none is applied (the error says which kind). Each
+  /// [BatchOp] points at ids of the last readings; they must point at different things.
+  /// Returns the JSON result of each op (`substitutes`, `warnings`...), in order.
+  List<Map<String, dynamic>> batch(List<BatchOp> ops) {
+    final params = jsonEncode({'ops': [for (final o in ops) o.json]});
+    final j = _withString(params, (p) => _json(_n.batch(_live, p)));
+    return [for (final r in j['results'] as List) r as Map<String, dynamic>];
   }
 
   /// Line items up (or space them evenly) like a design tool does, as one step.

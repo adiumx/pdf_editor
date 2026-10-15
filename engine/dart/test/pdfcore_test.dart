@@ -428,6 +428,31 @@ void main() {
     });
   });
 
+  group('managing items', () {
+    test('hit test, resize, delete and a batch that is one undo step', () {
+      final doc = open('canvas');
+      addTearDown(doc.close);
+      final items = doc.items(0);
+      final text = items.firstWhere((i) => i.kind == PdfItemKind.text && i.text.startsWith('Primera'));
+      final hit = doc.hitTest(0, (text.display[0] + text.display[2]) / 2, (text.display[1] + text.display[3]) / 2)!;
+      expect(hit.kind, PdfItemKind.text);
+      expect(hit.caret, isNotNull);
+      expect(doc.hitTest(0, 590, 835), isNull);
+      final picture = items.firstWhere((i) => i.kind == PdfItemKind.image);
+      final field = items.firstWhere((i) => i.kind == PdfItemKind.field);
+      final results = doc.batch([
+        BatchOp.resizeItem(0, picture, [picture.display[0], picture.display[1], picture.display[0] + 30, picture.display[1] + 30]),
+        BatchOp.setField(field.fieldName!, 'Lote'),
+      ]);
+      expect(results, hasLength(2));
+      doc.undo();
+      expect(doc.fields().firstWhere((f) => f.name == field.fieldName).value, isNot('Lote'));
+      final fresh = doc.items(0);
+      doc.deleteItems(0, fresh.where((i) => i.kind == PdfItemKind.image).toList());
+      expect(doc.items(0).where((i) => i.kind == PdfItemKind.image), isEmpty);
+    });
+  });
+
   group('block styles', () {
     test('a range is made bold and red, replaced, and what is below is pushed down', () {
       final doc = open('producer_reportlab_ttf');

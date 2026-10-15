@@ -295,6 +295,22 @@ Sobre un `PdfBlock` (siempre uno por párrafo o por línea suelta):
 Todo es un paso de deshacer, y los ids caducan con cualquier edición. Si un texto no es un párrafo
 (una sola línea) funciona igual con un bloque de una línea.
 
+### Lotes, borrar, tocar, redimensionar, apariencia de formularios
+
+- `batch([BatchOp...])`: varias ediciones en UN paso de deshacer; si una falla no se aplica ninguna.
+  Cada operación apunta a ids de la última lectura **tal como estaban al empezar el lote** (el motor los
+  vuelve a encontrar por texto y posición), y deben apuntar a cosas distintas. En Rust, `Document::batch`
+  hace lo mismo con cualquier secuencia de llamadas.
+- `deleteItems(page, items)`: el texto deja de dibujarse, la imagen se cancela, el campo sale de la página y
+  del formulario. Un paso; deshacer devuelve el archivo idéntico.
+- `hitTest(page, x, y)`: qué hay bajo un punto (campo antes que texto antes que imagen). Para texto devuelve
+  el bloque, la letra y la posición del cursor (`caret`, 0..largo). Vuelve a leer ítems y bloques, así que
+  los ids de la respuesta son los vigentes.
+- `resizeItem(page, item, box)`: la imagen se escala, el campo toma la caja (y reconstruye su apariencia), el
+  texto se recoloca dentro del nuevo ancho (la altura la da el texto).
+- `refreshAppearances(onlyMissing:)`: reconstruye la apariencia (`/AP`) de los campos desde su valor, para
+  visores que no la generan; marca/casillas reciben los estados que les falten.
+
 ## 6. Fidelidad de fuentes: qué se puede editar y cómo se avisa
 
 Cada `TextRun` trae (JSON → Dart): `font_kind` → `fontKind` (`embedded_full`, `embedded_subset`,

@@ -471,6 +471,15 @@ impl Document {
         }
     }
 
+    /// Build the states a check box or radio button lacks and make each widget show the state the
+    /// field's value names.
+    pub(crate) fn rebuild_button(&mut self, field: &Field) -> Result<()> {
+        self.ensure_button_appearances(field)?;
+        let fresh = self.field(&field.name).ok_or_else(|| Error::NoSuchField(field.name.clone()))?;
+        let value = if fresh.value.is_empty() { "Off".to_string() } else { fresh.value.clone() };
+        self.fill_button(&fresh, &value)
+    }
+
     fn fill_button(&mut self, field: &Field, value: &str) -> Result<()> {
         let lower = value.trim().to_lowercase();
         let on_states: Vec<&String> = field.widgets.iter().filter_map(|w| w.on_state.as_ref()).collect();

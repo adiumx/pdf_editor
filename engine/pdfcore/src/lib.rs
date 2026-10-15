@@ -18,6 +18,7 @@ mod items;
 mod journal;
 mod kerning;
 mod layout;
+mod manage;
 mod pages;
 mod placement;
 mod paragraph;
@@ -37,6 +38,7 @@ pub use error::{Error, Result};
 pub use font::{glyph_name_text, Font, FontClass, FontKind, Glyph};
 pub use add::{Added, Align, Anchor, NewText};
 pub use edit::{ReplaceOptions, Replaced};
+pub use manage::{Hit, Refreshed};
 pub use fontbook::{FontSource, RegisteredFont, RequiredFont};
 pub use substitute::{Substitute, Substitution, Via};
 pub use reflow::{Alignment, Reflow, Warning};
@@ -184,6 +186,11 @@ impl Document {
     /// Run one edit as a single undoable step: if it fails nothing is changed,
     /// if it succeeds it can be undone as a whole.
     pub(crate) fn transaction<T>(&mut self, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        // Inside a batch the outer edit owns the step: this one just runs, and if it fails the
+        // outer one rolls everything back.
+        if self.pdf.is_open() {
+            return edit(self);
+        }
         self.pdf.begin();
         match edit(self) {
             Ok(value) => {
@@ -209,6 +216,14 @@ impl Document {
         self.wrapped.clear();
         // Undoing or redoing a page operation changes which pages there are.
         self.pages = self.pdf.get_pages().values().copied().collect();
+    }
+
+    /// Run several edits as ONE undo step. Each of them is an ordinary call on the document; if
+    /// any fails, every one of them is undone and the error returned. Things read before the batch
+    /// go stale as edits happen inside it (see the ids of runs, blocks and items): read again
+    /// between edits, or order them so that each only needs what the previous ones left alone.
+    pub fn batch<T>(&mut self, edits: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.transaction(edits)
     }
 
     pub fn can_undo(&self) -> bool {

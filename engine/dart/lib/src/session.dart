@@ -101,6 +101,17 @@ class PdfSession {
 
   Future<RegisteredFont> registerFont(Uint8List font) => _call<RegisteredFont>('registerFont', [font]);
 
+  Future<PdfHit?> hitTest(int page, double x, double y) => _call<PdfHit?>('hitTest', [page, x, y]);
+
+  Future<void> deleteItems(int page, List<PdfItem> items) => _call<void>('deleteItems', [page, items]);
+
+  Future<void> resizeItem(int page, PdfItem item, List<double> box) => _call<void>('resizeItem', [page, item, box]);
+
+  Future<RefreshResult> refreshAppearances({bool onlyMissing = true}) =>
+      _call<RefreshResult>('refreshAppearances', [onlyMissing]);
+
+  Future<List<Map<String, dynamic>>> batch(List<BatchOp> ops) => _call<List<Map<String, dynamic>>>('batch', [ops]);
+
   Future<void> setSubstitution(Substitution policy) => _call<void>('setSubstitution', [policy]);
 
   Future<List<PdfBlock>> blocks(int page) => _call<List<PdfBlock>>('blocks', [page]);
@@ -262,6 +273,18 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
       return doc.requiredFonts();
     case 'registerFont':
       return doc.registerFont(a[0] as Uint8List);
+    case 'hitTest':
+      return doc.hitTest(a[0] as int, a[1] as double, a[2] as double);
+    case 'deleteItems':
+      doc.deleteItems(a[0] as int, (a[1] as List).cast<PdfItem>());
+      return null;
+    case 'resizeItem':
+      doc.resizeItem(a[0] as int, a[1] as PdfItem, (a[2] as List).cast<double>());
+      return null;
+    case 'refreshAppearances':
+      return doc.refreshAppearances(onlyMissing: a[0] as bool);
+    case 'batch':
+      return doc.batch((a[0] as List).cast<BatchOp>());
     case 'setSubstitution':
       doc.setSubstitution(a[0] as Substitution);
       return null;

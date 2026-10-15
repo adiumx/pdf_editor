@@ -439,6 +439,7 @@ fn block_options(p: &Value) -> BlockOptions {
         allow_fallback: p.get("allow_fallback").and_then(Value::as_bool).unwrap_or(false),
         justify: p.get("justify").and_then(Value::as_bool),
         push_down: p.get("push_down").and_then(Value::as_bool).unwrap_or(false),
+        width: p.get("width").and_then(Value::as_f64).map(|w| w as f32),
     }
 }
 
@@ -585,6 +586,319 @@ pub unsafe extern "C" fn pdfcore_block_chars(doc: *mut PdfDoc, page: c_int, bloc
     guard(|| match block_of(d, page.max(0) as usize, block_id) {
         Ok(b) => json!({ "boxes": b.char_boxes }),
         Err(e) => e,
+    })
+}
+
+/// The item at a point of the page (as a reader shows it): `{"hit":null}` or `{"hit":{"kind",
+/// "id","display","name"?,"widget"?,"block"?,"char"?,"caret"?}}`. A field is hit before text and text
+/// before a picture. For text, `block` is the id of its block, `char` the letter under the point
+/// and `caret` the insertion point (0..=length) nearest to it. This reads the page's items and
+/// blocks again, so the ids it returns are the current ones.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_hit_test(doc: *mut PdfDoc, page: c_int, x: f32, y: f32) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let (items, blocks) = match (d.doc.page_items(page), d.doc.blocks(page)) {
+            (Ok(i), Ok(b)) => (i, b),
+            (Err(e), _) | (_, Err(e)) => return failure(&e),
+        };
+        let hit = match d.doc.hit_test(page, x, y) {
+            Ok(h) => h,
+            Err(e) => return failure(&e),
+        };
+        d.items.insert(page, items);
+        d.blocks.insert(page, blocks);
+        match hit {
+            None => json!({ "hit": null }),
+            Some(h) => {
+                let mut out = json!({
+                    "kind": match h.kind { ItemKind::Text => "text", ItemKind::Image => "image", ItemKind::Field => "field" },
+                    "id": h.item, "display": h.display,
+                });
+                if let Some((name, widget)) = &h.field {
+                    out["name"] = json!(name);
+                    out["widget"] = json!(widget);
+                }
+                out["block"] = json!(h.block);
+                out["char"] = json!(h.char_index);
+                out["caret"] = json!(h.caret);
+                json!({ "hit": out })
+            }
+        }
+    })
+}
+
+/// Take items off the page: `{"ids":[..]}` of the last `pdfcore_items`. Text stops drawing,
+/// pictures are cancelled, a field's widget leaves the page and the form. One undo step.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_delete_items(doc: *mut PdfDoc, page: c_int, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let Ok(p) = serde_json::from_str::<Value>(params) else { return bad_params() };
+        let items = match chosen(d, page, p.get("ids").unwrap_or(&Value::Null)) {
+            Ok(i) => i,
+            Err(e) => return e,
+        };
+        let result = d.doc.delete_items(page, &items);
+        finished(d, result)
+    })
+}
+
+/// Resize an item of the last `pdfcore_items` to the box `[x0,y0,x1,y1]` (as a reader shows the
+/// page): a picture is scaled, a field gets the box, text is laid out again within the width and
+/// moved to the corner (its height follows from the text).
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_resize_item(doc: *mut PdfDoc, page: c_int, id: c_int, x0: f32, y0: f32, x1: f32, y1: f32) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| {
+        let page = page.max(0) as usize;
+        let items = match chosen(d, page, &json!([id])) {
+            Ok(i) => i,
+            Err(e) => return e,
+        };
+        let result = d.doc.resize_item(page, &items[0], [x0, y0, x1, y1]);
+        finished(d, result)
+    })
+}
+
+/// Build the look of the form's fields again from their values (`only_missing` != 0: only fields
+/// with a widget that has none): `{"ok":true,"rebuilt":n,"skipped":n}`.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_refresh_appearances(doc: *mut PdfDoc, only_missing: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| match d.doc.refresh_appearances(only_missing != 0) {
+        Ok(done) => {
+            edited(d);
+            json!({ "ok": true, "rebuilt": done.rebuilt, "skipped": done.skipped })
+        }
+        Err(e) => failure(&e),
+    })
+}
+
+/// One edit of a batch, with what it points to as it was when the batch began.
+enum Step {
+    ReplaceText { page: usize, run: TextRun, text: String, options: ReplaceOptions },
+    ReplaceBlock { page: usize, block: Block, text: String, options: BlockOptions },
+    ReplaceRange { page: usize, block: Block, start: usize, end: usize, text: String, options: BlockOptions },
+    SetStyle { page: usize, block: Block, start: usize, end: usize, change: StyleChange, options: BlockOptions },
+    Move { page: usize, moves: Vec<(Item, (f32, f32))> },
+    Delete { page: usize, items: Vec<Item> },
+    Resize { page: usize, item: Item, display: [f32; 4] },
+    SetField { name: String, value: String },
+}
+
+fn gone(what: &str) -> Error {
+    Error::Rejected(format!("{what} ya no está donde se leyó: en un lote, cada operación debe apuntar a algo distinto"))
+}
+
+fn same_place(a: (f32, f32), b: (f32, f32)) -> bool {
+    (a.0 - b.0).abs() < 0.5 && (a.1 - b.1).abs() < 0.5
+}
+
+/// The run now at the place and with the text `old` had.
+fn fresh_run(doc: &Document, page: usize, old: &TextRun) -> pdfcore::Result<TextRun> {
+    doc.text_runs(page)?
+        .into_iter()
+        .find(|r| r.xobject == old.xobject && r.text == old.text && same_place(r.origin, old.origin))
+        .ok_or_else(|| gone("ese texto"))
+}
+
+fn fresh_block(doc: &Document, page: usize, old: &Block) -> pdfcore::Result<Block> {
+    let first = &old.runs[0];
+    doc.blocks(page)?
+        .into_iter()
+        .find(|b| b.runs.first().is_some_and(|r| r.xobject == first.xobject && r.text == first.text && same_place(r.origin, first.origin)))
+        .ok_or_else(|| gone("ese párrafo"))
+}
+
+fn fresh_item(doc: &Document, page: usize, old: &Item) -> pdfcore::Result<Item> {
+    doc.page_items(page)?
+        .into_iter()
+        .find(|it| {
+            it.kind == old.kind
+                && match old.kind {
+                    ItemKind::Text => old.runs.first().zip(it.runs.first()).is_some_and(|(a, b)| a.text == b.text && same_place(a.origin, b.origin)),
+                    ItemKind::Image => old.picture.as_ref().zip(it.picture.as_ref()).is_some_and(|(a, b)| a.name == b.name && a.display.iter().zip(b.display).all(|(x, y)| (x - y).abs() < 0.5)),
+                    ItemKind::Field => it.field == old.field,
+                }
+        })
+        .ok_or_else(|| gone("ese elemento"))
+}
+
+/// Several edits as ONE undo step; if any fails, none is applied. `params` is `{"ops":[...]}` and
+/// each op has `"op"` and `"page"` and points to ids of the last readings (`pdfcore_page`,
+/// `pdfcore_blocks`, `pdfcore_items`), all as they were when the batch began:
+/// `replace_text` (`run`, `text`, `allow_fallback`, `reflow`), `replace_block` (`block`, `text` and the
+/// options of `pdfcore_replace_block_ex`), `replace_range` (+ `start`, `end`), `set_block_style`
+/// (`block`, `start`, `end`, `bold`, `italic`, `size`, `color`), `move_items` (`moves`),
+/// `delete_items` (`ids`), `resize_item` (`id`, `box`), `set_field` (`name`, `value`). The ops
+/// must point at different things (what one changes the next cannot find again; the batch then
+/// fails whole). Returns `{"ok":true,"results":[...]}`, one entry per op.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_batch(doc: *mut PdfDoc, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else { return bad_params() };
+        let Some(ops) = p.get("ops").and_then(Value::as_array) else { return bad_params() };
+        let mut steps: Vec<Step> = Vec::new();
+        for op in ops {
+            let page = op.get("page").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let id = |key: &str| op.get(key).and_then(Value::as_i64).unwrap_or(-1) as c_int;
+            let text = op.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+            let count = |key: &str| op.get(key).and_then(Value::as_u64).unwrap_or(0) as usize;
+            let step = match op.get("op").and_then(Value::as_str).unwrap_or("") {
+                "replace_text" => {
+                    let Some(run) = d.reading.get(&page).and_then(|r| r.get(id("run").max(0) as usize)).cloned() else {
+                        return json!({ "error": "ese texto ya no está donde se leyó: vuelve a leer la página", "kind": "stale_run" });
+                    };
+                    let reflow = match op.get("reflow").and_then(Value::as_i64).unwrap_or(1) {
+                        0 => Reflow::None,
+                        2 => Reflow::Centered,
+                        3 => Reflow::RightAligned,
+                        _ => Reflow::Following,
+                    };
+                    let options = ReplaceOptions {
+                        allow_fallback: op.get("allow_fallback").and_then(Value::as_bool).unwrap_or(false),
+                        reflow,
+                        substitution: d.substitution,
+                    };
+                    Step::ReplaceText { page, run, text, options }
+                }
+                kind @ ("replace_block" | "replace_range" | "set_block_style") => {
+                    let block = match block_of(d, page, id("block")) {
+                        Ok(b) => b,
+                        Err(e) => return e,
+                    };
+                    let options = block_options(op);
+                    match kind {
+                        "replace_block" => Step::ReplaceBlock { page, block, text, options },
+                        "replace_range" => Step::ReplaceRange { page, block, start: count("start"), end: count("end"), text, options },
+                        _ => {
+                            let color = op.get("color").and_then(Value::as_array).and_then(|c| {
+                                let v: Vec<f32> = c.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
+                                (v.len() == 3).then(|| [v[0], v[1], v[2]])
+                            });
+                            let change = StyleChange {
+                                bold: op.get("bold").and_then(Value::as_bool),
+                                italic: op.get("italic").and_then(Value::as_bool),
+                                size: op.get("size").and_then(Value::as_f64).map(|v| v as f32),
+                                color,
+                            };
+                            Step::SetStyle { page, block, start: count("start"), end: count("end"), change, options }
+                        }
+                    }
+                }
+                "move_items" => {
+                    let Some(list) = op.get("moves").and_then(Value::as_array) else { return bad_params() };
+                    let mut moves = Vec::new();
+                    for m in list {
+                        let items = match chosen(d, page, &json!([m.get("id")])) {
+                            Ok(i) => i,
+                            Err(e) => return e,
+                        };
+                        let num = |k: &str| m.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+                        moves.push((items[0].clone(), (num("dx"), num("dy"))));
+                    }
+                    Step::Move { page, moves }
+                }
+                "delete_items" => match chosen(d, page, op.get("ids").unwrap_or(&Value::Null)) {
+                    Ok(items) => Step::Delete { page, items },
+                    Err(e) => return e,
+                },
+                "resize_item" => {
+                    let items = match chosen(d, page, &json!([op.get("id")])) {
+                        Ok(i) => i,
+                        Err(e) => return e,
+                    };
+                    let b: Vec<f32> = op.get("box").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect()).unwrap_or_default();
+                    if b.len() != 4 {
+                        return bad_params();
+                    }
+                    Step::Resize { page, item: items[0].clone(), display: [b[0], b[1], b[2], b[3]] }
+                }
+                "set_field" => Step::SetField { name: op.get("name").and_then(Value::as_str).unwrap_or("").to_string(), value: op.get("value").and_then(Value::as_str).unwrap_or("").to_string() },
+                _ => return json!({ "error": "operación de lote desconocida", "kind": "bad_argument" }),
+            };
+            steps.push(step);
+        }
+        let outcome = d.doc.batch(|doc| {
+            let mut results: Vec<Value> = Vec::new();
+            for step in &steps {
+                results.push(match step {
+                    Step::ReplaceText { page, run, text, options } => {
+                        let run = fresh_run(doc, *page, run)?;
+                        let done = doc.replace_text_with(*page, &run, text, *options)?;
+                        json!({ "ok": true, "old_width": done.old_width, "new_width": done.new_width, "substitutes": substitutes_json(&done.substitutes),
+                                "warnings": done.warnings.iter().map(warning_json).collect::<Vec<_>>() })
+                    }
+                    Step::ReplaceBlock { page, block, text, options } => {
+                        let block = fresh_block(doc, *page, block)?;
+                        block_edit_json(&doc.replace_block_with(*page, &block, text, *options)?)
+                    }
+                    Step::ReplaceRange { page, block, start, end, text, options } => {
+                        let block = fresh_block(doc, *page, block)?;
+                        block_edit_json(&doc.replace_range(*page, &block, *start, *end, text, *options)?)
+                    }
+                    Step::SetStyle { page, block, start, end, change, options } => {
+                        let block = fresh_block(doc, *page, block)?;
+                        block_edit_json(&doc.set_style(*page, &block, *start, *end, *change, *options)?)
+                    }
+                    Step::Move { page, moves } => {
+                        let mut fresh = Vec::new();
+                        for (item, delta) in moves {
+                            fresh.push((fresh_item(doc, *page, item)?, *delta));
+                        }
+                        doc.move_items(*page, &fresh)?;
+                        json!({ "ok": true })
+                    }
+                    Step::Delete { page, items } => {
+                        let mut fresh = Vec::new();
+                        for item in items {
+                            fresh.push(fresh_item(doc, *page, item)?);
+                        }
+                        doc.delete_items(*page, &fresh)?;
+                        json!({ "ok": true })
+                    }
+                    Step::Resize { page, item, display } => {
+                        let item = fresh_item(doc, *page, item)?;
+                        doc.resize_item(*page, &item, *display)?;
+                        json!({ "ok": true })
+                    }
+                    Step::SetField { name, value } => {
+                        doc.set_field_value(name, value)?;
+                        json!({ "ok": true })
+                    }
+                });
+            }
+            Ok(results)
+        });
+        match outcome {
+            Ok(results) => {
+                edited(d);
+                json!({ "ok": true, "results": results })
+            }
+            Err(e) => {
+                edited(d);
+                failure(&e)
+            }
+        }
     })
 }
 

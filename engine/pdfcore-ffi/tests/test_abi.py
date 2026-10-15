@@ -52,6 +52,11 @@ for name, args in {
     "pdfcore_replace_range": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p],
     "pdfcore_set_block_style": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_char_p],
     "pdfcore_block_chars": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int],
+    "pdfcore_hit_test": [ctypes.c_void_p, ctypes.c_int, ctypes.c_float, ctypes.c_float],
+    "pdfcore_delete_items": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
+    "pdfcore_resize_item": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float],
+    "pdfcore_refresh_appearances": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_batch": [ctypes.c_void_p, ctypes.c_char_p],
     "pdfcore_set_substitution": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_blocks": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_replace_block": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
@@ -654,4 +659,59 @@ def test_block_styles_cross_the_boundary_and_an_independent_reader_agrees():
     page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
     text = " ".join(page.get_text().split())
     assert "Otro párrafo normal" in text and "Mas texto para que el parrafo crezca" in text
+    d.close()
+
+
+def test_hit_delete_resize_and_batch_cross_the_boundary():
+    import pymupdf
+    d = Doc("canvas")
+    items = call("pdfcore_items", d.handle, 0)["items"]
+    text = next(i for i in items if i["kind"] == "text" and i["text"].startswith("Primera"))
+    cx, cy = (text["display"][0] + text["display"][2]) / 2, (text["display"][1] + text["display"][3]) / 2
+    hit = call("pdfcore_hit_test", d.handle, 0, cx, cy)["hit"]
+    assert hit["kind"] == "text" and hit["char"] is not None and hit["block"] is not None, hit
+    assert call("pdfcore_hit_test", d.handle, 0, 590.0, 835.0)["hit"] is None
+
+    # A batch: move a text, resize a picture and set a field: ONE undo step takes all of it back.
+    items = call("pdfcore_items", d.handle, 0)["items"]
+    pic = next(i for i in items if i["kind"] == "image")
+    field = next(i for i in items if i["kind"] == "field")
+    before = d.save()
+    ops = {"ops": [
+        {"op": "move_items", "page": 0, "moves": [{"id": text["id"], "dx": 5, "dy": 6}]},
+        {"op": "resize_item", "page": 0, "id": pic["id"], "box": [pic["display"][0], pic["display"][1], pic["display"][0] + 30, pic["display"][1] + 30]},
+        {"op": "set_field", "name": field["name"], "value": "Nuevo valor"},
+    ]}
+    done = call("pdfcore_batch", d.handle, json.dumps(ops).encode())
+    assert done["ok"] and len(done["results"]) == 3, done
+    assert d.fields()[field["name"]]["value"] == "Nuevo valor"
+    assert d.undo()["ok"]
+    assert d.save() == before
+
+    # A failing op undoes the ones before it.
+    items = call("pdfcore_items", d.handle, 0)["items"]
+    bad = {"ops": [
+        {"op": "set_field", "name": field["name"], "value": "Otro"},
+        {"op": "set_field", "name": "no existe", "value": "x"},
+    ]}
+    failed = call("pdfcore_batch", d.handle, json.dumps(bad).encode())
+    assert failed["kind"] == "no_such_field", failed
+    assert d.save() == before
+
+    # Delete: the picture is gone for an independent reader too.
+    items = call("pdfcore_items", d.handle, 0)["items"]
+    pics = [i["id"] for i in items if i["kind"] == "image"]
+    assert call("pdfcore_delete_items", d.handle, 0, json.dumps({"ids": pics}).encode())["ok"]
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    assert page.get_images() == [] or all(page.get_image_rects(img[0]) == [] for img in page.get_images())
+    d.close()
+
+
+def test_missing_looks_are_rebuilt():
+    import pymupdf
+    d = Doc("form_no_appearance")
+    done = call("pdfcore_refresh_appearances", d.handle, 1)
+    assert done["ok"] and done["rebuilt"] >= 1, done
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    assert all(w.field_name for w in page.widgets())
     d.close()

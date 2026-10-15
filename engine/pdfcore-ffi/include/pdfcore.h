@@ -55,6 +55,11 @@ char *pdfcore_replace_block_ex(PdfDoc *doc, int page, int block_id, const char *
 char *pdfcore_replace_range(PdfDoc *doc, int page, int block_id, int start, int end, const char *new_text, const char *params_json);
 char *pdfcore_set_block_style(PdfDoc *doc, int page, int block_id, int start, int end, const char *params_json);
 char *pdfcore_block_chars(PdfDoc *doc, int page, int block_id);
+char *pdfcore_hit_test(PdfDoc *doc, int page, float x, float y);
+char *pdfcore_delete_items(PdfDoc *doc, int page, const char *params_json);
+char *pdfcore_resize_item(PdfDoc *doc, int page, int id, float x0, float y0, float x1, float y1);
+char *pdfcore_refresh_appearances(PdfDoc *doc, int only_missing);
+char *pdfcore_batch(PdfDoc *doc, const char *params_json);
 char *pdfcore_set_substitution(PdfDoc *doc, int policy);
 char *pdfcore_blocks(PdfDoc *doc, int page);
 char *pdfcore_replace_block(PdfDoc *doc, int page, int block_id, const char *new_text, int allow_fallback);

@@ -55,7 +55,7 @@ impl Document {
     }
 
     /// Every `Do` of an image, with the transformation in force and the image's name.
-    fn draws(&self, content: &Content, xobjects: &Option<lopdf::Dictionary>) -> Vec<(usize, [f32; 6], String)> {
+    pub(crate) fn draws(&self, content: &Content, xobjects: &Option<lopdf::Dictionary>) -> Vec<(usize, [f32; 6], String)> {
         let (mut ctm, mut stack, mut found) = (IDENTITY, Vec::<[f32; 6]>::new(), Vec::new());
         for (index, op) in content.operations.iter().enumerate() {
             let n = |i: usize| op.operands.get(i).and_then(|o| crate::font::num(&self.pdf, o)).unwrap_or(0.0);
@@ -78,6 +78,11 @@ impl Document {
             }
         }
         found
+    }
+
+    /// Where the drawing at `op_index` is, and the transformation in force there.
+    pub(crate) fn picture_matrix(&self, content: &Content, xobjects: &Option<lopdf::Dictionary>, op_index: usize) -> Option<(usize, [f32; 6])> {
+        self.draws(content, xobjects).into_iter().find(|(i, _, _)| *i == op_index).map(|(i, ctm, _)| (i, ctm))
     }
 
     /// Move pictures by `(dx, dy)` each, as a reader shows the page.

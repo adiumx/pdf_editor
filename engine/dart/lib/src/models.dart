@@ -706,3 +706,72 @@ class RegisteredFont {
   final bool bold;
   final bool italic;
 }
+
+/// What is under a point of a page (`hitTest`). Ids are those of the current readings.
+class PdfHit {
+  PdfHit(this.kind, this.item, this.display, {this.fieldName, this.widget = 0, this.block, this.char, this.caret});
+  final PdfItemKind kind;
+
+  /// Id in the page's `items()`.
+  final int item;
+  final List<double> display;
+  final String? fieldName;
+  final int widget;
+
+  /// For text: id in the page's `blocks()`, the letter under the point, and the insertion point
+  /// (0..length, between letters) nearest to it.
+  final int? block;
+  final int? char;
+  final int? caret;
+}
+
+/// What `refreshAppearances` did.
+class RefreshResult {
+  RefreshResult(this.rebuilt, this.skipped);
+  final int rebuilt;
+  final int skipped;
+}
+
+/// One edit of a `batch`: they all happen as ONE undo step, or none does. Each points at ids of the
+/// last readings as they were when the batch began, and the ops of a batch must point at different
+/// things.
+class BatchOp {
+  const BatchOp._(this.json);
+  final Map<String, dynamic> json;
+
+  factory BatchOp.replaceText(int page, TextRun run, String text, {bool allowFallback = false}) =>
+      BatchOp._({'op': 'replace_text', 'page': page, 'run': run.id, 'text': text, 'allow_fallback': allowFallback});
+
+  factory BatchOp.replaceBlock(int page, PdfBlock block, String text,
+          {bool allowFallback = false, bool? justify, bool pushDown = false, double? width}) =>
+      BatchOp._({
+        'op': 'replace_block', 'page': page, 'block': block.id, 'text': text,
+        'allow_fallback': allowFallback, 'justify': justify, 'push_down': pushDown, 'width': width,
+      });
+
+  factory BatchOp.replaceRange(int page, PdfBlock block, int start, int end, String text, {bool allowFallback = false}) =>
+      BatchOp._({
+        'op': 'replace_range', 'page': page, 'block': block.id, 'start': start, 'end': end, 'text': text,
+        'allow_fallback': allowFallback,
+      });
+
+  factory BatchOp.setBlockStyle(int page, PdfBlock block, int start, int end,
+          {bool? bold, bool? italic, double? size, List<double>? color, bool allowFallback = false}) =>
+      BatchOp._({
+        'op': 'set_block_style', 'page': page, 'block': block.id, 'start': start, 'end': end,
+        'bold': bold, 'italic': italic, 'size': size, 'color': color, 'allow_fallback': allowFallback,
+      });
+
+  factory BatchOp.moveItems(int page, List<ItemMove> moves) => BatchOp._({
+        'op': 'move_items', 'page': page,
+        'moves': [for (final m in moves) {'id': m.item.id, 'dx': m.dx, 'dy': m.dy}],
+      });
+
+  factory BatchOp.deleteItems(int page, List<PdfItem> items) =>
+      BatchOp._({'op': 'delete_items', 'page': page, 'ids': [for (final i in items) i.id]});
+
+  factory BatchOp.resizeItem(int page, PdfItem item, List<double> box) =>
+      BatchOp._({'op': 'resize_item', 'page': page, 'id': item.id, 'box': box});
+
+  factory BatchOp.setField(String name, String value) => BatchOp._({'op': 'set_field', 'name': name, 'value': value});
+}

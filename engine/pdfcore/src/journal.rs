@@ -44,6 +44,11 @@ impl Tracked {
         Tracked { doc, open: None }
     }
 
+    /// A transaction is open (an edit running inside another edit, as in a batch).
+    pub fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
     pub fn begin(&mut self) {
         self.open = Some(Patch { set: BTreeMap::new(), top: self.doc.max_id });
     }
