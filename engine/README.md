@@ -240,7 +240,7 @@ la fuente.
 - Si ni el respaldo trae el carácter (por ejemplo CJK) falla igual con
   `MissingGlyphs` y sin cambios.
 - Desde el hito 7 la fuente se **subconjunta**: solo van los contornos de las letras usadas
-  (unos kilobytes en vez de ~200 KB), y se incluyen además Liberation Mono, Carlito (Calibri) y Caladea (Cambria).
+  (unos kilobytes en vez de ~200 KB), y se incluyen además Liberation Mono, Carlito (Calibri), Caladea (Cambria), Open Sans (sustituta general de las sans que no son Arial) y Noto Serif (la de las serifas que no son Times).
 - Licencia: las fuentes son SIL OFL 1.1 (`pdfcore/fonts/LICENSE-Liberation-OFL.txt`),
   que permite incluirlas e incrustarlas en un producto de pago.
 

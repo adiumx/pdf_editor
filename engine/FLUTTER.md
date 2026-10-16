@@ -49,7 +49,7 @@ sola. `arm64-v8a` cubre las tablets Galaxy Tab S7 FE/S9/S10; `armeabi-v7a` los
 equipos viejos de 32 bits; `x86_64` el emulador.
 
 El perfil `release` ya está ajustado para tamaño (`opt-level = "s"`, LTO, strip).
-Las fuentes incluidas (Liberation Sans/Serif/Mono, Carlito, Caladea: unos 7 MB en el binario) se
+Las fuentes incluidas (Liberation Sans/Serif/Mono, Carlito, Caladea, Open Sans, Noto Serif: unos 10 MB en el binario) se
 **subconjuntan al incrustarlas**: un documento solo lleva los contornos de las letras que usó (unos
 kilobytes por fuente y estilo, no ~200 KB). Si el binario pesa demasiado, se pueden quitar
 familias enteras de `pdfcore/src/fallback.rs`.
@@ -380,7 +380,8 @@ Al escribir una letra que la fuente del texto no dibuja, el motor prueba, en est
    Solo se hace con letras latinas (Latin-1 y Latin Extendido-A y la puntuación usual), que cualquier
    copia del lector tiene; el cirílico o el griego no se enseñan a una fuente latina.
 3. **Una fuente incluida** (con `allowFallback`): Liberation Sans/Serif/Mono (clones métricos de
-   Arial, Times y Courier), Carlito (Calibri) y Caladea (Cambria), todas OFL. La elegida sale del
+   Arial, Times y Courier), Carlito (Calibri) y Caladea (Cambria), y para todo lo demás Open Sans (sans) y
+   Noto Serif (serifa), todas OFL. La elegida sale del
    nombre y de los `Flags` de la fuente; `similarity` va de 0 a 100 (100 = clon métrico; menos de 90 =
    otra cara: **avisa a la persona**).
 4. Si ninguna la tiene: `missing_glyphs` y no se cambia nada.

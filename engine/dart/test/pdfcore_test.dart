@@ -417,7 +417,7 @@ void main() {
       addTearDown(doc.close);
       final fonts = doc.requiredFonts();
       expect(fonts.single.needed, isTrue);
-      expect(fonts.single.source!.name, 'Open Sans');
+      expect(fonts.single.source!.name, 'Open Sans (bundled)');
       expect(doc.page(0).runs.first.substituteSimilarity, lessThan(90));
       final font = File('${engine.path}/pdfcore/tests/fixtures/registered_verdana.ttf').readAsBytesSync();
       expect(doc.registerFont(font).family, 'Verdana');

@@ -18,7 +18,7 @@ use ttf_parser::Face;
 
 use crate::error::{Error, Result};
 
-const FONTS: [(&str, &[u8]); 20] = [
+const FONTS: [(&str, &[u8]); 28] = [
     ("LiberationSans-Regular", include_bytes!("../fonts/LiberationSans-Regular.ttf")),
     ("LiberationSans-Bold", include_bytes!("../fonts/LiberationSans-Bold.ttf")),
     ("LiberationSans-Italic", include_bytes!("../fonts/LiberationSans-Italic.ttf")),
@@ -39,6 +39,14 @@ const FONTS: [(&str, &[u8]); 20] = [
     ("Caladea-Bold", include_bytes!("../fonts/Caladea-Bold.ttf")),
     ("Caladea-Italic", include_bytes!("../fonts/Caladea-Italic.ttf")),
     ("Caladea-BoldItalic", include_bytes!("../fonts/Caladea-BoldItalic.ttf")),
+    ("OpenSans-Regular", include_bytes!("../fonts/OpenSans-Regular.ttf")),
+    ("OpenSans-Bold", include_bytes!("../fonts/OpenSans-Bold.ttf")),
+    ("OpenSans-Italic", include_bytes!("../fonts/OpenSans-Italic.ttf")),
+    ("OpenSans-BoldItalic", include_bytes!("../fonts/OpenSans-BoldItalic.ttf")),
+    ("NotoSerif-Regular", include_bytes!("../fonts/NotoSerif-Regular.ttf")),
+    ("NotoSerif-Bold", include_bytes!("../fonts/NotoSerif-Bold.ttf")),
+    ("NotoSerif-Italic", include_bytes!("../fonts/NotoSerif-Italic.ttf")),
+    ("NotoSerif-BoldItalic", include_bytes!("../fonts/NotoSerif-BoldItalic.ttf")),
 ];
 
 /// The bundled families. Liberation is metrically compatible with Arial/Helvetica (Sans),
@@ -51,6 +59,8 @@ pub(crate) enum Family {
     Mono,
     Carlito,
     Caladea,
+    OpenSans,
+    NotoSerif,
 }
 
 impl Family {
@@ -61,6 +71,8 @@ impl Family {
             Family::Mono => "LiberationMono",
             Family::Carlito => "Carlito",
             Family::Caladea => "Caladea",
+            Family::OpenSans => "OpenSans",
+            Family::NotoSerif => "NotoSerif",
         }
     }
 }
@@ -104,18 +116,18 @@ pub(crate) fn pick_with(base_font: &str, flags: Option<u32>, bold: Option<bool>,
     } else if contains_any(&name, &["mono", "consolas", "lucidaconsole", "menlo", "monaco", "typewriter", "fixed", "code"]) {
         (Family::Mono, 75)
     } else if !sans_word && contains_any(&name, &["georgia", "garamond", "palatino", "minion", "book", "century", "baskerville", "didot", "serif", "roman"]) {
-        (Family::Serif, 75)
+        (Family::NotoSerif, 75)
     } else if contains_any(&name, &["verdana", "tahoma", "segoe", "trebuchet", "myriad", "opensans", "roboto", "lato", "sans", "gothic", "frutiger", "univers"]) {
-        (Family::Sans, 70)
+        (Family::OpenSans, 70)
     } else if let Some(f) = flags.filter(|f| f & 1 != 0) {
         let _ = f;
         (Family::Mono, 60)
     } else if flags.is_some_and(|f| f & 2 != 0) {
-        (Family::Serif, 60)
+        (Family::NotoSerif, 60)
     } else if flags.is_some() {
-        (Family::Sans, 55)
+        (Family::OpenSans, 55)
     } else {
-        (Family::Sans, 40)
+        (Family::OpenSans, 40)
     };
     let bold = bold.unwrap_or_else(|| contains_any(&name, &["bold", "black", "heavy", "demi"]) || flags.is_some_and(|f| f & (1 << 18) != 0));
     let italic = italic.unwrap_or_else(|| contains_any(&name, &["italic", "oblique"]) || flags.is_some_and(|f| f & (1 << 6) != 0));
@@ -378,6 +390,10 @@ mod tests {
         assert_eq!(choose("Cambria-Bold").0, "Caladea-Bold");
         assert_eq!(choose("CourierNewPS-ItalicMT").0, "LiberationMono-Italic");
         assert_eq!(pick("Georgia", None).similarity, 75);
+        assert_eq!(pick("Georgia", None).key, "NotoSerif-Regular");
+        assert_eq!(pick("Verdana-Bold", None).key, "OpenSans-Bold");
+        assert_eq!(pick("Zzz", Some(0)).key, "OpenSans-Regular");
+        assert_eq!(pick("Zzz", Some(2)).key, "NotoSerif-Regular");
         assert_eq!(pick("Zzz", Some(1)).key, "LiberationMono-Regular");
         assert_eq!(choose("Arial-BoldItalicMT").0, "LiberationSans-BoldItalic");
     }

@@ -74,8 +74,8 @@ const SOURCES: &[(&[&str], FontSource)] = &[
     (&["times"], FontSource { name: "Liberation Serif (bundled)", license: "OFL-1.1", url: "https://github.com/liberationfonts/liberation-fonts" }),
     (&["courier", "consolas"], FontSource { name: "Liberation Mono (bundled)", license: "OFL-1.1", url: "https://github.com/liberationfonts/liberation-fonts" }),
     (&["georgia"], FontSource { name: "Gelasio", license: "OFL-1.1", url: "https://fonts.google.com/specimen/Gelasio" }),
-    (&["verdana", "tahoma", "segoe", "trebuchet"], FontSource { name: "Open Sans", license: "OFL-1.1", url: "https://fonts.google.com/specimen/Open+Sans" }),
-    (&["garamond", "palatino", "minion", "book", "century"], FontSource { name: "EB Garamond", license: "OFL-1.1", url: "https://fonts.google.com/specimen/EB+Garamond" }),
+    (&["verdana", "tahoma", "segoe", "trebuchet"], FontSource { name: "Open Sans (bundled)", license: "OFL-1.1", url: "https://github.com/googlefonts/opensans" }),
+    (&["garamond", "palatino", "minion", "book", "century"], FontSource { name: "Noto Serif (bundled)", license: "OFL-1.1", url: "https://github.com/notofonts/NotoSerif" }),
     (&["roboto"], FontSource { name: "Roboto", license: "Apache-2.0", url: "https://fonts.google.com/specimen/Roboto" }),
     (&["lato"], FontSource { name: "Lato", license: "OFL-1.1", url: "https://fonts.google.com/specimen/Lato" }),
 ];

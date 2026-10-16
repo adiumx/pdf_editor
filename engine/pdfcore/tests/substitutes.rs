@@ -63,7 +63,7 @@ mod policy {
         let chars: String = done.substitutes.iter().map(|s| s.ch).collect();
         assert!(chars.contains('Ñ') && !chars.contains('H'), "{chars}");
         // The closest bundled face to a Verdana is a sans: only a guess, and it says so.
-        assert!(done.substitutes.iter().all(|s| s.similarity < 90 && s.font.starts_with("LiberationSans")));
+        assert!(done.substitutes.iter().all(|s| s.similarity < 90 && s.font.starts_with("OpenSans")));
     }
 
     #[test]
@@ -75,7 +75,7 @@ mod policy {
         assert_eq!(done.substitutes.len(), text.chars().count());
         let runs = doc.text_runs(0).unwrap();
         assert_eq!(runs[0].text, text);
-        assert!(runs[0].base_font.contains("LiberationSans"));
+        assert!(runs[0].base_font.contains("OpenSans"));
         // The sans runs wider than the serif it replaces: Tz makes it keep the serif's pace.
         assert!(runs[0].hscale < 0.97 && runs[0].hscale > 0.8, "{}", runs[0].hscale);
         // Undone, nothing of it is left.
@@ -125,7 +125,7 @@ mod font_book {
         assert_eq!((f.base_font.as_str(), f.class, f.needed, f.registered), ("ABCDEF+Verdana", FontClass::EmbeddedSubset, true, false));
         assert_eq!(f.pages, vec![0]);
         assert!(f.similarity < 90);
-        assert_eq!(f.source.as_ref().unwrap().name, "Open Sans");
+        assert_eq!(f.source.as_ref().unwrap().name, "Open Sans (bundled)");
         // A standard font needs nothing.
         let standard = open("standard").required_fonts().unwrap();
         assert!(standard.iter().all(|f| !f.needed));

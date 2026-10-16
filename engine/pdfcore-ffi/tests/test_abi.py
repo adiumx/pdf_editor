@@ -619,7 +619,7 @@ def test_substitution_policy_draws_the_whole_run_in_one_face():
     done = d.replace(0, "Hola mundo cruel de Ñandú", fallback=1)
     assert done["ok"] and len(done["substitutes"]) == 25, done
     assert {s["via"] for s in done["substitutes"]} == {"bundled_font"}
-    assert all(s["similarity"] < 90 and s["font"].startswith("LiberationSans") for s in done["substitutes"])
+    assert all(s["similarity"] < 90 and s["font"].startswith("OpenSans") for s in done["substitutes"])
     page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
     assert "Ñandú" in page.get_text()
     spans = [sp for b in page.get_text("dict")["blocks"] for l in b["lines"] for sp in l["spans"]]
@@ -631,7 +631,7 @@ def test_required_fonts_and_a_registered_font():
     d = Doc("font_subset_as_verdana")
     fonts = call("pdfcore_required_fonts", d.handle)["fonts"]
     assert fonts[0]["base_font"] == "ABCDEF+Verdana" and fonts[0]["needed"] and not fonts[0]["registered"]
-    assert fonts[0]["source"]["name"] == "Open Sans" and fonts[0]["similarity"] < 90
+    assert fonts[0]["source"]["name"] == "Open Sans (bundled)" and fonts[0]["similarity"] < 90
     run = d.page()["runs"][0]
     assert run["substitute_similarity"] < 90
     data = (FIXTURES / "registered_verdana.ttf").read_bytes()
