@@ -69,6 +69,7 @@ char *pdfcore_flatten(PdfDoc *doc, const char *params_json);
 char *pdfcore_redact(PdfDoc *doc, int page, const char *params_json);
 char *pdfcore_ocr_report(PdfDoc *doc);
 char *pdfcore_graphics(PdfDoc *doc, int page);
+char *pdfcore_delete_runs(PdfDoc *doc, int page, const char *params_json);
 uint8_t *pdfcore_save_incremental(PdfDoc *doc, size_t *len);
 char *pdfcore_set_substitution(PdfDoc *doc, int policy);
 char *pdfcore_blocks(PdfDoc *doc, int page);

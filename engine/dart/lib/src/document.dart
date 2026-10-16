@@ -93,6 +93,7 @@ class _Native {
         ocrReport = lib.lookupFunction<_Str Function(_Handle), _Str Function(_Handle)>('pdfcore_ocr_report'),
         saveIncremental = lib.lookupFunction<Pointer<Uint8> Function(_Handle, Pointer<Size>),
             Pointer<Uint8> Function(_Handle, Pointer<Size>)>('pdfcore_save_incremental'),
+        deleteRuns = lib.lookupFunction<_Str Function(_Handle, Int, _Str), _Str Function(_Handle, int, _Str)>('pdfcore_delete_runs'),
         graphics = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_graphics'),
         setSubstitution = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_set_substitution'),
         blocks = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_blocks'),
@@ -165,6 +166,7 @@ class _Native {
   final _Str Function(_Handle, int, _Str) redact;
   final _Str Function(_Handle) ocrReport;
   final Pointer<Uint8> Function(_Handle, Pointer<Size>) saveIncremental;
+  final _Str Function(_Handle, int, _Str) deleteRuns;
   final _Str Function(_Handle, int) graphics;
   final _Str Function(_Handle, int) setSubstitution;
   final _Str Function(_Handle, int) blocks;
@@ -480,6 +482,16 @@ class PdfDocument implements Finalizable {
     final j = _withString(params, (p) => _json(_n.redact(_live, page, p)));
     return RedactResult((j['chars'] as num).toInt(), (j['runs'] as num).toInt(), (j['images_removed'] as num).toInt(),
         (j['images_kept'] as num).toInt(), (j['annotations_removed'] as num).toInt());
+  }
+
+  /// Delete [runs] of the last `page()` reading of [page] for real: their letters leave the file and
+  /// nothing around them moves. One undo step; every run id is renewed. `stale_run` when a run is not
+  /// in the last reading, `unsupported` for text inside a form XObject or written top to bottom.
+  DeletedRuns deleteRuns(int page, List<TextRun> runs) => deleteRunsById(page, [for (final r in runs) r.id]);
+
+  DeletedRuns deleteRunsById(int page, List<int> runIds) {
+    final j = _withString(jsonEncode({'runs': runIds}), (p) => _json(_n.deleteRuns(_live, page, p)));
+    return DeletedRuns((j['runs'] as num).toInt(), (j['chars'] as num).toInt());
   }
 
   /// The vector graphics [page] paints, in painting order: rectangles (check boxes, cells, frames),

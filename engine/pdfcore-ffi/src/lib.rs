@@ -57,6 +57,7 @@ fn failure(error: &Error) -> Value {
         Error::NotEditable(_) => "not_editable",
         Error::Rejected(_) => "rejected",
         Error::Unsupported(_) => "unsupported",
+        Error::StaleRun(_) => "stale_run",
     };
     let mut out = json!({ "error": error.to_string(), "kind": kind });
     if let Error::MissingGlyphs(chars) = error {
@@ -699,6 +700,8 @@ enum Step {
     Delete { page: usize, items: Vec<Item> },
     Resize { page: usize, item: Item, display: [f32; 4] },
     SetField { name: String, value: String },
+    AddText { page: usize, params: Value },
+    DeleteRuns { page: usize, runs: Vec<TextRun> },
 }
 
 fn gone(what: &str) -> Error {
@@ -745,7 +748,8 @@ fn fresh_item(doc: &Document, page: usize, old: &Item) -> pdfcore::Result<Item> 
 /// `replace_text` (`run`, `text`, `allow_fallback`, `reflow`), `replace_block` (`block`, `text` and the
 /// options of `pdfcore_replace_block_ex`), `replace_range` (+ `start`, `end`), `set_block_style`
 /// (`block`, `start`, `end`, `bold`, `italic`, `size`, `color`), `move_items` (`moves`),
-/// `delete_items` (`ids`), `resize_item` (`id`, `box`), `set_field` (`name`, `value`). The ops
+/// `delete_items` (`ids`), `resize_item` (`id`, `box`), `set_field` (`name`, `value`), `add_text` (the
+/// parameters of `pdfcore_add_text`), `delete_runs` (`runs`: ids of the last `pdfcore_page`). The ops
 /// must point at different things (what one changes the next cannot find again; the batch then
 /// fails whole). Returns `{"ok":true,"results":[...]}`, one entry per op.
 ///
@@ -833,6 +837,23 @@ pub unsafe extern "C" fn pdfcore_batch(doc: *mut PdfDoc, params: *const c_char) 
                     }
                     Step::Resize { page, item: items[0].clone(), display: [b[0], b[1], b[2], b[3]] }
                 }
+                "add_text" => {
+                    if new_text_of(op).is_none() {
+                        return json!({ "error": "faltan text, x o y", "kind": "bad_argument" });
+                    }
+                    Step::AddText { page, params: op.clone() }
+                }
+                "delete_runs" => {
+                    let Some(ids) = op.get("runs").and_then(Value::as_array) else { return bad_params() };
+                    let mut runs = Vec::new();
+                    for id in ids {
+                        match id.as_u64().and_then(|n| d.reading.get(&page).and_then(|r| r.get(n as usize))) {
+                            Some(run) => runs.push(run.clone()),
+                            None => return json!({ "error": "ese texto ya no está donde se leyó: vuelve a leer la página", "kind": "stale_run" }),
+                        }
+                    }
+                    Step::DeleteRuns { page, runs }
+                }
                 "set_field" => Step::SetField { name: op.get("name").and_then(Value::as_str).unwrap_or("").to_string(), value: op.get("value").and_then(Value::as_str).unwrap_or("").to_string() },
                 _ => return json!({ "error": "operación de lote desconocida", "kind": "bad_argument" }),
             };
@@ -884,6 +905,28 @@ pub unsafe extern "C" fn pdfcore_batch(doc: *mut PdfDoc, params: *const c_char) 
                     Step::SetField { name, value } => {
                         doc.set_field_value(name, value)?;
                         json!({ "ok": true })
+                    }
+                    Step::AddText { page, params } => {
+                        let new = new_text_of(params).ok_or_else(|| Error::Rejected("faltan text, x o y".into()))?;
+                        let added = doc.add_text(*page, &new)?;
+                        json!({ "ok": true, "display": added.display, "lines": added.lines })
+                    }
+                    Step::DeleteRuns { page, runs } => {
+                        // Found again by what they say and where (what the batch did before may have
+                        // renumbered them).
+                        let now = doc.text_runs(*page)?;
+                        let mut ids = Vec::new();
+                        for old in runs {
+                            let at = (0..now.len())
+                                .find(|i| {
+                                    let r = &now[*i];
+                                    !ids.contains(i) && r.xobject == old.xobject && r.text == old.text && same_place(r.origin, old.origin)
+                                })
+                                .ok_or_else(|| Error::StaleRun("ese texto ya no está donde se leyó".into()))?;
+                            ids.push(at);
+                        }
+                        let done = doc.delete_runs(*page, &ids)?;
+                        json!({ "ok": true, "runs": done.runs, "chars": done.chars })
                     }
                 });
             }
@@ -1180,6 +1223,62 @@ pub unsafe extern "C" fn pdfcore_graphics(doc: *mut PdfDoc, page: c_int) -> *mut
         }),
         Err(e) => failure(&e),
     })
+}
+
+/// Delete text strings for real (the letters leave the file; nothing around them moves):
+/// `{"runs":[ids of the last pdfcore_page reading]}`. Returns `{"ok":true,"runs","chars"}`, one
+/// undo step. `stale_run` when an id is not in the last reading, `unsupported` for text inside a
+/// form XObject or written top to bottom; in both cases nothing changes.
+///
+/// # Safety
+/// `doc` must be a live handle; `params` a NUL-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_delete_runs(doc: *mut PdfDoc, page: c_int, params: *const c_char) -> *mut c_char {
+    let (Some(d), Some(params)) = (handle(doc), string_arg(params)) else { return bad_argument() };
+    guard(|| {
+        let Ok(p) = serde_json::from_str::<Value>(params) else { return bad_params() };
+        let page = page.max(0) as usize;
+        let Some(ids) = p.get("runs").and_then(Value::as_array) else { return bad_params() };
+        let stale = || json!({ "error": "ese texto ya no está donde se leyó: vuelve a leer la página", "kind": "stale_run" });
+        let Some(reading) = d.reading.get(&page) else { return stale() };
+        let mut chosen = Vec::new();
+        for id in ids {
+            match id.as_u64().map(|n| n as usize).filter(|n| *n < reading.len()) {
+                Some(n) => chosen.push(n),
+                None => return stale(),
+            }
+        }
+        match d.doc.delete_runs(page, &chosen) {
+            Ok(done) => {
+                edited(d);
+                json!({ "ok": true, "runs": done.runs, "chars": done.chars })
+            }
+            Err(e) => failure(&e),
+        }
+    })
+}
+
+/// A `NewText` from the JSON of `pdfcore_add_text`.
+fn new_text_of(p: &Value) -> Option<NewText<'_>> {
+    let (body, x, y) = (p["text"].as_str()?, p["x"].as_f64()?, p["y"].as_f64()?);
+    let mut new = NewText::new(body, x as f32, y as f32);
+    new.anchor = if p["anchor"] == "baseline" { Anchor::Baseline } else { Anchor::TopLeft };
+    if let Some(size) = p["size"].as_f64() {
+        new.size = size as f32;
+    }
+    if let Some(c) = p["color"].as_array().filter(|c| c.len() == 3) {
+        new.color = [0, 1, 2].map(|i| c[i].as_f64().unwrap_or(0.0) as f32);
+    }
+    new.serif = p["serif"].as_bool().unwrap_or(false);
+    new.bold = p["bold"].as_bool().unwrap_or(false);
+    new.italic = p["italic"].as_bool().unwrap_or(false);
+    new.align = match p["align"].as_str() {
+        Some("center") => Align::Center,
+        Some("right") => Align::Right,
+        _ => Align::Left,
+    };
+    new.max_width = p["max_width"].as_f64().map(|w| w as f32);
+    Some(new)
 }
 
 fn arrange_of(name: &str) -> Option<Arrange> {

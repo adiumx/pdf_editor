@@ -429,6 +429,43 @@ void main() {
     });
   });
 
+  group('deleting runs', () {
+    test('an X in a check box comes and goes; a comb is one step each way; also from the session', () async {
+      final doc = open('checkbox_line');
+      addTearDown(doc.close);
+      final original = doc.save();
+      final before = doc.page(0).runs.map((r) => '${r.text}@${r.origin}').toList();
+      doc.addText(0, NewText('X', 31, 288.4, size: 9, bold: true));
+      final x = doc.page(0).runs.firstWhere((r) => r.text == 'X');
+      expect(doc.deleteRuns(0, [x]).runs, 1);
+      expect(doc.page(0).runs.map((r) => '${r.text}@${r.origin}').toList(), before);
+      expect(() => doc.deleteRuns(0, [x]), throwsA(isA<PdfException>().having((e) => e.isStaleRun, 'stale', true)));
+      doc.undo();
+      doc.undo();
+      expect(doc.save(), original);
+
+      final comb = 'RUFC800101HDFZLS09';
+      doc.batch([for (var i = 0; i < comb.length; i++) BatchOp.addText(0, NewText(comb[i], 60.0 + 14 * i, 400, size: 10))]);
+      final letters = doc.page(0).runs.where((r) => (r.display[1] - 400).abs() < 2).toList();
+      expect(letters, hasLength(18));
+      doc.batch([BatchOp.deleteRuns(0, letters)]);
+      expect(doc.page(0).runs.map((r) => '${r.text}@${r.origin}').toList(), before);
+      doc.undo();
+      doc.undo();
+      expect(doc.save(), original);
+
+      final session = await PdfSession.open(fixture('checkbox_line'), libraryPath: libraryPath);
+      try {
+        await session.addText(0, NewText('X', 31, 288.4));
+        final page = await session.page(0);
+        final done = await session.deleteRuns(0, page.runs.where((r) => r.text == 'X').toList());
+        expect(done.chars, 1);
+      } finally {
+        await session.close();
+      }
+    });
+  });
+
   group('graphics', () {
     test('rectangles, lines and paths come back as the page is shown, also from the isolate session', () async {
       final doc = open('graphics');

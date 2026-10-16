@@ -66,6 +66,7 @@ for name, args in {
     "pdfcore_redact": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
     "pdfcore_ocr_report": [ctypes.c_void_p],
     "pdfcore_graphics": [ctypes.c_void_p, ctypes.c_int],
+    "pdfcore_delete_runs": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
     "pdfcore_set_substitution": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_blocks": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_replace_block": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
@@ -857,4 +858,38 @@ def test_graphics_cross_the_boundary_and_match_the_independent_reader():
     drawn = pymupdf.open(stream=d.save(), filetype="pdf")[0].get_drawings()
     assert any(abs(r["rect"].x0 - g[0]["display"][0]) < 1.5 and abs(r["rect"].y0 - g[0]["display"][1]) < 1.5 for r in drawn)
     assert call("pdfcore_graphics", d.handle, 9)["kind"] == "no_such_page"
+    d.close()
+
+
+def test_deleted_runs_leave_the_file_and_an_independent_reader_sees_the_line_unchanged():
+    import pymupdf
+    d = Doc("checkbox_line")
+    words_before = pymupdf.open(stream=d.save(), filetype="pdf")[0].get_text("words")
+    assert d.add({"text": "X", "x": 31, "y": 288.4, "size": 9, "bold": True})["ok"]
+    runs = d.page()["runs"]
+    x = next(i for i, r in enumerate(runs) if r["text"] == "X")
+    done = call("pdfcore_delete_runs", d.handle, 0, json.dumps({"runs": [x]}).encode())
+    assert done == {"ok": True, "runs": 1, "chars": 1}, done
+    # Ids are stale after the edit.
+    assert call("pdfcore_delete_runs", d.handle, 0, json.dumps({"runs": [x]}).encode())["kind"] == "stale_run"
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    words_after = page.get_text("words")
+    assert [w[4] for w in words_after] == [w[4] for w in words_before]
+    for a, b in zip(words_before, words_after):
+        assert all(abs(p - q) < 0.05 for p, q in zip(a[:4], b[:4])), (a, b)
+    d.close()
+
+
+def test_a_comb_is_one_batch_to_write_and_one_to_delete():
+    d = Doc("checkbox_line")
+    original = d.save()
+    ops = [{"op": "add_text", "page": 0, "text": c, "x": 60 + 14 * i, "y": 400, "size": 10} for i, c in enumerate("RUFC800101HDFZLS09")]
+    assert len(call("pdfcore_batch", d.handle, json.dumps({"ops": ops}).encode())["results"]) == 18
+    runs = d.page()["runs"]
+    ids = [i for i, r in enumerate(runs) if abs(r["display"][1] - 400) < 2]
+    assert len(ids) == 18
+    done = call("pdfcore_batch", d.handle, json.dumps({"ops": [{"op": "delete_runs", "page": 0, "runs": ids}]}).encode())
+    assert done["results"][0]["runs"] == 18, done
+    assert d.undo()["ok"] and d.undo()["ok"]
+    assert d.save() == original
     d.close()

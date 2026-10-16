@@ -717,4 +717,17 @@ for name, rotate in (("graphics", b""), ("graphics_rotated", b"/Rotate 90")):
         5: stream(b"0 1 0 rg 0 0 40 40 re f", b"/Type/XObject/Subtype/Form/BBox[0 0 100 100]/Matrix[1 0 0 1 10 20]"),
     }))
 
+# 29. Deleting strings: a line of check boxes with their labels (like an insurer's form), and the
+#     show operators that move to the next line (`'` and `"`) followed by text that relies on the pen.
+doc = pymupdf.open()
+page = doc.new_page(width=612, height=792)
+page.insert_text((40, 276), "Relación con el solicitante:", fontname="helv", fontsize=11)
+for x, label in ((40, "Cónyuge"), (98, "Concubina(rio)"), (185, "Otra relación con el solicitante (especifique):")):
+    page.draw_rect(pymupdf.Rect(x - 10.4, 288.2, x - 1, 297.6), color=(0, 0.48, 0.76), fill=(1, 1, 1), width=0.5)
+    page.insert_text((x + 2, 296), label, fontname="helv", fontsize=11)
+doc.save(OUT / "checkbox_line.pdf", garbage=0, deflate=False)
+(OUT / "show_operators.pdf").write_bytes(one_font_page(
+    b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>",
+    b"BT /F1 12 Tf 14 TL 72 700 Td (Uno ) Tj (Dos) ' 2 0.5 (Tres) \" ( Cuatro) Tj [(Ci) -40 (nco)] TJ ( Seis) Tj ET"))
+
 print("fixtures in", OUT)

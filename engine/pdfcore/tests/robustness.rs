@@ -36,6 +36,7 @@ fn exercise(doc: &mut Document) {
     }
     for page in 0..doc.page_count().min(3) {
         let _ = doc.page_graphics(page);
+        let _ = doc.delete_runs(page, &[0, 2]);
     }
     let _ = doc.undo();
     let _ = doc.find_text("a", SearchOptions::default());

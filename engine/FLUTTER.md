@@ -335,6 +335,19 @@ Todo es un paso de deshacer, y los ids caducan con cualquier edición. Si un tex
 - **Guardado incremental** (`saveIncremental()`): el archivo original intacto al principio y los cambios añadidos
   al final; una firma conserva su rango de bytes. También para archivos con contraseña.
 
+### Borrar texto de verdad (`deleteRuns`)
+
+`doc.deleteRuns(page, runs)` / `session.deleteRuns(page, runs)` quita del archivo los tramos (`TextRun` de la
+última lectura de `page()`): su operación de dibujo se sustituye por un desplazamiento exacto de la pluma
+(un `TJ` con un solo número), así que **nada alrededor se mueve**, ni siquiera el texto que en el mismo bloque
+seguía "a continuación". `'` y `"` conservan su salto de línea (y `"` su espaciado). Es un paso de deshacer.
+Errores: `stale_run` (el id no está en la última lectura) y `unsupported` (texto dentro de un formulario
+XObject o escrito en vertical); en ambos casos no cambia nada.
+
+Para varias cosas en un solo paso: `batch([BatchOp.addText(page, NewText(...)), ...])` y
+`batch([BatchOp.deleteRuns(page, runs)])`. Ejemplo: las 18 letras de un RFC escritas en un peine son un paso,
+y borrarlas es otro.
+
 ### Gráficos vectoriales (`graphics`)
 
 `doc.graphics(page)` / `session.graphics(page)` devuelve lo que la página **pinta** con trazos: rectángulos

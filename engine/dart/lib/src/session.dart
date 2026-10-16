@@ -134,6 +134,9 @@ class PdfSession {
 
   Future<Uint8List> saveIncremental() => _call<Uint8List>('saveIncremental', []);
 
+  Future<DeletedRuns> deleteRuns(int page, List<TextRun> runs) =>
+      _call<DeletedRuns>('deleteRuns', [page, [for (final r in runs) r.id]]);
+
   Future<List<PdfGraphic>> graphics(int page) => _call<List<PdfGraphic>>('graphics', [page]);
 
   Future<void> setSubstitution(Substitution policy) => _call<void>('setSubstitution', [policy]);
@@ -331,6 +334,8 @@ Object? _run(PdfDocument doc, String op, List<Object?> a) {
       return doc.ocrReport();
     case 'saveIncremental':
       return doc.saveIncremental();
+    case 'deleteRuns':
+      return doc.deleteRunsById(a[0] as int, (a[1] as List).cast<int>());
     case 'graphics':
       return doc.graphics(a[0] as int);
     case 'setSubstitution':

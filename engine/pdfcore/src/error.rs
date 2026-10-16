@@ -20,6 +20,9 @@ pub enum Error {
     Rejected(String),
     #[error("{0}")]
     Unsupported(String),
+    /// A text named by an id of a reading the page no longer matches.
+    #[error("{0}")]
+    StaleRun(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

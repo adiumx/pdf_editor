@@ -8,7 +8,8 @@ class PdfException implements Exception {
 
   /// `pdf`, `no_such_page`, `missing_glyphs`, `no_such_field`, `rejected`,
   /// `unsupported`, `not_editable`, `password_required`, `wrong_password`,
-  /// `stale_run`, `stale_item`, `stale_block`, `bad_argument` or `panic`.
+  /// `stale_run`, `stale_item`, `stale_block`, `bad_argument` or `panic`. (`deleteRuns` also
+  /// answers `stale_run` for a run that is not in the last reading of its page.)
   final String kind;
   final String message;
 
@@ -774,6 +775,13 @@ class BatchOp {
       BatchOp._({'op': 'resize_item', 'page': page, 'id': item.id, 'box': box});
 
   factory BatchOp.setField(String name, String value) => BatchOp._({'op': 'set_field', 'name': name, 'value': value});
+
+  /// New text, as `addText` (several of them in one batch are one undo step: the letters of a comb).
+  factory BatchOp.addText(int page, NewText text) => BatchOp._({'op': 'add_text', 'page': page, ...text.toJson()});
+
+  /// Delete these runs of the last `page()` reading, as `deleteRuns`.
+  factory BatchOp.deleteRuns(int page, List<TextRun> runs) =>
+      BatchOp._({'op': 'delete_runs', 'page': page, 'runs': [for (final r in runs) r.id]});
 }
 
 /// An annotation of a page (`annotations`). Indexes are good until the next edit.
@@ -931,4 +939,13 @@ class PdfGraphic {
         j['xobject'] as String?,
         j['ends'] == null ? null : [for (final e in j['ends'] as List) _box(e)],
       );
+}
+
+/// What `deleteRuns` did (JSON `runs`, `chars`).
+class DeletedRuns {
+  DeletedRuns(this.runs, this.chars);
+
+  /// Runs taken off the page, and the letters they had.
+  final int runs;
+  final int chars;
 }
