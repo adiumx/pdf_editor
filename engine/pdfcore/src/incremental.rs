@@ -32,6 +32,16 @@ impl Document {
         update.new_document.max_id = update.new_document.max_id.max(self.pdf.max_id);
         let mut out = Vec::new();
         update.save_to(&mut out).map_err(lopdf::Error::from)?;
+        // An update is only as good as the cross-reference table it points back to. A file whose own
+        // table is damaged (a PDF whose line endings were converted, say) was read by scanning it, and
+        // the update would point to a place that is not there: check, and say so rather than hand
+        // back a file that does not open.
+        let ok = Document::open_with_password(&out, &password).is_ok_and(|d| d.page_count() == self.page_count());
+        if !ok {
+            return Err(Error::Unsupported(
+                "la tabla de referencias del archivo original está dañada: un guardado incremental no sería válido, usa save()".into(),
+            ));
+        }
         Ok(out)
     }
 }

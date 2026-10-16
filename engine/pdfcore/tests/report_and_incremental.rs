@@ -56,3 +56,16 @@ fn an_incremental_save_of_a_protected_file_stays_protected() {
     let reopened = Document::open_with_password(&saved, "secreto").unwrap();
     assert_eq!(reopened.text_runs(0).unwrap()[0].text, "Cifrado y cambiado");
 }
+
+#[test]
+fn an_original_with_a_damaged_xref_is_not_given_a_broken_update() {
+    // The same file with its line endings converted (what a text-mode checkout does): it still opens,
+    // by scanning, but an update appended to it would not.
+    let damaged: Vec<u8> = bytes("standard").iter().flat_map(|b| if *b == b'\n' { vec![b'\r', b'\n'] } else { vec![*b] }).collect();
+    let mut doc = Document::open(&damaged).unwrap();
+    let run = doc.text_runs(0).unwrap().remove(0);
+    doc.replace_text(0, &run, "Cambiado").unwrap();
+    assert!(matches!(doc.save_incremental(), Err(pdfcore::Error::Unsupported(_))));
+    // The ordinary save still works.
+    assert_eq!(Document::open(&doc.save_to_bytes().unwrap()).unwrap().text_runs(0).unwrap()[0].text, "Cambiado");
+}

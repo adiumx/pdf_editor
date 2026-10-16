@@ -1,0 +1,8 @@
+# Binary test fixtures and fonts must never have their line endings converted:
+# a PDF is byte-exact (its xref table holds offsets).
+*.pdf binary
+*.ttf binary
+*.otf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
