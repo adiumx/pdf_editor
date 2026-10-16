@@ -699,4 +699,22 @@ doc = pymupdf.open()
 doc.new_page(width=595, height=842)
 doc.save(OUT / "blank.pdf", garbage=0, deflate=False)
 
+# 28. Vector graphics: a filled+stroked rectangle, a line, a rectangle under `cm`, a curve, a polygon
+#     drawn as lines (a box), and a rectangle painted by a form XObject. Plain and turned 90 degrees.
+GRAPHICS = (b"q 1 0 0 rg 0 0 1 RG 2 w 100 700 50 30 re B Q\n"
+            b"q 0 g 1.5 w 200 700 m 300 750 l S Q\n"
+            b"q 2 0 0 2 0 0 cm 0.5 0.5 0.5 rg 50 300 20 10 re f Q\n"
+            b"q 0 0 1 rg 100 500 m 150 550 200 450 250 500 c h f Q\n"
+            b"q 0 1 0 RG 300 300 m 340 300 l 340 340 l 300 340 l h S Q\n"
+            b"q 1 0 0 1 0 0 cm /Fm1 Do Q\n"
+            b"q 100 100 80 80 re W n 0 g 0 0 595 842 re f Q\n")
+for name, rotate in (("graphics", b""), ("graphics_rotated", b"/Rotate 90")):
+    (OUT / f"{name}.pdf").write_bytes(raw_pdf({
+        1: b"<</Type/Catalog/Pages 2 0 R>>",
+        2: b"<</Type/Pages/Count 1/Kids[3 0 R]>>",
+        3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]" + rotate + b"/Contents 4 0 R/Resources<</XObject<</Fm1 5 0 R>>>>>>",
+        4: stream(GRAPHICS),
+        5: stream(b"0 1 0 rg 0 0 40 40 re f", b"/Type/XObject/Subtype/Form/BBox[0 0 100 100]/Matrix[1 0 0 1 10 20]"),
+    }))
+
 print("fixtures in", OUT)

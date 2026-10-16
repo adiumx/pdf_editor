@@ -34,6 +34,9 @@ fn exercise(doc: &mut Document) {
         }
         let _ = doc.text_runs(page);
     }
+    for page in 0..doc.page_count().min(3) {
+        let _ = doc.page_graphics(page);
+    }
     let _ = doc.undo();
     let _ = doc.find_text("a", SearchOptions::default());
     let _ = doc.replace_all("a", "bb", SearchOptions::default(), ReplaceOptions::default());

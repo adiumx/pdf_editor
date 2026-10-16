@@ -93,6 +93,7 @@ class _Native {
         ocrReport = lib.lookupFunction<_Str Function(_Handle), _Str Function(_Handle)>('pdfcore_ocr_report'),
         saveIncremental = lib.lookupFunction<Pointer<Uint8> Function(_Handle, Pointer<Size>),
             Pointer<Uint8> Function(_Handle, Pointer<Size>)>('pdfcore_save_incremental'),
+        graphics = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_graphics'),
         setSubstitution = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_set_substitution'),
         blocks = lib.lookupFunction<_Str Function(_Handle, Int), _Str Function(_Handle, int)>('pdfcore_blocks'),
         replaceBlock = lib.lookupFunction<_Str Function(_Handle, Int, Int, _Str, Int),
@@ -164,6 +165,7 @@ class _Native {
   final _Str Function(_Handle, int, _Str) redact;
   final _Str Function(_Handle) ocrReport;
   final Pointer<Uint8> Function(_Handle, Pointer<Size>) saveIncremental;
+  final _Str Function(_Handle, int) graphics;
   final _Str Function(_Handle, int) setSubstitution;
   final _Str Function(_Handle, int) blocks;
   final _Str Function(_Handle, int, int, _Str, int) replaceBlock;
@@ -479,6 +481,12 @@ class PdfDocument implements Finalizable {
     return RedactResult((j['chars'] as num).toInt(), (j['runs'] as num).toInt(), (j['images_removed'] as num).toInt(),
         (j['images_kept'] as num).toInt(), (j['annotations_removed'] as num).toInt());
   }
+
+  /// The vector graphics [page] paints, in painting order: rectangles (check boxes, cells, frames),
+  /// lines and other paths, as the page is shown (rotation and transformations applied, form
+  /// XObjects included).
+  List<PdfGraphic> graphics(int page) =>
+      (_json(_n.graphics(_live, page))['graphics'] as List).map((g) => PdfGraphic.fromJson(g as Map<String, dynamic>)).toList();
 
   /// What each page holds and which ones are pictures with no text (offer OCR on those).
   List<PageReport> ocrReport() => (_json(_n.ocrReport(_live))['pages'] as List).map((p) {

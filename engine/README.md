@@ -54,6 +54,7 @@ como referencia y como oráculo de pruebas.
 | 6o. Lotes en un solo paso de deshacer, borrar ítems, `hit_test` con posición de cursor, redimensionar imágenes/campos/texto, reconstruir la apariencia de formularios | **hecho** |
 | 6p. Anotaciones con apariencia (resaltar, subrayar, tachar, ondulado, nota, texto libre, tinta, formas, línea), aplanar, censurar de verdad (texto fuera del archivo), informe de OCR, guardado incremental | **hecho** |
 | 7. Texto de formularios XObject editable en el sitio, fuentes incluidas subconjuntadas, `/Encrypt` en línea, caché de fuentes leídas, `benchmarkDocument` para medir en el dispositivo | **hecho** |
+| 8. `page_graphics`: rectángulos, líneas y caminos que la página pinta (rotación, `cm` y formularios XObject aplicados); FFI `pdfcore_graphics`; Dart `graphics()` | **hecho** |
 | 7. Anotaciones (resaltar, notas), aplanar formularios, OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee

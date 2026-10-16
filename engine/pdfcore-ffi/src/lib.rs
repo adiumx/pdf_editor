@@ -1159,6 +1159,29 @@ pub unsafe extern "C" fn pdfcore_save_incremental(doc: *mut PdfDoc, len: *mut us
     }
 }
 
+/// The vector graphics a page paints, in painting order, as a reader shows the page (top-left
+/// origin, y down; rotation and `cm` applied; form XObjects followed): `{"graphics":[{"kind":
+/// "rect"|"line"|"path","display":[x0,y0,x1,y1],"filled","stroked","fill":[r,g,b]|null,
+/// "stroke":[r,g,b]|null,"line_width","xobject":null|name,"ends":null|[[x,y],[x,y]]}]}`. Letters
+/// drawn as outlines are graphics too: filter by size.
+///
+/// # Safety
+/// `doc` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn pdfcore_graphics(doc: *mut PdfDoc, page: c_int) -> *mut c_char {
+    let Some(d) = handle(doc) else { return bad_argument() };
+    guard(|| match d.doc.page_graphics(page.max(0) as usize) {
+        Ok(list) => json!({
+            "graphics": list.iter().map(|g| json!({
+                "kind": g.kind.as_str(), "display": g.display, "filled": g.filled, "stroked": g.stroked,
+                "fill": g.fill, "stroke": g.stroke, "line_width": g.line_width, "xobject": g.xobject,
+                "ends": g.ends.map(|e| json!([[e[0].0, e[0].1], [e[1].0, e[1].1]])),
+            })).collect::<Vec<_>>()
+        }),
+        Err(e) => failure(&e),
+    })
+}
+
 fn arrange_of(name: &str) -> Option<Arrange> {
     Some(match name {
         "align_left" => Arrange::AlignLeft,

@@ -887,3 +887,48 @@ class PageReport {
   /// Offer to run OCR on this page: it is a picture with no text. The engine recognises no characters.
   final bool needsOcr;
 }
+
+/// A vector graphic a page paints (`graphics`): a rectangle (check box, table cell, frame), a line
+/// or another path. Coordinates are as the page is shown (top-left origin, y down), with the
+/// page's rotation and every transformation applied. Letters drawn as outlines are graphics too:
+/// filter by size when only boxes matter.
+class PdfGraphic {
+  PdfGraphic(this.kind, this.display, this.filled, this.stroked, this.fill, this.stroke, this.lineWidth, this.xobject,
+      this.ends);
+
+  /// `rect`, `line` or `path`.
+  final String kind;
+
+  /// `[x0, y0, x1, y1]` of the path itself, without the stroke's width.
+  final List<double> display;
+  final bool filled;
+  final bool stroked;
+
+  /// Red, green, blue in 0..1, when the colour is a plain one.
+  final List<double>? fill;
+  final List<double>? stroke;
+  final double lineWidth;
+
+  /// The form XObject that paints it, if any.
+  final String? xobject;
+
+  /// For a line: `[[x0, y0], [x1, y1]]`.
+  final List<List<double>>? ends;
+
+  bool get isRect => kind == 'rect';
+  bool get isLine => kind == 'line';
+  double get width => display[2] - display[0];
+  double get height => display[3] - display[1];
+
+  factory PdfGraphic.fromJson(Map<String, dynamic> j) => PdfGraphic(
+        j['kind'] as String,
+        _box(j['display']),
+        j['filled'] as bool,
+        j['stroked'] as bool,
+        j['fill'] == null ? null : _box(j['fill']),
+        j['stroke'] == null ? null : _box(j['stroke']),
+        (j['line_width'] as num).toDouble(),
+        j['xobject'] as String?,
+        j['ends'] == null ? null : [for (final e in j['ends'] as List) _box(e)],
+      );
+}

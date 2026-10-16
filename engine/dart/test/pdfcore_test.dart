@@ -429,6 +429,44 @@ void main() {
     });
   });
 
+  group('graphics', () {
+    test('rectangles, lines and paths come back as the page is shown, also from the isolate session', () async {
+      final doc = open('graphics');
+      addTearDown(doc.close);
+      final g = doc.graphics(0);
+      expect(g, hasLength(7));
+      expect(g[0].isRect && g[0].filled && g[0].stroked, isTrue);
+      expect(g[0].display, [100, 112, 150, 142]);
+      expect(g[0].fill, [1, 0, 0]);
+      expect(g[1].isLine, isTrue);
+      expect(g[1].ends, [[200, 142], [300, 92]]);
+      expect(g[5].xobject, 'Fm1');
+      final turned = open('graphics_rotated');
+      addTearDown(turned.close);
+      expect(turned.graphics(0)[0].display, [700, 100, 730, 150]);
+      final session = await PdfSession.open(fixture('graphics'), libraryPath: libraryPath);
+      try {
+        expect((await session.graphics(0)).map((x) => x.kind).take(3), ['rect', 'line', 'rect']);
+      } finally {
+        await session.close();
+      }
+    });
+    test('the three check boxes of the real form', () {
+      final path = Platform.environment['CAMBIO_PDF'];
+      if (path == null || !File(path).existsSync()) return;
+      final doc = PdfDocument.open(File(path).readAsBytesSync(), libraryPath: libraryPath);
+      addTearDown(doc.close);
+      final boxes = doc
+          .graphics(0)
+          .where((g) => g.isRect && (g.width - 9.4).abs() < 0.3 && (g.height - 9.4).abs() < 0.3 && (g.display[1] - 266.2).abs() < 0.5)
+          .toList();
+      expect(boxes, hasLength(3));
+      for (final (i, x) in [29.6, 87.9, 174.5].indexed) {
+        expect(boxes[i].display[0], closeTo(x, 0.2));
+      }
+    });
+  });
+
   group('benchmark', () {
     test('measures every step on a real document', () {
       final result = benchmarkDocument(fixture('producer_reportlab_ttf'), libraryPath: libraryPath, repeat: 2);

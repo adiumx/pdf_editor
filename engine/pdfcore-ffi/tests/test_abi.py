@@ -65,6 +65,7 @@ for name, args in {
     "pdfcore_flatten": [ctypes.c_void_p, ctypes.c_char_p],
     "pdfcore_redact": [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p],
     "pdfcore_ocr_report": [ctypes.c_void_p],
+    "pdfcore_graphics": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_set_substitution": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_blocks": [ctypes.c_void_p, ctypes.c_int],
     "pdfcore_replace_block": [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int],
@@ -843,3 +844,17 @@ def test_inline_protection_form_xobject_text_and_the_independent_reader():
         assert "otra cosa" in pymupdf.open(stream=d.save(), filetype="pdf")[0].get_text()
     finally:
         d.close()
+
+
+def test_graphics_cross_the_boundary_and_match_the_independent_reader():
+    import pymupdf
+    d = Doc("graphics")
+    g = call("pdfcore_graphics", d.handle, 0)["graphics"]
+    assert [x["kind"] for x in g][:5] == ["rect", "line", "rect", "path", "rect"]
+    assert g[0]["fill"] == [1, 0, 0] and g[0]["stroke"] == [0, 0, 1] and g[5]["xobject"] == "Fm1"
+    assert g[1]["ends"] == [[200, 142], [300, 92]]
+    # MuPDF sees the same first rectangle where the engine says it is.
+    drawn = pymupdf.open(stream=d.save(), filetype="pdf")[0].get_drawings()
+    assert any(abs(r["rect"].x0 - g[0]["display"][0]) < 1.5 and abs(r["rect"].y0 - g[0]["display"][1]) < 1.5 for r in drawn)
+    assert call("pdfcore_graphics", d.handle, 9)["kind"] == "no_such_page"
+    d.close()

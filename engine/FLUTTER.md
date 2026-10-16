@@ -335,6 +335,17 @@ Todo es un paso de deshacer, y los ids caducan con cualquier edición. Si un tex
 - **Guardado incremental** (`saveIncremental()`): el archivo original intacto al principio y los cambios añadidos
   al final; una firma conserva su rango de bytes. También para archivos con contraseña.
 
+### Gráficos vectoriales (`graphics`)
+
+`doc.graphics(page)` / `session.graphics(page)` devuelve lo que la página **pinta** con trazos: rectángulos
+(casillas, celdas, marcos), líneas y otros caminos, en orden de pintado y con coordenadas como se ve la página
+(origen arriba a la izquierda, rotación y `cm` aplicados, formularios XObject incluidos). Cada `PdfGraphic` trae
+`kind` (`rect`, `line`, `path`), `display`, `filled`/`stroked`, `fill`/`stroke` (RGB si el color es llano),
+`lineWidth`, `xobject` y, en las líneas, `ends`. Un recorte (`W n`) no es un gráfico. Las letras convertidas a
+curvas también salen: filtra por tamaño (por ejemplo `isRect` con ~9×9 pt para casillas). Ejemplo: en
+`CAMBIO_DE_CONTRATANTE.pdf` la página 0 trae las casillas de Cónyuge, Concubina(rio) y Otra relación en
+`x = 29,6 / 87,9 / 174,5`, `y = 266,2` (9,4 × 9,4 pt).
+
 ## 6. Fidelidad de fuentes: qué se puede editar y cómo se avisa
 
 Cada `TextRun` trae (JSON → Dart): `font_kind` → `fontKind` (`embedded_full`, `embedded_subset`,
