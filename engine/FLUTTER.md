@@ -348,6 +348,32 @@ Para varias cosas en un solo paso: `batch([BatchOp.addText(page, NewText(...)), 
 `batch([BatchOp.deleteRuns(page, runs)])`. Ejemplo: las 18 letras de un RFC escritas en un peine son un paso,
 y borrarlas es otro.
 
+### Texto con varios estilos en un renglón (`NewText.spans`) y estilo de cada tramo leído
+
+```dart
+doc.addText(0, NewText.spans([
+  const TextSpanStyle('Juan ', size: 11),
+  const TextSpanStyle('Pérez', size: 11, bold: true, color: [0, 0.2, 0.7]),
+  const TextSpanStyle(' López', size: 11),
+], 140, 345, anchor: Anchor.baseline, maxWidth: 200));
+```
+
+Cada tramo (`text`, `size`, `color`, `bold`, `italic`, `serif`) empieza donde termina el anterior, medido con los
+anchos reales de la fuente incrustada (Liberation, Open Sans...), y todos comparten la línea base. No hay
+huecos ni encimados: es lo mismo que sumar los avances que el lector aplicará. Con `maxWidth` se reparte en
+renglones **entre palabras**: una palabra escrita en dos estilos (`Pér` normal + `ez` en negrita) no se parte;
+cada renglón toma como altura su tramo más grande y todos sus tramos van sobre la misma línea base. Es un solo paso
+de deshacer, suelto o dentro de `BatchOp.addText(page, NewText.spans(...))`. `AddedText.display` es la caja total.
+Un `NewText(...)` de un solo estilo funciona igual que siempre. Si un tramo lleva una letra que ninguna fuente
+incluida tiene, falla todo con `missing_glyphs` y no se escribe nada. FFI: `pdfcore_add_text` acepta
+`"spans":[{...}]` en lugar de `text` (lo que un tramo no dice lo toma del nivel superior); ver `pdfcore.h`.
+El kerning de pares no se aplica (no lo aplica tampoco el `Tj` que se escribe), así que el avance es la suma
+de los anchos de cada letra.
+
+Al leer, `TextRun` trae `color` (RGB 0..1 del relleno con que se dibuja; negro si el espacio de color no es
+gris/RGB/CMYK simple), `bold` e `italic` (del nombre de la fuente, o de los flags del descriptor si el nombre no
+dice nada). Con eso la app puede reabrir un texto con el color y el estilo de cada palabra.
+
 ### Gráficos vectoriales (`graphics`)
 
 `doc.graphics(page)` / `session.graphics(page)` devuelve lo que la página **pinta** con trazos: rectángulos

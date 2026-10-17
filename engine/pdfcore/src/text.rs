@@ -93,6 +93,13 @@ pub struct TextRun {
     pub word_space: f32,
     /// The font descriptor's `/Flags`, when it has one.
     pub font_flags: Option<u32>,
+    /// The fill colour as red, green, blue in 0..=1 (black when the colour space is
+    /// not a plain gray, RGB or CMYK one).
+    pub color: [f32; 3],
+    /// Bold and italic, from the font's name, or its descriptor flags when the name
+    /// says nothing (`ForceBold`, `Italic`).
+    pub bold: bool,
+    pub italic: bool,
 }
 
 /// Hebrew and Arabic: written right to left, which needs shaping the engine does not do.
@@ -421,6 +428,7 @@ fn show(
         corners.iter().map(|c| c.1).fold(f32::MIN, f32::max),
     ];
 
+    let (named_bold, named_italic) = crate::block::weight_words(&font.base_font);
     let rtl = text.chars().any(is_rtl_char);
     runs.push(TextRun {
         text,
@@ -445,6 +453,9 @@ fn show(
         char_space: state.tc,
         word_space: state.tw,
         font_flags: font.flags(),
+        color: crate::block::color_of(&state.fill).unwrap_or([0.0; 3]),
+        bold: named_bold || font.flags().is_some_and(|f| f & (1 << 18) != 0),
+        italic: named_italic || font.flags().is_some_and(|f| f & (1 << 6) != 0),
     });
 }
 

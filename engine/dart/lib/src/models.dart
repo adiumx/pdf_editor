@@ -58,6 +58,9 @@ class TextRun {
     this.fontKind = 'not_embedded',
     this.substituteFont = '',
     this.substituteSimilarity = 100,
+    this.color = const [0, 0, 0],
+    this.bold = false,
+    this.italic = false,
   });
 
   /// Names this run in the *last reading of its page*; any edit, undo or redo
@@ -93,6 +96,15 @@ class TextRun {
   final String substituteFont;
   final int substituteSimilarity;
 
+  /// JSON `color`: the fill colour the text is drawn with, red, green, blue each 0..1 (black
+  /// when the page uses a colour space that is not plain gray, RGB or CMYK).
+  final List<double> color;
+
+  /// JSON `bold` / `italic`: from the font's name (`Arial-BoldMT`) or, when that says nothing,
+  /// from the descriptor's flags. Use them with `color` to reopen a text with its style.
+  final bool bold;
+  final bool italic;
+
   factory TextRun.fromJson(Map<String, dynamic> j) => TextRun(
         id: j['id'] as int,
         text: j['text'] as String,
@@ -108,6 +120,9 @@ class TextRun {
         fontKind: j['font_kind'] as String? ?? 'not_embedded',
         substituteFont: j['substitute_font'] as String? ?? '',
         substituteSimilarity: (j['substitute_similarity'] as num?)?.toInt() ?? 100,
+        color: ((j['color'] as List?) ?? const [0, 0, 0]).map((e) => (e as num).toDouble()).toList(),
+        bold: j['bold'] as bool? ?? false,
+        italic: j['italic'] as bool? ?? false,
       );
 }
 
@@ -223,7 +238,28 @@ class NewText {
     this.italic = false,
     this.align = TextAlign.left,
     this.maxWidth,
-  });
+  }) : spans = null;
+
+  /// Text of several styles on one line, as `[TextSpanStyle]`s: each starts where the one before
+  /// ends (measured with the embedded font's real widths) and they share the baseline. With
+  /// [maxWidth] it wraps between words, never inside one. One undo step, alone or in a batch.
+  /// The single-style constructor is unchanged.
+  NewText.spans(
+    List<TextSpanStyle> this.spans,
+    this.x,
+    this.y, {
+    this.anchor = Anchor.topLeft,
+    this.align = TextAlign.left,
+    this.maxWidth,
+  })  : text = spans.map((s) => s.text).join(),
+        size = spans.isEmpty ? 12 : spans.first.size,
+        color = const [0, 0, 0],
+        serif = false,
+        bold = false,
+        italic = false;
+
+  /// Set by [NewText.spans]; `null` for a single style.
+  final List<TextSpanStyle>? spans;
 
   final String text;
   final double x;
@@ -240,18 +276,44 @@ class NewText {
   final double? maxWidth;
 
   Map<String, Object?> toJson() => {
-        'text': text,
+        if (spans == null) ...{
+          'text': text,
+          'size': size,
+          'color': color,
+          'serif': serif,
+          'bold': bold,
+          'italic': italic,
+        } else
+          'spans': [for (final s in spans!) s.toJson()],
         'x': x,
         'y': y,
         'anchor': anchor == Anchor.baseline ? 'baseline' : 'top_left',
-        'size': size,
-        'color': color,
-        'serif': serif,
-        'bold': bold,
-        'italic': italic,
         'align': align.name,
         if (maxWidth != null) 'max_width': maxWidth,
       };
+}
+
+/// One stretch of a [NewText.spans] with a style of its own.
+class TextSpanStyle {
+  const TextSpanStyle(
+    this.text, {
+    this.size = 12,
+    this.color = const [0, 0, 0],
+    this.bold = false,
+    this.italic = false,
+    this.serif = false,
+  });
+
+  final String text;
+  final double size;
+
+  /// Red, green, blue, each 0..1.
+  final List<double> color;
+  final bool bold;
+  final bool italic;
+  final bool serif;
+
+  Map<String, Object?> toJson() => {'text': text, 'size': size, 'color': color, 'serif': serif, 'bold': bold, 'italic': italic};
 }
 
 class AddedText {

@@ -466,6 +466,42 @@ void main() {
     });
   });
 
+  group('text spans', () {
+    test('three styles on one line, one undo step, style read back, also in a batch and from the session', () async {
+      final doc = open('checkbox_line');
+      addTearDown(doc.close);
+      final original = doc.save();
+      final spans = [
+        const TextSpanStyle('Juan ', size: 11),
+        const TextSpanStyle('Pérez', size: 11, bold: true, color: [0, 0.2, 0.7]),
+        const TextSpanStyle(' López', size: 11),
+      ];
+      final added = doc.addText(0, NewText.spans(spans, 140, 345, anchor: Anchor.baseline));
+      expect(added.lines, 1);
+      final runs = doc.page(0).runs.where((r) => ['Juan ', 'Pérez', ' López'].contains(r.text)).toList();
+      expect(runs.map((r) => r.text), ['Juan ', 'Pérez', ' López']);
+      expect(runs.map((r) => r.bold), [false, true, false]);
+      expect(runs[1].color[2], closeTo(0.7, 0.01));
+      expect(runs[1].display[0], closeTo(runs[0].display[2], 0.05));
+      expect(runs[2].display[0], closeTo(runs[1].display[2], 0.05));
+      doc.undo();
+      expect(doc.save(), original);
+
+      doc.batch([BatchOp.addText(0, NewText.spans(spans, 140, 345, anchor: Anchor.baseline))]);
+      expect(doc.page(0).runs.where((r) => r.text == 'Pérez'), hasLength(1));
+      doc.undo();
+      expect(doc.save(), original);
+
+      final session = await PdfSession.open(fixture('checkbox_line'), libraryPath: libraryPath);
+      try {
+        await session.addText(0, NewText.spans(spans, 140, 345, anchor: Anchor.baseline));
+        expect((await session.page(0)).runs.where((r) => r.bold).map((r) => r.text), contains('Pérez'));
+      } finally {
+        await session.close();
+      }
+    });
+  });
+
   group('graphics', () {
     test('rectangles, lines and paths come back as the page is shown, also from the isolate session', () async {
       final doc = open('graphics');

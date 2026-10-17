@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdfcore::{FlattenOptions, NewAnnotation, RedactOptions, Shape, BlockOptions, StyleChange, Substitution, Block, Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
+use pdfcore::{Added, NewSpans, StyledSpan, FlattenOptions, NewAnnotation, RedactOptions, Shape, BlockOptions, StyleChange, Substitution, Block, Align, Alignment, Anchor, Arrange, Document, Error, FieldRef, Item, ItemKind, NewImage, NewText, Reflow, ReplaceOptions, SearchOptions, TextRun, Warning};
 use serde_json::{json, Value};
 
 pub struct PdfDoc {
@@ -214,6 +214,7 @@ pub unsafe extern "C" fn pdfcore_page(doc: *mut PdfDoc, page: c_int) -> *mut c_c
                     "invisible": r.render_mode == 3,
                     "editable": r.not_editable.is_none(), "not_editable": r.not_editable,
                     "font_embedded": r.font_embedded, "font_kind": r.font_kind.as_str(),
+                    "color": r.color, "bold": r.bold, "italic": r.italic,
                 })
             })
             .collect();
@@ -838,8 +839,10 @@ pub unsafe extern "C" fn pdfcore_batch(doc: *mut PdfDoc, params: *const c_char) 
                     Step::Resize { page, item: items[0].clone(), display: [b[0], b[1], b[2], b[3]] }
                 }
                 "add_text" => {
-                    if new_text_of(op).is_none() {
-                        return json!({ "error": "faltan text, x o y", "kind": "bad_argument" });
+                    if op.get("x").and_then(Value::as_f64).is_none() || op.get("y").and_then(Value::as_f64).is_none()
+                        || (op.get("text").and_then(Value::as_str).is_none() && op.get("spans").and_then(Value::as_array).is_none())
+                    {
+                        return json!({ "error": "faltan text (o spans), x o y", "kind": "bad_argument" });
                     }
                     Step::AddText { page, params: op.clone() }
                 }
@@ -907,8 +910,7 @@ pub unsafe extern "C" fn pdfcore_batch(doc: *mut PdfDoc, params: *const c_char) 
                         json!({ "ok": true })
                     }
                     Step::AddText { page, params } => {
-                        let new = new_text_of(params).ok_or_else(|| Error::Rejected("faltan text, x o y".into()))?;
-                        let added = doc.add_text(*page, &new)?;
+                        let added = add_of(doc, *page, params)?.ok_or_else(|| Error::Rejected("faltan text (o spans), x o y".into()))?;
                         json!({ "ok": true, "display": added.display, "lines": added.lines })
                     }
                     Step::DeleteRuns { page, runs } => {
@@ -1258,27 +1260,47 @@ pub unsafe extern "C" fn pdfcore_delete_runs(doc: *mut PdfDoc, page: c_int, para
     })
 }
 
-/// A `NewText` from the JSON of `pdfcore_add_text`.
-fn new_text_of(p: &Value) -> Option<NewText<'_>> {
-    let (body, x, y) = (p["text"].as_str()?, p["x"].as_f64()?, p["y"].as_f64()?);
-    let mut new = NewText::new(body, x as f32, y as f32);
-    new.anchor = if p["anchor"] == "baseline" { Anchor::Baseline } else { Anchor::TopLeft };
-    if let Some(size) = p["size"].as_f64() {
-        new.size = size as f32;
-    }
-    if let Some(c) = p["color"].as_array().filter(|c| c.len() == 3) {
-        new.color = [0, 1, 2].map(|i| c[i].as_f64().unwrap_or(0.0) as f32);
-    }
-    new.serif = p["serif"].as_bool().unwrap_or(false);
-    new.bold = p["bold"].as_bool().unwrap_or(false);
-    new.italic = p["italic"].as_bool().unwrap_or(false);
-    new.align = match p["align"].as_str() {
+/// What `pdfcore_add_text` adds, from its JSON: `Ok(None)` when `x`, `y` or the text are missing.
+fn add_of(doc: &mut Document, page: usize, p: &Value) -> Result<Option<Added>, Error> {
+    let (Some(x), Some(y)) = (p["x"].as_f64(), p["y"].as_f64()) else { return Ok(None) };
+    let anchor = if p["anchor"] == "baseline" { Anchor::Baseline } else { Anchor::TopLeft };
+    let align = match p["align"].as_str() {
         Some("center") => Align::Center,
         Some("right") => Align::Right,
         _ => Align::Left,
     };
-    new.max_width = p["max_width"].as_f64().map(|w| w as f32);
-    Some(new)
+    let max_width = p["max_width"].as_f64().map(|w| w as f32);
+    let style_of = |v: &Value, fallback: &Value| {
+        let get = |k: &str| if v[k].is_null() { &fallback[k] } else { &v[k] };
+        let mut s = StyledSpan::new("");
+        if let Some(size) = get("size").as_f64() {
+            s.size = size as f32;
+        }
+        if let Some(c) = get("color").as_array().filter(|c| c.len() == 3) {
+            s.color = [0, 1, 2].map(|i| c[i].as_f64().unwrap_or(0.0) as f32);
+        }
+        s.serif = get("serif").as_bool().unwrap_or(false);
+        s.bold = get("bold").as_bool().unwrap_or(false);
+        s.italic = get("italic").as_bool().unwrap_or(false);
+        s
+    };
+    if let Some(list) = p["spans"].as_array() {
+        // Spans take what they do not say from the top level.
+        let mut spans = Vec::new();
+        for v in list {
+            let Some(text) = v["text"].as_str() else { return Ok(None) };
+            spans.push(StyledSpan { text, ..style_of(v, p) });
+        }
+        let mut new = NewSpans::new(spans, x as f32, y as f32);
+        (new.anchor, new.align, new.max_width) = (anchor, align, max_width);
+        return doc.add_spans(page, &new).map(Some);
+    }
+    let Some(body) = p["text"].as_str() else { return Ok(None) };
+    let mut new = NewText::new(body, x as f32, y as f32);
+    let s = style_of(p, &Value::Null);
+    (new.size, new.color, new.serif, new.bold, new.italic) = (s.size, s.color, s.serif, s.bold, s.italic);
+    (new.anchor, new.align, new.max_width) = (anchor, align, max_width);
+    doc.add_text(page, &new).map(Some)
 }
 
 fn arrange_of(name: &str) -> Option<Arrange> {
@@ -1753,6 +1775,10 @@ pub unsafe extern "C" fn pdfcore_signatures(doc: *mut PdfDoc) -> *mut c_char {
 /// Add text. `params` is JSON: `{"text","x","y"}` plus optional `"anchor"`
 /// (`"top_left"`|`"baseline"`), `"size"`, `"color":[r,g,b]`, `"serif"`, `"bold"`,
 /// `"italic"`, `"align"` (`"left"`|`"center"`|`"right"`), `"max_width"`.
+/// Instead of `"text"`, `"spans":[{"text","size","color","serif","bold","italic"}]` sets
+/// runs of different styles on one baseline, each starting where the one before ends (what a
+/// span leaves out it takes from the top-level `size`, `color`, ...); `max_width` wraps
+/// between words, never inside one. One undo step. Returns `{"ok","display":[x0,y0,x1,y1],"lines"}`.
 ///
 /// # Safety
 /// `doc` must be a live handle; `params` a NUL-terminated UTF-8 string.
@@ -1763,31 +1789,12 @@ pub unsafe extern "C" fn pdfcore_add_text(doc: *mut PdfDoc, page: c_int, params:
         let Ok(p) = serde_json::from_str::<Value>(params) else {
             return json!({ "error": "los parámetros no son JSON válido", "kind": "bad_argument" });
         };
-        let (Some(body), Some(x), Some(y)) = (p["text"].as_str(), p["x"].as_f64(), p["y"].as_f64()) else {
-            return json!({ "error": "faltan text, x o y", "kind": "bad_argument" });
-        };
-        let mut new = NewText::new(body, x as f32, y as f32);
-        new.anchor = if p["anchor"] == "baseline" { Anchor::Baseline } else { Anchor::TopLeft };
-        if let Some(size) = p["size"].as_f64() {
-            new.size = size as f32;
-        }
-        if let Some(c) = p["color"].as_array().filter(|c| c.len() == 3) {
-            new.color = [0, 1, 2].map(|i| c[i].as_f64().unwrap_or(0.0) as f32);
-        }
-        new.serif = p["serif"].as_bool().unwrap_or(false);
-        new.bold = p["bold"].as_bool().unwrap_or(false);
-        new.italic = p["italic"].as_bool().unwrap_or(false);
-        new.align = match p["align"].as_str() {
-            Some("center") => Align::Center,
-            Some("right") => Align::Right,
-            _ => Align::Left,
-        };
-        new.max_width = p["max_width"].as_f64().map(|w| w as f32);
-        match d.doc.add_text(page.max(0) as usize, &new) {
-            Ok(added) => {
+        match add_of(&mut d.doc, page.max(0) as usize, &p) {
+            Ok(Some(added)) => {
                 edited(d);
                 json!({ "ok": true, "display": added.display, "lines": added.lines })
             }
+            Ok(None) => json!({ "error": "faltan text (o spans), x o y", "kind": "bad_argument" }),
             Err(e) => failure(&e),
         }
     })

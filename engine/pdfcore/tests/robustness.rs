@@ -37,6 +37,14 @@ fn exercise(doc: &mut Document) {
     for page in 0..doc.page_count().min(3) {
         let _ = doc.page_graphics(page);
         let _ = doc.delete_runs(page, &[0, 2]);
+        let spans = vec![
+            pdfcore::StyledSpan::new("Juan "),
+            pdfcore::StyledSpan { bold: true, color: [0.0, 0.2, 0.7], ..pdfcore::StyledSpan::new("Pérez") },
+            pdfcore::StyledSpan { serif: true, italic: true, size: 20.0, ..pdfcore::StyledSpan::new(" López de la Cruz") },
+        ];
+        let mut new = pdfcore::NewSpans::new(spans, 140.0, 345.0);
+        new.max_width = Some(60.0);
+        let _ = doc.add_spans(page, &new);
     }
     let _ = doc.undo();
     let _ = doc.find_text("a", SearchOptions::default());

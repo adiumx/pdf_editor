@@ -893,3 +893,34 @@ def test_a_comb_is_one_batch_to_write_and_one_to_delete():
     assert d.undo()["ok"] and d.undo()["ok"]
     assert d.save() == original
     d.close()
+
+
+def test_spans_of_several_styles_are_one_line_one_step_and_read_as_text_by_an_independent_reader():
+    import pymupdf
+    d = Doc("checkbox_line")
+    original = d.save()
+    spans = [
+        {"text": "Juan ", "size": 11},
+        {"text": "Pérez", "size": 11, "bold": True, "color": [0, 0.2, 0.7]},
+        {"text": " López", "size": 11},
+    ]
+    added = d.add({"spans": spans, "x": 140, "y": 345, "anchor": "baseline"})
+    assert added["ok"] and added["lines"] == 1, added
+    runs = [r for r in d.page()["runs"] if r["text"] in ("Juan ", "Pérez", " López")]
+    assert [r["text"] for r in runs] == ["Juan ", "Pérez", " López"]
+    assert [r["bold"] for r in runs] == [False, True, False]
+    assert all(abs(a - b) < 0.01 for a, b in zip(runs[1]["color"], [0, 0.2, 0.7]))
+    for a, b in zip(runs, runs[1:]):
+        assert abs(b["display"][0] - a["display"][2]) < 0.05
+    # An independent reader extracts the three words with their spaces.
+    page = pymupdf.open(stream=d.save(), filetype="pdf")[0]
+    assert "Juan Pérez López" in " ".join(page.get_text().split())
+    # A batch step takes the same spans; the batch is one undo step.
+    batch = call("pdfcore_batch", d.handle, json.dumps({"ops": [{"op": "add_text", "page": 0, "spans": spans, "x": 140, "y": 380, "anchor": "baseline"}]}).encode())
+    assert batch["results"][0]["ok"], batch
+    assert d.undo()["ok"] and d.undo()["ok"]
+    assert d.save() == original
+    # Spans with a missing text are refused.
+    bad = call("pdfcore_add_text", d.handle, 0, json.dumps({"spans": [{"size": 3}], "x": 1, "y": 1}).encode())
+    assert bad["kind"] == "bad_argument"
+    d.close()

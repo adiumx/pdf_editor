@@ -110,13 +110,18 @@ fn dominant_size(runs: &[TextRun], line: &Line) -> f32 {
     line.runs.iter().map(|&i| runs[i].size).fold(0.0, f32::max)
 }
 
-fn color_of(fill: &[Operation]) -> Option<[f32; 3]> {
+pub(crate) fn color_of(fill: &[Operation]) -> Option<[f32; 3]> {
     let op = fill.last()?;
+    // A `scn` after a `cs` is in a named colour space (a tint, an ICC profile): unknown here.
+    if fill.len() > 1 {
+        return None;
+    }
     let v: Vec<f32> = op.operands.iter().filter_map(|o| o.as_float().ok()).collect();
     match (op.operator.as_str(), v.len()) {
         ("g", 1) => Some([v[0]; 3]),
-        ("rg", 3) => Some([v[0], v[1], v[2]]),
-        ("k", 4) => Some([(1.0 - v[0]) * (1.0 - v[3]), (1.0 - v[1]) * (1.0 - v[3]), (1.0 - v[2]) * (1.0 - v[3])]),
+        ("rg" | "sc" | "scn", 3) => Some([v[0], v[1], v[2]]),
+        ("sc" | "scn", 1) => Some([v[0]; 3]),
+        ("k" | "sc" | "scn", 4) => Some([(1.0 - v[0]) * (1.0 - v[3]), (1.0 - v[1]) * (1.0 - v[3]), (1.0 - v[2]) * (1.0 - v[3])]),
         _ => None,
     }
 }
@@ -144,7 +149,7 @@ fn rest_left_of(lines: &[Line], chain: &[usize]) -> f32 {
     lines[chain[1]].display[0]
 }
 
-fn weight_words(base_font: &str) -> (bool, bool) {
+pub(crate) fn weight_words(base_font: &str) -> (bool, bool) {
     let name = base_font.rsplit('+').next().unwrap_or(base_font).to_lowercase();
     let bold = ["bold", "black", "heavy", "semibold", "demibold", "extrabold"].iter().any(|w| name.contains(w));
     let italic = name.contains("italic") || name.contains("oblique");

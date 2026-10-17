@@ -45,7 +45,7 @@ use journal::{Patch, Tracked};
 
 pub use error::{Error, Result};
 pub use font::{glyph_name_text, Font, FontClass, FontKind, Glyph};
-pub use add::{Added, Align, Anchor, NewText};
+pub use add::{Added, Align, Anchor, NewSpans, NewText, StyledSpan};
 pub use edit::{ReplaceOptions, Replaced};
 pub use report::{PageKind, PageReport};
 pub use redact::{RedactOptions, Redacted};

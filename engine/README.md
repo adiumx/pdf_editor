@@ -56,6 +56,7 @@ como referencia y como oráculo de pruebas.
 | 7. Texto de formularios XObject editable en el sitio, fuentes incluidas subconjuntadas, `/Encrypt` en línea, caché de fuentes leídas, `benchmarkDocument` para medir en el dispositivo | **hecho** |
 | 8. `page_graphics`: rectángulos, líneas y caminos que la página pinta (rotación, `cm` y formularios XObject aplicados); FFI `pdfcore_graphics`; Dart `graphics()` | **hecho** |
 | 9. `delete_runs`: borrar tramos de texto de verdad sin mover nada (TJ con el avance exacto; `'` y `"` conservan el salto de línea); FFI `pdfcore_delete_runs`; Dart `deleteRuns`, `BatchOp.deleteRuns`, `BatchOp.addText` | **hecho** |
+| 10. `add_spans` / `NewText.spans` / `"spans"` en `pdfcore_add_text` y en el lote: varios estilos en un renglón con línea base común, reparto por palabras, un paso de deshacer; `TextRun` con `color`, `bold`, `italic` | **hecho** |
 | 7. Anotaciones (resaltar, notas), aplanar formularios, OCR en el dispositivo | |
 
 ### Lo que el hito 1 ya lee

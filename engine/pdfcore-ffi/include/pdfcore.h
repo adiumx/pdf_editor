@@ -95,6 +95,12 @@ char *pdfcore_replace_text(PdfDoc *doc, int page, int run_id, const char *new_te
 /* reflow: 0 nothing moves, 1 what follows on the line moves (default),
  * 2 the line keeps its centre, 3 the line keeps its right edge. */
 char *pdfcore_replace_text_ex(PdfDoc *doc, int page, int run_id, const char *new_text, int allow_fallback, int reflow);
+/* params: {"text","x","y"} + optional "anchor" ("top_left"|"baseline"), "size", "color":[r,g,b],
+ * "serif", "bold", "italic", "align", "max_width". Instead of "text": "spans":[{"text","size",
+ * "color","serif","bold","italic"}] - runs of different styles on one baseline, each starting where
+ * the one before ends (a span takes what it leaves out from the top level); "max_width" wraps
+ * between words, never inside one. One undo step. -> {"ok","display":[x0,y0,x1,y1],"lines"}.
+ * pdfcore_page runs also carry "color":[r,g,b], "bold", "italic". */
 char *pdfcore_add_text(PdfDoc *doc, int page, const char *params_json);
 char *pdfcore_set_field(PdfDoc *doc, const char *name, const char *value, int ignore_read_only);
 
